@@ -1,0 +1,23 @@
+[project]
+name = "dro-pep"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cvxpy>=1.5.3",
+    "gurobipy>=11.0.3",
+    "pepit>=0.3.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ipython>=8.27.0",
+]
+
+[tool.ruff]
+line-length = 100
