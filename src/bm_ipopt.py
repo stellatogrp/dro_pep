@@ -1,4 +1,5 @@
 from math import sqrt
+import cyipopt
 import time
 import numpy as np
 import jax.numpy as jnp
@@ -87,6 +88,7 @@ def run_lbfgs_with_mask(Rk, yk, sigmak, mask, tol): # masks entries of Rk
 
     # linesearch module with Zoom [Wright & Nocedal]
     linesearch = optax.scale_by_zoom_linesearch(max_linesearch_steps=20, verbose=False)
+    # linesearch = optax.scale_by_backtracking_linesearch(max_backtracking_steps=20, verbose=True)
 
     # L-BFGS optimizer
     optimizer = optax.lbfgs(memory_size=7, linesearch=linesearch)
@@ -121,6 +123,62 @@ def run_lbfgs_with_mask(Rk, yk, sigmak, mask, tol): # masks entries of Rk
     return final_params
 
 
+def R_to_vec(R, d, K, m):
+    P = R[:K+1,:d]
+    f = jnp.diag(R[d+K+1:d+2*K+2, d:d+K+1])
+    s = jnp.diag(R[d+2*K+2:, d+K+1:])
+    P_vec = P.flatten()
+    # print(P.shape)
+    # print(P_vec.shape)
+    return jnp.hstack([P_vec, f, s])
+
+
+def Rvec_to_R(R_vec, d, K, m):
+    R = jnp.zeros((d + m + 2*K + 2, d + K + 1 + m))
+    P_vec = R_vec[:(K+1)* d]
+    f = R_vec[(K+1)*d:(K+1)*d+K+1]
+    s = R_vec[(K+1)*d+K+1:]
+
+    R = R.at[:K+1, :d].set(P_vec.reshape((K+1, d)))
+    R = R.at[K+1:K+1+d, :d].set(jnp.eye(d))
+    R = R.at[K+1+d:2*K+2+d, d:d+K+1].set(jnp.diag(f))
+    R = R.at[2*K+2+d:, d+K+1:].set(jnp.diag(s))
+
+    return R
+
+
+def vec_aug_lag(R_vec, y, sigma, d, K, m):
+    R = Rvec_to_R(R_vec, d, K, m)
+    return augmented_Lagrangian(R, y, sigma)
+
+
+def minimize_aug_lag_ipopt(Rk, yk, sigmak, d, K, m):
+    # print(Rk.shape)
+    # R_vec = R_to_vec(Rk, d, K, m)
+    # print(R_vec.shape)
+    # R = Rvec_to_R(R_vec, d, K, m)
+    # print(R.shape)
+    Rk_vec = R_to_vec(Rk, d, K, m)
+
+    obj = vec_aug_lag(Rk_vec, yk, sigmak, d, K, m)
+    print(obj)
+
+    obj_func = lambda x: vec_aug_lag(x, yk, sigmak, d, K, m)
+    obj_jit = jax.jit(obj_func)
+    # print(obj_jit)
+    obj_grad = jax.jit(jax.grad(obj_jit))
+    obj_hess = jax.jit(jax.jacrev(jax.jacfwd(obj_jit)))
+
+    x0 = jnp.ones(Rk_vec.shape)
+
+    x, info = cyipopt.minimize_ipopt(obj_jit, jac=obj_grad, hess=obj_hess, x0=x0,
+        options={'disp': 5})
+
+    print(x)
+
+    exit(0)
+
+
 def main():
     ############################################################
     ##### Apply Burer-Monteiro to solve QCQP PEP :
@@ -130,7 +188,7 @@ def main():
     eta = 1/4
     term_crit = 1e-5
     m = len(A) # the number of matrix equalities
-    key = jax.random.key(0)
+    # key = jax.random.key(0)
 
     ## mask initialization:
     #                d         K+1            m
@@ -185,7 +243,8 @@ def main():
 
         ## Step 3: Apply L-BFGS to obtain minimizer R of augmented Lagrangian
         tol = 0.5*tol
-        Rk = run_lbfgs_with_mask(Rk, yk, sigmak, mask, tol)
+        # Rk = run_lbfgs_with_mask(Rk, yk, sigmak, mask, tol)
+        Rk = minimize_aug_lag_ipopt(Rk, yk, sigmak, d, K, m)
 
         ## Step 4: Check termination criterion
         value = augmented_Lagrangian(Rk, yk, sigmak)
@@ -203,32 +262,32 @@ def main():
     end = time.time()
     print('elapsed time:', end - start, 'sec')
 
-    # ## Print the results
-    # # np.set_printoptions(precision=1)
-    # P = Rk[:K+1,:d].T
-    # G = P.T@P
-    # F = (Rk[np.arange(K+1+d, K+1+d+K), np.arange(d, d+K)])**2
-    # print('\n==============================================')
-    # print(f'[Result] Dimension={d}, Iteration number={K}\n')
-    # print(f'[Objective value] f(x^{K-1}) - f* <= {-obj_val}')
-    # print(f'given ||x0-x*|| = {sqrt(G[0,0])}\n')
-    # print('[Trajectory information] P = [x0 g0 g1 ... g{K-1}] =')
-    # print(P)
-    # print('[Inner products (Gram matrix)] G = P.T@P =')
-    # print(G)
-    # print('\n[Objective value] f = [f0-f*, f1-f*, ..., f{K-1}-f*] =\n', F)
+    ## Print the results
+    # np.set_printoptions(precision=1)
+    P = Rk[:K+1,:d].T
+    G = P.T@P
+    F = (Rk[np.arange(K+1+d, K+1+d+K), np.arange(d, d+K)])**2
+    print('\n==============================================')
+    print(f'[Result] Dimension={d}, Iteration number={K}\n')
+    print(f'[Objective value] f(x^{K-1}) - f* <= {-obj_val}')
+    print(f'given ||x0-x*|| = {sqrt(G[0,0])}\n')
+    print('[Trajectory information] P = [x0 g0 g1 ... g{K-1}] =')
+    print(P)
+    print('[Inner products (Gram matrix)] G = P.T@P =')
+    print(G)
+    print('\n[Objective value] f = [f0-f*, f1-f*, ..., f{K-1}-f*] =\n', F)
 
-    # print('\n[Dual variable] Each dual variable y[i] corresponds to i-th equality constraint.')
-    # print(f'y = {yk.T}')
+    print('\n[Dual variable] Each dual variable y[i] corresponds to i-th equality constraint.')
+    print(f'y = {yk.T}')
 
-    # ## Store the results
-    # data_dict = {}
-    # data_dict['dimension'] = d
-    # data_dict['iter_num'] = K
-    # data_dict['trajectory_info'] = P
-    # data_dict['inner_product'] = G
-    # data_dict['objective_values'] = F
-    # data_dict['dual_var'] = yk
+    ## Store the results
+    data_dict = {}
+    data_dict['dimension'] = d
+    data_dict['iter_num'] = K
+    data_dict['trajectory_info'] = P
+    data_dict['inner_product'] = G
+    data_dict['objective_values'] = F
+    data_dict['dual_var'] = yk
     # np.save(f'additional/bm_data_d={d}_K={K}_radius={radius}.npy', data_dict)
 
 if __name__ == '__main__':

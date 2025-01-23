@@ -21,8 +21,8 @@ def generate_sample(d, K_max, mu, L, gamma, seed=0):
     P = U.T @ np.diag(eigvals) @ U
 
     # q = np.random.randn(d)
-    q = np.zeros(d)        # just for now, x* = 0 as q = 0
-    sx_star = np.zeros(d)
+    q = np.zeros((d, 1))        # just for now, x* = 0 as q = 0
+    sx_star = np.zeros((d, 1))
 
     def sample_f(x):
         return 1/2 * x.T @ P @ x + q.T @ x
@@ -31,8 +31,8 @@ def generate_sample(d, K_max, mu, L, gamma, seed=0):
         return P @ x + q
 
     # apply gradient descent to obtain sample trajectories
-    sxk = np.zeros(d)
-    sxk[0] = 1  # start from x0=(1,0,..,0)
+    sxk = np.zeros((d, 1))
+    sxk[0,0] = 1  # start from x0=(1,0,..,0)
     sgk = grad_sample_f(sxk)
     sfk = sample_f(sxk)
     sample_xks = [sxk]
@@ -45,9 +45,12 @@ def generate_sample(d, K_max, mu, L, gamma, seed=0):
         sample_xks.append(sxk)
         sample_gks.append(sgk)
         sample_fks.append(sfk)
-    sample_xks.append(np.zeros(d))
-    sample_gks.append(np.zeros(d))
-    sample_fks.append(0.0)
+    # sample_xks.append(np.zeros(d))
+    # sample_gks.append(np.zeros(d))
+    # sample_fks.append(0.0)
+    sample_xks.append(np.zeros((d, 1)))
+    sample_gks.append(np.zeros((d, 1)))
+    sample_fks.append(np.array([[0.0]]))
 
     return sample_xks, sample_gks, sample_fks
 
@@ -75,7 +78,7 @@ def smooth_convex_gd_close_to_sample(d, K, mu, L, gamma, radius):
         #     x[k+1] = x[k] - gamma/(k+1)*g[k]
         # else:
         #     x[k+1] = x[k] - gamma/(k+1)*g[k-1]
-        x[k+1] = x[k] - gamma/(k+1)*g[k]
+        x[k+1] = x[k] - gamma*g[k]
         g[k+1] = E[:,k+2:k+3]
         f[k+1] = E[:,k+1:k+2]
     x[K] = xstar
@@ -132,7 +135,7 @@ def smooth_convex_gd_close_to_sample(d, K, mu, L, gamma, radius):
         b.append(0.0)
 
     # initial condition
-    A0 = outer_product(x[0], x[0])
+    A0 = outer_product(x[0]-xstar, x[0]-xstar)
     f0 = 0*E
     # A.append(block_diag(A0, np.zeros((d,d)), f0))
     A_temp = const(G=block_diag(A0, np.zeros((d,d))), F=np.diag(f0), S=0.0)
@@ -182,6 +185,134 @@ def smooth_convex_gd_close_to_sample(d, K, mu, L, gamma, radius):
     # C = block_diag(0*A0, np.zeros((d,d)), - fstar@fstar.T + f[K-1]@f[K-1].T, 0*Em)
     # C = -C # maximize --> minimize
     C = const(G=np.zeros(((K+1)+d,(K+1)+d)), F=-np.diag(f[K-1]@f[K-1].T-fstar@fstar.T), S=np.zeros(m))
+    
+    return A, b, C
+
+
+def smooth_convex_gd(d, K, mu, L, gamma):
+
+    ## namedtuple definition
+    const = namedtuple('PyTree', ['G', 'F', 'S'])
+    # Rk = PyTree(P = jnp.ones((d, K+1)), f = jnp.ones((K+1)), s = jnp.ones((m)))
+
+    ## define iterates
+    x = {}
+    g = {}
+    f = {}
+    E = np.eye(K+1)
+    x[0] = E[:,0:1]
+    g[0] = E[:,1:2]
+    f[0] = E[:,0:1]
+    xstar = 0*x[0]
+    gstar = 0*g[0]
+    fstar = 0*f[0]
+
+    # gradient descent with stepsize gamma
+    for k in range(K-1):
+        x[k+1] = x[k] - gamma*g[k]
+        g[k+1] = E[:,k+2:k+3]
+        f[k+1] = E[:,k+1:k+2]
+    x[K] = xstar
+    g[K] = gstar
+    f[K] = fstar
+
+    ## generate matrices for interpolation conditions
+
+    # interpolation with (i, j) : <A(i,j), RR.T> - b(i,j) <= 0
+    A = []
+    b = []
+    for i in range(K+1):
+        for j in range(K+1):
+            # if i == j-1 or i == j+1:
+            if i != j:
+                Aij = 1/2/(1-mu/L) * (
+                    1/L * outer_product(g[i]-g[j], g[i]-g[j])
+                    + mu * outer_product(x[i]-x[j], x[i]-x[j])
+                    - 2*mu/L * outer_product(g[i]-g[j], x[i]-x[j])
+                )
+                Aij += outer_product(g[j], x[i]-x[j])
+                fij = - f[i]@f[i].T + f[j]@f[j].T
+                A_temp = const(G=Aij, F=np.diag(fij), S=0.0)
+                A.append(A_temp)
+                b.append(0.0)
+
+    # interpolation with (i, star) and (star, i)
+    for i in range(K):
+        # j = K
+        Aistar = 1/2/(1-mu/L) * (
+            1/L * outer_product(g[i]-gstar, g[i]-gstar)
+            + mu * outer_product(x[i]-xstar, x[i]-xstar)
+            - 2*mu/L * outer_product(g[i]-gstar, x[i]-xstar)
+        )
+        Aistar += outer_product(gstar, x[i]-xstar)
+        fistar = - f[i]@f[i].T + fstar@fstar.T
+        A_temp = const(G=Aistar, F=np.diag(fistar), S=0.0)
+        A.append(A_temp)
+        b.append(0.0)
+
+        # i = K
+        Astari = 1/2/(1-mu/L) * (
+            1/L * outer_product(gstar-g[i], gstar-g[i])
+            + mu * outer_product(xstar-x[i], xstar-x[i])
+            - 2*mu/L * outer_product(gstar-g[i], xstar-x[i])
+        )
+        Astari += outer_product(g[i], xstar-x[i])
+        fstari = - fstar@fstar.T + f[i]@f[i].T
+        A_temp = const(G=Astari, F=np.diag(fstari), S=0.0)
+        A.append(A_temp)
+        b.append(0.0)
+
+    # initial condition
+    # A0 = outer_product(x[0], x[0])
+    A0 = outer_product(x[0]-x[K], x[0]-x[K])
+    f0 = 0*E
+    A_temp = const(G=A0, F=np.diag(f0), S=0.0)
+    A.append(A_temp)
+    b.append(1.0)
+
+    # # Additional condition: close to sample trajectory
+    # gamma = 1/L
+    # sample_xks, sample_gks, sample_fks = generate_sample(d, K, mu, L, gamma, seed=0)
+    # for k in range(K):
+    #     # Ak = block_diag(outer_product(x[k], x[k]), np.zeros((d, d)), 0*E)
+    #     Ak = block_diag(outer_product(x[k], x[k]), np.zeros((d, d)))
+    #     sample_xks[k] = sample_xks[k].reshape((d, 1))
+    #     Ak[K+1:K+1+d,:K+1] = -sample_xks[k]@x[k].T
+    #     Ak[:K+1,K+1:K+1+d] = -x[k]@sample_xks[k].T
+    #     # A_temp = const(G=Ak[:K+1+d,:K+1+d], F=np.diag(0*(fstar@fstar.T)), S=0.0)
+    #     A_temp = const(G=Ak, F=np.diag(0.0*E), S=0.0)
+    #     bk = radius**2 - np.sum(sample_xks[k]**2)
+    #     A.append(A_temp)
+    #     b.append(bk)
+
+    # # Additional condition: close to sample trajectory - summation
+    # gamma = 1/L
+    # sample_xks, sample_gks, sample_fks = generate_sample(d, K, mu, L, gamma, seed=0)
+    # Ak = np.zeros(A[-1].shape)
+    # bk = radius**2
+    # for k in range(K):
+    #     Ak += block_diag(outer_product(x[k], x[k]), np.zeros((d, d)), 0*E)
+    #     sample_xks[k] = sample_xks[k].reshape((d, 1))
+    #     Ak[K+1:K+1+d,:K+1] += -sample_xks[k]@x[k].T
+    #     Ak[:K+1,K+1:K+1+d] += -x[k]@sample_xks[k].T
+    #     bk += - np.sum(sample_xks[k]**2)
+    # A.append(Ak)
+    # b.append(bk)
+    
+    
+
+    # Aij trimming: inequality to equality
+    m = len(b)
+    Em = np.eye(m)
+    for ij, (Aij, bij) in enumerate(zip(A, b)):
+        # Aij = block_diag(Aij, np.diag(Em[:, ij]))
+        # A[ij] = Aij
+        A[ij] = const(G=Aij.G, F=Aij.F, S=Em[:,ij])
+
+    # objective function: <C, RR.T>
+    # C = block_diag(0*A0, np.zeros((d,d)), - fstar@fstar.T + f[K-1]@f[K-1].T, 0*Em)
+    # C = -C # maximize --> minimize
+    C = const(G=np.zeros((K+1,K+1)), F=-np.diag(f[K-1]@f[K-1].T-fstar@fstar.T), S=np.zeros(m))
     
     return A, b, C
 
@@ -649,3 +780,21 @@ def smooth_convex_gradient_descent(d, K):
     C = -C # maximize --> minimize
     
     return A, b, C
+
+
+if __name__ == "__main__" :
+    d = 20
+    K = 10
+    radius = 0.01
+    A, b, C = smooth_convex_gd_close_to_sample(d, K, 0.0, 1.0, 1.0, radius)
+
+    err = []
+    err_C = []
+    for i in range(len(b)):
+        for j in range(i):
+            err.append(np.sum((A[i].G@A[j].G - A[j].G@A[i].G)**2))
+            # print(f"({i}, {j}) = {np.sum(A[i].G@A[j].G-A[j].G@A[i].G)**2}")
+        err_C.append(np.sum((A[i].G@C.G - C.G@A[i].G)**2))
+
+    print(f'max err of AB-BA = {np.max(err)}')
+    print(f'max err of AC-CA = {np.max(err_C)}')
