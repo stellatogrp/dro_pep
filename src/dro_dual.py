@@ -63,14 +63,56 @@ def generate_and_solve_dual(eps, N, d, mu, L, R, t, K, obj_consts, pep_data, c=N
     x0 = np.zeros(d)
     x0[0] = R
 
-    # trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0)
-    trajectories = [(sample_G, sample_F)]
+    trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0)
+    # trajectories = [(sample_G, sample_F)]
+    print(trajectories)
     cp_dual(trajectories, eps, obj_consts, pep_data, c=c)
+    # cp_dual_alt(trajectories, eps, obj_consts, pep_data, c=c)
+
+
+def cp_dual_alt(trajectories, eps, obj_consts, pep_data, c=None):
+    G_shape = obj_consts['Gobj'].shape
+    F_shape = obj_consts['Fobj'].shape
+    M = len(pep_data.keys())
+    N = len(trajectories)
+
+    lmbd = cp.Variable()
+    s = cp.Variable()
+    G = cp.Variable(G_shape, symmetric=True)
+    F = cp.Variable(F_shape)
+    y = cp.Variable(M)
+    # Aopt = -C.G
+    Aopt = obj_consts['Gobj']
+    # bopt = -C.F
+    bopt = obj_consts['Fobj']
+    # c = -b
+
+    constraint = [- c.T@y - cp.trace(G@sample_G) - F.T@sample_F <= s]
+    constraint += [cp.SOC(lmbd, cp.hstack([cp.vec(G), F]))]
+    LstarG = np.zeros(G_shape)
+    LstarF = np.zeros(F_shape)
+    for i in range(M) :
+        # LstarG = LstarG + y[i]*A[i].G
+        # LstarF = LstarF + y[i]*A[i].F
+        pep_data_idx = pep_data[i]
+        Am = pep_data_idx['Gcons']
+        bm = pep_data_idx['Fcons']
+        LstarG = LstarG + y[i] * Am
+        LstarF = LstarF + y[i] * bm
+
+    constraint += [LstarG - G - Aopt >> 0]
+    constraint += [LstarF - F - bopt == 0]
+    constraint += [y >= 0]
+
+    prob = cp.Problem(cp.Minimize(lmbd*eps + 1/N * cp.sum(s)), constraint)
+    res = prob.solve(solver=cp.CLARABEL)
+    print(res)
 
 
 def cp_dual(trajectories, eps, obj_consts, pep_data, c=None):
     N = len(trajectories)
     M = len(pep_data.keys())
+
     mat_dim = obj_consts['Gobj'].shape[0]
     vec_dim = obj_consts['Fobj'].shape[0]
     Aobj = obj_consts['Gobj']
@@ -86,6 +128,14 @@ def cp_dual(trajectories, eps, obj_consts, pep_data, c=None):
     if c is None:
         c = extract_c(pep_data)
 
+    # print(Aobj, bobj, c)
+    # print(M)
+    # for m in range(M):
+    #     pep_data_idx = pep_data[m]
+    #     Am = pep_data_idx['Gcons']
+    #     bm = pep_data_idx['Fcons']
+    #     print(Am, bm)
+
     obj = lambd * eps + 1 / N * cp.sum(s)
     constraints = [y >= 0]
     for i in range(N):
@@ -93,17 +143,19 @@ def cp_dual(trajectories, eps, obj_consts, pep_data, c=None):
         constraints += [-c.T @ y[i] - cp.trace(G_sample @ Gz[i]) - F_sample.T @ Fz[i] <= s[i]]
         constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz[i]), Fz[i]]))]
 
-        # LstarG = 0
-        # LstarF = 0
+        LstarG = 0
+        LstarF = 0
         for m in range(M):
             pep_data_idx = pep_data[m]
             Am = pep_data_idx['Gcons']
             bm = pep_data_idx['Fcons']
             # print(y[i,m] * Am)
-            LstarG = y[i, m] * Am
-            LstarF = y[i, m] * bm
+            LstarG = LstarG + y[i, m] * Am
+            LstarF = LstarF + y[i, m] * bm
         constraints += [LstarG - Gz[i] - Aobj >> 0]
         constraints += [LstarF - Fz[i] - bobj == 0]
+    
+    print(len(constraints))
     
     prob = cp.Problem(cp.Minimize(obj), constraints)
     res = prob.solve(solver=cp.CLARABEL)
@@ -127,7 +179,7 @@ def main():
     K = 1
 
     d = 5
-    N = 1
+    N = 10
 
     np.random.seed(seed)
 
@@ -196,7 +248,7 @@ def main():
     print(F.value)
     print(G.value)
 
-    eps = 10
+    eps = 1
 
     generate_and_solve_dual(eps, N, d, mu, L, R, t, K, obj_consts, pep_data)
 
@@ -237,11 +289,12 @@ def main_alt():
         pep_data_idx['Gcons'] = A[idx].G
         pep_data_idx['Fcons'] = A[idx].F
         pep_data[idx] = pep_data_idx
-    eps = 0.
+
+    eps = 0.2
 
     generate_and_solve_dual(eps, sample_n, d, mu, L, R, gamma, K, obj_consts, pep_data, c=c)
 
 
 if __name__ == '__main__':
-    # main()
-    main_alt()
+    main()
+    # main_alt()
