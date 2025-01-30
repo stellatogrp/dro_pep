@@ -1,6 +1,8 @@
 import cvxpy as cp
+import matplotlib.pyplot as plt
 import numpy as np
 
+from tqdm import tqdm
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from PEPit.point import Point
@@ -11,6 +13,13 @@ from sdp_data_matrix_scalable import smooth_convex_gd, generate_sample
 
 np.set_printoptions(precision=5)  # Print few decimal places
 np.set_printoptions(suppress=True)  # Suppress scientific notation
+
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    # "font.sans-serif": ["Helvetica Neue"],
+    "font.size": 20,
+    "figure.figsize": (9, 6)})
 
 
 def generate_P(d, mu, L):
@@ -23,12 +32,13 @@ def generate_P(d, mu, L):
     return U @ np.diag(sigma) @ U.T
 
 
-def generate_trajectories(N, d, mu, L, R, t, K, x0):
+def generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1):
     '''
     Ghalf = [x^star, x0, g0, g1]
     and
     F = [f^star, f0, f1, tau] where tau = f1 - f^star
     '''
+    np.random.seed(traj_seed)
     out = []
     for _ in range(N):
         P = generate_P(d, mu, L)
@@ -63,11 +73,19 @@ def generate_and_solve_dual(eps, N, d, mu, L, R, t, K, obj_consts, pep_data, c=N
     x0 = np.zeros(d)
     x0[0] = R
 
-    trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0)
+    trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1)
     # trajectories = [(sample_G, sample_F)]
-    print(trajectories)
-    cp_dual(trajectories, eps, obj_consts, pep_data, c=c)
+    # print(trajectories)
+    return cp_dual(trajectories, eps, obj_consts, pep_data, c=c)
     # cp_dual_alt(trajectories, eps, obj_consts, pep_data, c=c)
+
+    # all_G = [traj[0] for traj in trajectories]
+    # all_F = [traj[1] for traj in trajectories]
+
+    # avg_G = np.average(all_G, axis=0)
+    # avg_F = np.average(all_F, axis=0)
+    # avg_trajectories = [(avg_G, avg_F)]
+    # cp_dual(avg_trajectories, eps, obj_consts, pep_data, c=c)
 
 
 def cp_dual_alt(trajectories, eps, obj_consts, pep_data, c=None):
@@ -107,6 +125,8 @@ def cp_dual_alt(trajectories, eps, obj_consts, pep_data, c=None):
     prob = cp.Problem(cp.Minimize(lmbd*eps + 1/N * cp.sum(s)), constraint)
     res = prob.solve(solver=cp.CLARABEL)
     print(res)
+
+    return res
 
 
 def cp_dual(trajectories, eps, obj_consts, pep_data, c=None):
@@ -154,12 +174,12 @@ def cp_dual(trajectories, eps, obj_consts, pep_data, c=None):
             LstarF = LstarF + y[i, m] * bm
         constraints += [LstarG - Gz[i] - Aobj >> 0]
         constraints += [LstarF - Fz[i] - bobj == 0]
-    
-    print(len(constraints))
+
     
     prob = cp.Problem(cp.Minimize(obj), constraints)
     res = prob.solve(solver=cp.CLARABEL)
-    print('dro dual:', res)
+    # print('dro dual:', res)
+    return res
 
 
 def extract_c(pep_data):
@@ -176,10 +196,10 @@ def main():
     L = 10
     R = 1
     t = 0.1
-    K = 1
+    K = 5
 
     d = 5
-    N = 10
+    N = 20
 
     np.random.seed(seed)
 
@@ -248,9 +268,33 @@ def main():
     print(F.value)
     print(G.value)
 
-    eps = 1
+    # eps = 0.1
 
-    generate_and_solve_dual(eps, N, d, mu, L, R, t, K, obj_consts, pep_data)
+    # eps_vals = [1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3]
+
+    eps_vals = np.logspace(-3, 3, num=20)
+
+    dro_vals = []
+    for eps in tqdm(eps_vals):
+        dro_val = generate_and_solve_dual(eps, N, d, mu, L, R, t, K, obj_consts, pep_data)
+        # print(eps, dro_val)
+        dro_vals.append(dro_val)
+
+    plt.figure()
+    plt.plot(eps_vals, dro_vals)
+    plt.axhline(y=cp_res, color='black', linestyle='--', label='PEP bound')
+
+    plt.xscale('log')
+    plt.xlabel(r'$\epsilon$')
+    plt.ylabel('DRO obj value')
+
+    plt.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    plt.title(fr'$N$={N}, $K$={K}')
+
+    plt.tight_layout()
+    plt.savefig('plots/N20K5.pdf')
+    plt.show()
 
 
 def main_alt():
