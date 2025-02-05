@@ -54,7 +54,10 @@ class DROReformulator(object):
             c_vals.append(c_cons)
 
             if constr.equality_or_inequality == 'equality':
-                raise NotImplementedError # TODO add the extra constraints for the double sided inequalities
+                # raise NotImplementedError # TODO add the extra constraints for the double sided inequalities
+                A_vals.append(-A_cons)
+                b_vals.append(-b_cons)
+                c_vals.append(-c_cons)
         self.A_vals = np.array(A_vals)
         self.b_vals = np.array(b_vals)
         self.c_vals = np.array(c_vals)
@@ -101,6 +104,7 @@ class DROReformulator(object):
 
         self.cp_problem = prob
         self.eps_param = eps
+        # TODO: check DPP just in case is_dpp ?
 
     def solve_eps_vals(self, eps_vals):
         out = []

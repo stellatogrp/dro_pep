@@ -75,7 +75,7 @@ def main():
     K = 5
 
     d = 5
-    N = 20
+    N = 10
 
     np.random.seed(seed)
 
@@ -113,7 +113,41 @@ def main():
     eps_vals = np.logspace(-3, 3, num=20)
 
     res = DR.solve_eps_vals(eps_vals)
-    print(res)
+    print('obj vals full sample:', res)
+
+    all_G = [traj[0] for traj in trajectories]
+    all_F = [traj[1] for traj in trajectories]
+
+    avg_G = np.average(all_G, axis=0)
+    avg_F = np.average(all_F, axis=0)
+    avg_trajectories = [(avg_G, avg_F)]
+
+    Avg_DR = DROReformulator(
+        problem,
+        avg_trajectories,
+        'expectation',
+        'cvxpy',
+    )
+
+    avg_res = Avg_DR.solve_eps_vals(eps_vals)
+    print('obj vals with traj avg:', avg_res)
+
+    plt.figure()
+    plt.plot(eps_vals, res, label='full samples')
+    plt.plot(eps_vals, avg_res, label='avg of samples')
+    plt.axhline(y=pepit_tau, color='black', linestyle='--', label='PEP bound')
+
+    plt.xscale('log')
+    plt.xlabel(r'$\epsilon$')
+    plt.ylabel('DRO obj value')
+
+    plt.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.3)
+    plt.title(fr'$N$={N}, $K$={K}')
+
+    plt.tight_layout()
+    plt.savefig(f'plots/N{N}K{K}.pdf')
+    plt.show()
 
 
 if __name__ == '__main__':
