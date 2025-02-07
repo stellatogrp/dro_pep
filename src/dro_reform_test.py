@@ -146,8 +146,49 @@ def main():
     plt.title(fr'$N$={N}, $K$={K}')
 
     plt.tight_layout()
-    plt.savefig(f'plots/N{N}K{K}.pdf')
-    plt.show()
+    plt.savefig(f'plots/expectation/N{N}K{K}.pdf')
+    # plt.show()
+
+    plt.clf()
+    plt.cla()
+    plt.close()
+
+    CVar_DR = DROReformulator(
+        problem,
+        trajectories,
+        'cvar',
+        'cvxpy',
+    )
+    alpha = 0.95
+    res = CVar_DR.solve_fixed_alpha_eps_vals(alpha, eps_vals)
+    print('obj vals cvar, full sample:', res)
+
+    CVar_Avg_DR = DROReformulator(
+        problem,
+        avg_trajectories,
+        'cvar',
+        'cvxpy',
+    )
+
+    avg_res = CVar_Avg_DR.solve_fixed_alpha_eps_vals(alpha, eps_vals)
+    print('obj vals cvar, with traj avg:', avg_res)
+
+    plt.figure()
+    plt.plot(eps_vals, res, label='full samples')
+    plt.plot(eps_vals, avg_res, label='avg of samples')
+    plt.axhline(y=pepit_tau, color='black', linestyle='--', label='PEP bound')
+
+    plt.xscale('log')
+    plt.xlabel(r'$\epsilon$')
+    plt.ylabel('DRO obj value')
+
+    plt.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.3)
+    plt.title(fr'$N$={N}, $K$={K}')
+
+    plt.tight_layout()
+    plt.savefig(f'plots/cvar/N{N}K{K}.pdf')
+
 
 
 if __name__ == '__main__':
