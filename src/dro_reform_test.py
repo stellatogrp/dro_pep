@@ -159,7 +159,7 @@ def main():
         'cvar',
         'cvxpy',
     )
-    alpha = 0.95
+    alpha = 0.1  # alpha should be small
     res = CVar_DR.solve_fixed_alpha_eps_vals(alpha, eps_vals)
     print('obj vals cvar, full sample:', res)
 
