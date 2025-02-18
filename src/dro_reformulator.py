@@ -188,8 +188,6 @@ class DROReformulator(object):
     def solve_single_eps_val(self, eps):
         self.eps_param.value = eps
         res = self.cp_problem.solve(solver=cp.CLARABEL)
-        # print(res)
-        # exit(0)
         return res
 
     def solve_fixed_alpha_eps_vals(self, alpha, eps_vals):
@@ -210,7 +208,6 @@ class DROReformulator(object):
             x var structure: [lambd, s, y, Fz, Gz]
             s in Rn, y in Rm, Fz in RV, Gz in RS_vec
         '''
-        print('here')
         N = len(self.samples)
         M = len(self.A_vals)
         V = self.b_obj.shape[0]
@@ -366,8 +363,6 @@ class DROReformulator(object):
         A = spa.vstack(A)
         b = np.hstack(b)
         print('A shape from custom:', A.shape)
-
-        # exit(0)
 
         P = spa.csc_matrix((x_dim, x_dim))
         q = np.zeros(x_dim)

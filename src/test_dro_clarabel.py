@@ -2,7 +2,8 @@ import cvxpy as cp
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dro_reformulator import DROReformulator
+# from dro_reformulator import DROReformulator
+from reformulator.dro_reformulator import DROReformulator
 from tqdm import tqdm
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
@@ -72,10 +73,10 @@ def main():
     L = 10
     R = 1
     t = 0.1
-    K = 1
+    K = 5
 
     d = 5
-    N = 10
+    N = 5
 
     np.random.seed(seed)
 
@@ -111,8 +112,8 @@ def main():
     )
 
     eps = 0.1
-    res = DR.solve_single_eps_val(eps)
-    print('obj from cvxpy:', res)
+    out = DR.solve_single_eps_val(eps)
+    print(out)
 
     CDR = DROReformulator(
         problem,
@@ -120,6 +121,9 @@ def main():
         'expectation',
         'clarabel',
     )
+
+    out = CDR.solve_single_eps_val(eps)
+    print(out)
 
 
 if __name__ == '__main__':
