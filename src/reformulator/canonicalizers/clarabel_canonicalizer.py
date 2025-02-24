@@ -74,8 +74,6 @@ class ClarabelCanonicalizer(Canonicalizer):
             Gz_start, Gz_end = Gz_idx(i, 0), Gz_idx(i, S_vec)
             epi_constr[i, Gz_start: Gz_end] = -symm_vectorize(G_sample, 2)
 
-        # print(epi_constr)
-        
         A.append(spa.csc_matrix(epi_constr))
         b.append(np.zeros(N))
         # cones.append(clarabel.NonnegativeConeT(N)) # coalescing with next nonneg cone
@@ -118,12 +116,8 @@ class ClarabelCanonicalizer(Canonicalizer):
         # PSD constraints
         Aobj_svec = symm_vectorize(self.A_obj, np.sqrt(2.))
         Am_svec = [symm_vectorize(self.A_vals[m], np.sqrt(2.)) for m in range(M)]
-
-        # print(Aobj_svec)
-        # print(Am_svec)
         Am_full = np.array(Am_svec)
         Am_T = Am_full.T
-        # print(Am_T)
 
         yA_lhs = []
         yA_rhs = []
@@ -178,7 +172,11 @@ class ClarabelCanonicalizer(Canonicalizer):
         self.P = spa.csc_matrix((x_dim, x_dim))
         self.s_idx_func = s_idx
 
-    def set_eps(self, eps):
+    def set_params(self, eps=0.1, alpha=0.1):
+        if self.measure == 'expectation':
+            self.set_expectation_eps(eps)
+
+    def set_expectation_eps(self, eps):
         x_dim = self.P.shape[0]
         N = len(self.samples)
         q = np.zeros(x_dim)

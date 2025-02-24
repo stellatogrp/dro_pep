@@ -2,8 +2,8 @@ import cvxpy as cp
 import matplotlib.pyplot as plt
 import numpy as np
 
-# from dro_reformulator import DROReformulator
-from reformulator.dro_reformulator import DROReformulator
+from dro_reformulator import DROReformulator
+# from reformulator.dro_reformulator import DROReformulator
 from tqdm import tqdm
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
@@ -112,8 +112,8 @@ def main():
     )
 
     eps = 0.1
-    out = DR.solve_single_eps_val(eps)
-    print(out)
+    # out = DR.solve_single_eps_val(eps)
+    # print(out)
 
     CDR = DROReformulator(
         problem,
@@ -122,7 +122,23 @@ def main():
         'clarabel',
     )
 
-    out = CDR.solve_single_eps_val(eps)
+    # out = CDR.solve_single_eps_val(eps)
+    out = CDR.setup_clarabel_expectation_problem(eps=eps)
+    # CDR.set_params(eps=0.1, alpha=0.05)
+    # out = CDR.solve()
+    print(out)
+
+    print('---testing cvar---')
+    CVar_DR = DROReformulator(
+        problem,
+        trajectories,
+        'cvar',
+        'cvxpy',
+    )
+    alpha = 0.1
+    out = CVar_DR.solve_fixed_alpha_eps_vals(alpha, [eps])
+    print('from cvxpy:', out)
+    out = CVar_DR.setup_clarabel_cvar_problem(eps=eps, alpha=alpha)
     print(out)
 
 

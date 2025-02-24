@@ -32,6 +32,7 @@ class DROReformulator(object):
             raise AssertionError('pep problem needs to be solved to extract data')
 
         self.measure = measure
+        self.wrapper = wrapper
 
         self.extract_pep_data()
         
@@ -172,6 +173,10 @@ class DROReformulator(object):
             constraints += [y2b_adj - Fz2[i] - alpha_inv * self.b_obj == 0]
 
         prob = cp.Problem(cp.Minimize(obj), constraints)
+
+        probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
+        A_cp = probdata['A']
+        print('A shape from cvxpy:', A_cp.shape)
 
         self.cp_problem = prob
         self.eps_param = eps
@@ -370,12 +375,277 @@ class DROReformulator(object):
         q[s_idx(0): s_idx(N)] = 1 / N
 
         settings = clarabel.DefaultSettings()
-
+        settings.verbose = False
         solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
 
         solution = solver.solve()
         # print(solution.x)
-        print(q @ solution.x)
+        # print(q @ solution.x)
+
+        return solution.obj_val
+
+    def setup_clarabel_cvar_problem(self, eps=0.1, alpha=0.1):
+        '''
+            x var structure: [lambd, t, s, y1, y1, Fz1, Fz2, Gz1, Gz2]
+            s in Rn, y in Rm, Fz in RV, Gz in RS_vec
+        '''
+        alpha_inv = 1 / alpha
+        N = len(self.samples)
+        M = len(self.A_vals)
+        V = self.b_obj.shape[0]
+        S_mat = self.A_obj.shape[0]
+        S_vec = int(S_mat * (S_mat + 1) / 2)
+
+        print('N, M, V, S_vec:', N, M, V, S_vec)
+
+        x_dim = 2 + N * (1 + 2 * (M + V + S_vec))
+        print('x_dim:', x_dim)
+
+        lambd_idx = 0
+        # lambd_offset = 1
+
+        t_idx = 1
+        t_offset = 2
+
+        s_start = t_offset
+        def s_idx(i):
+            return s_start + i
+        s_offset = s_idx(N)
+
+        y1_start = s_offset
+        def y1_idx(i, j):
+            return y1_start + i * M + j
+        y1_offset = y1_idx(N, 0)
+
+        y2_start = y1_offset
+        def y2_idx(i, j):
+            return y2_start + i * M + j
+        y2_offset = y2_idx(N, 0)
+
+        fz1_start = y2_offset
+        def fz1_idx(i, j):
+            return fz1_start + i * V + j
+        fz1_offset = fz1_idx(N, 0)
+
+        fz2_start = fz1_offset
+        def fz2_idx(i, j):
+            return fz2_start + i * V + j
+        fz2_offset = fz2_idx(N, 0)
+
+        Gz1_start = fz2_offset
+        def Gz1_idx(i, j):
+            return Gz1_start + i * S_vec + j
+        Gz1_offset = Gz1_idx(N, 0)
+
+        Gz2_start = Gz1_offset
+        def Gz2_idx(i, j):
+            return Gz2_start + i * S_vec + j
+
+        c = self.c_vals
+        A = []
+        b = []
+        cones = []
+
+        # constraints: y1 >= 0, y2 >= 0
+        y1_nonneg = np.zeros((N * M, x_dim))
+        y1_idx_start = y1_idx(0, 0)
+        y1_idx_end = y1_idx(N-1, M)
+        y1_nonneg[0: N*M, y1_idx_start: y1_idx_end] = -np.eye(N * M)
+
+        y2_nonneg = np.zeros((N * M, x_dim))
+        y2_idx_start = y2_idx(0, 0)
+        y2_idx_end = y2_idx(N-1, M)
+        y2_nonneg[0: N*M, y2_idx_start: y2_idx_end] = -np.eye(N * M)
+
+        A += [spa.csc_matrix(y1_nonneg), spa.csc_matrix(y2_nonneg)]
+        b += [np.zeros(2 * N * M)]
+        cones += [clarabel.NonnegativeConeT(2 * N * M)]
+
+        # SOCP constraints
+        socp_lhs = []
+        socp_rhs = []
+        scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
+        for i in range(N):
+            # Gz1, fz1
+            curr_lhs = np.zeros((1 + V + S_vec, x_dim))
+            fz1_idx_start, fz1_idx_end = fz1_idx(i, 0), fz1_idx(i, V)
+            Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
+
+            curr_lhs[0, lambd_idx] = -1
+            curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.eye(V)
+            curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledI
+
+            socp_lhs.append(spa.csc_matrix(curr_lhs))
+            socp_rhs.append(np.zeros(1 + V + S_vec))
+
+            # Gz2, fz2
+            curr_lhs = np.zeros((1 + V + S_vec, x_dim))
+            fz2_idx_start, fz2_idx_end = fz2_idx(i, 0), fz2_idx(i, V)
+            Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
+
+            curr_lhs[0, lambd_idx] = -1
+            curr_lhs[1:V+1, fz2_idx_start: fz2_idx_end] = -np.eye(V)
+            curr_lhs[V+1:, Gz2_idx_start: Gz2_idx_end] = -scaledI
+
+            socp_lhs.append(spa.csc_matrix(curr_lhs))
+            socp_rhs.append(np.zeros(1 + V + S_vec))
+
+        socp_lhs = spa.vstack(socp_lhs)
+        socp_rhs = np.hstack(socp_rhs)
+
+        A.append(socp_lhs)
+        b.append(socp_rhs)
+        cones += [clarabel.SecondOrderConeT(1 + V + S_vec) for _ in range(2 * N)]
+
+        # constraints: -B^Ty_i + Fz1_i = 0
+        Bm_full = np.array(self.b_vals)
+        Bm_T = Bm_full.T
+
+        yB_lhs = []
+        yB_rhs = []
+        for i in range(N):
+            curr_lhs = np.zeros((V, x_dim))
+            y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
+            curr_lhs[:, y1_idx_start: y1_idx_end] = -Bm_T
+
+            fz1_idx_start, fz1_idx_end = fz1_idx(i, 0), fz1_idx(i, V)
+            curr_lhs[:, fz1_idx_start: fz1_idx_end] = np.eye(V)
+
+            yB_lhs.append(spa.csc_matrix(curr_lhs))
+            yB_rhs.append(np.zeros(V))
+        
+        yB_lhs = spa.vstack(yB_lhs)
+        yB_rhs = np.hstack(yB_rhs)
+
+        A.append(yB_lhs)
+        b.append(yB_rhs)
+        cones.append(clarabel.ZeroConeT(V * N))
+
+        # constraints: -A^\star y_1i + Gz1_i << 0
+        Am_svec = [symm_vectorize(self.A_vals[m], np.sqrt(2.)) for m in range(M)]
+        Am_full = np.array(Am_svec)
+        Am_T = Am_full.T
+
+        yA_lhs = []
+        yA_rhs = []
+        for i in range(N):
+            curr_lhs = np.zeros((S_vec, x_dim))
+            y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
+            curr_lhs[:, y1_idx_start: y1_idx_end] = -Am_T
+
+            Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
+            curr_lhs[:, Gz1_idx_start: Gz1_idx_end] = scaledI
+
+            yA_lhs.append(spa.csc_matrix(curr_lhs))
+            yA_rhs.append(np.zeros(S_vec))
+
+        yA_lhs = spa.vstack(yA_lhs)
+        yA_rhs = np.hstack(yA_rhs)
+
+        A.append(yA_lhs)
+        b.append(yA_rhs)
+        cones += [clarabel.PSDTriangleConeT(S_mat) for _ in range(N)]
+
+        # constraints: t - c^T y1 - Tr(G_sample @ Gz1_i) - F_sample @ Fz1_i - s_i <= 0
+        epi1_constr = np.zeros((N, x_dim))
+        for i in range(N):
+            G_sample, F_sample = self.samples[i]
+            epi1_constr[i, t_idx] = 1
+            y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
+            epi1_constr[i, y1_idx_start: y1_idx_end] = -c
+            epi1_constr[i, s_idx(i)] = -1
+
+            fz1_idx_start, fz1_idx_end = fz1_idx(i, 0), fz1_idx(i, V)
+            epi1_constr[i, fz1_idx_start: fz1_idx_end] = -F_sample
+
+            Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
+            epi1_constr[i, Gz1_idx_start: Gz1_idx_end] = -symm_vectorize(G_sample, 2)
+
+        A.append(spa.csc_matrix(epi1_constr))
+        b.append(np.zeros(N))
+        cones.append(clarabel.NonnegativeConeT(N))
+
+        # everything from here on out depends on alpha
+        # constraints: -(alpha_inv - 1) t - c^T y2 - Tr(G_sample @ Gz2_i) - F_sample @ Fz2_i - s_i <= 0
+        epi2_constr = np.zeros((N, x_dim))
+        for i in range(N):
+            G_sample, F_sample = self.samples[i]
+            epi2_constr[i, t_idx] = -(alpha_inv - 1)
+            y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
+            epi2_constr[i, y2_idx_start: y2_idx_end] = -c
+            epi2_constr[i, s_idx(i)] = -1
+
+            fz2_idx_start, fz2_idx_end = fz2_idx(i, 0), fz2_idx(i, V)
+            epi2_constr[i, fz2_idx_start: fz2_idx_end] = -F_sample
+
+            Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
+            epi2_constr[i, Gz2_idx_start: Gz2_idx_end] = -symm_vectorize(G_sample, 2)
+
+        A.append(spa.csc_matrix(epi2_constr))
+        b.append(np.zeros(N))
+        cones.append(clarabel.NonnegativeConeT(N))
+
+        # constraints: -B^Ty_2i + Fz2_i = -alpha_inv * b_obj
+        yB_lhs = []
+        yB_rhs = []
+        for i in range(N):
+            curr_lhs = np.zeros((V, x_dim))
+            y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
+            curr_lhs[:, y2_idx_start: y2_idx_end] = -Bm_T
+
+            fz2_idx_start, fz2_idx_end = fz2_idx(i, 0), fz2_idx(i, V)
+            curr_lhs[:, fz2_idx_start: fz2_idx_end] = np.eye(V)
+
+            yB_lhs.append(spa.csc_matrix(curr_lhs))
+            yB_rhs.append(-alpha_inv * self.b_obj)
+        
+        yB_lhs = spa.vstack(yB_lhs)
+        yB_rhs = np.hstack(yB_rhs)
+
+        A.append(yB_lhs)
+        b.append(yB_rhs)
+        cones.append(clarabel.ZeroConeT(V * N))
+
+        # constraints: -A^\star y_2i + Gz2+i << -alpha_inv * A_obj
+        Aobj_svec = symm_vectorize(self.A_obj, np.sqrt(2.))
+
+        yA_lhs = []
+        yA_rhs = []
+        for i in range(N):
+            curr_lhs = np.zeros((S_vec, x_dim))
+            y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
+            curr_lhs[:, y2_idx_start: y2_idx_end] = -Am_T
+
+            Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
+            curr_lhs[:, Gz2_idx_start: Gz2_idx_end] = scaledI
+
+            yA_lhs.append(spa.csc_matrix(curr_lhs))
+            yA_rhs.append(-alpha_inv * Aobj_svec)
+
+        yA_lhs = spa.vstack(yA_lhs)
+        yA_rhs = np.hstack(yA_rhs)
+
+        A.append(yA_lhs)
+        b.append(yA_rhs)
+        cones += [clarabel.PSDTriangleConeT(S_mat) for _ in range(N)]
+
+        # solving
+
+        P = spa.csc_matrix((x_dim, x_dim))
+        q = np.zeros(x_dim)
+        q[0] = eps
+        q[s_idx(0): s_idx(N)] = 1 / N
+
+        A = spa.vstack(A)
+        b = np.hstack(b)
+        print('A shape from custom:', A.shape)
+
+        settings = clarabel.DefaultSettings()
+        settings.verbose = False
+        solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+        solution = solver.solve()
+        
+        return solution.obj_val
 
 
 def symm_vectorize(A, scale_factor):

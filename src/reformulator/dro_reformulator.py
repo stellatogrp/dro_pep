@@ -53,6 +53,12 @@ class DROReformulator(object):
     #         out.append(res)
     #     return np.array(out)
 
+    def set_params(self, **kwargs):
+        self.canon.set_params(**kwargs)
+
+    def solve(self):
+        return self.canon.solve()
+
     def solve_single_eps_val(self, eps):
         self.canon.set_eps(eps)
         return self.canon.solve()
