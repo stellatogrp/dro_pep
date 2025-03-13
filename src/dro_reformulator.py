@@ -68,6 +68,36 @@ class DROReformulator(object):
         self.b_vals = np.array(b_vals)
         self.c_vals = np.array(c_vals)
 
+        # TODO: PSD constraint for quadratic interpolation
+        PSD_A_vals = []
+        PSD_b_vals = []
+        PSD_c_vals = []
+        PSD_shapes = []
+
+        for psd in problem._list_of_psd_sent_to_wrapper:
+            psd_expr = psd.matrix_of_expressions
+            psd_shape = psd_expr.shape
+            PSD_shapes.append(psd_shape)
+
+            PSD_A_val, PSD_b_val, PSD_c_val = [], [], []
+            for i in range(psd_shape[0]) :
+                PSD_A_row, PSD_b_row, PSD_c_row = [], [], []
+                for j in range(psd_shape[1]) :
+                    PSD_A_cons, PSD_b_cons, PSD_c_cons = expression_to_matrices(psd_expr[i,j])
+                    PSD_A_row.append(PSD_A_cons)
+                    PSD_b_row.append(PSD_b_cons)
+                    PSD_c_row.append(PSD_c_cons)
+                PSD_A_val.append(PSD_A_row)
+                PSD_b_val.append(PSD_b_row)
+                PSD_c_val.append(PSD_c_row)
+            PSD_A_vals.append(np.array(PSD_A_val))
+            PSD_b_vals.append(np.array(PSD_b_val))
+            PSD_c_vals.append(np.array(PSD_c_val))
+        self.PSD_A_vals = PSD_A_vals
+        self.PSD_b_vals = PSD_b_vals
+        self.PSD_c_vals = PSD_c_vals
+        self.PSD_shapes = PSD_shapes
+
         assert self.A_vals.shape[0] == self.b_vals.shape[0] == self.c_vals.shape[0]
 
     def setup_cvxpy_problem(self):
@@ -79,6 +109,7 @@ class DROReformulator(object):
     def setup_cvxpy_expectation_problem(self):
         N = len(self.samples)
         M = len(self.A_vals)
+        M_psd = len(self.PSD_A_vals)
         mat_shape = self.A_obj.shape
         vec_shape = self.b_obj.shape
 
@@ -87,6 +118,8 @@ class DROReformulator(object):
         y = cp.Variable((N, M))
         Gz = [cp.Variable(mat_shape, symmetric=True) for _ in range(N)]
         Fz = [cp.Variable(vec_shape) for _ in range(N)]
+        Gz_psd = [[cp.Variable(mat_shape, PSD=True) for _ in range(M_psd)] for _ in range(N)]
+        # Fz_psd = [[cp.Variable(vec_shape) for _ in range(M_psd)] for _ in range(N)]
 
         eps = cp.Parameter()
 
@@ -106,6 +139,17 @@ class DROReformulator(object):
                 bm = self.b_vals[m]
                 LstarG = LstarG + y[i, m] * Am
                 LstarF = LstarF + y[i, m] * bm
+
+            for m_psd in range(M_psd):
+                Am_psd = self.PSD_A_vals[m_psd]
+                bm_psd = self.PSD_b_vals[m_psd]
+                cm_psd = self.PSD_c_vals[m_psd] # TODO: deal with cm_psd (s[i] constraint)
+                for j in range(self.PSD_shapes[m_psd][0]) :
+                    for k in range(self.PSD_shapes[m_psd][1]) :
+                        LstarG = LstarG - Gz_psd[i][m_psd][j,k] * Am_psd[j,k]
+                # for j in range(vec_shape) :
+                #     LstarF = LstarF - Fz_psd[i][m_psd] @ bm_psd[j]
+                        
             constraints += [LstarG - Gz[i] - self.A_obj >> 0]
             constraints += [LstarF - Fz[i] - self.b_obj == 0]
 
@@ -116,12 +160,14 @@ class DROReformulator(object):
         print('A shape from cvxpy:', A_cp.shape)
 
         self.cp_problem = prob
+        self.quantile_estimate = None
         self.eps_param = eps
         # TODO: check DPP just in case is_dpp 
 
     def setup_cvxpy_cvar_problem(self):
         N = len(self.samples)
         M = len(self.A_vals)
+        M_psd = len(self.PSD_A_vals)
         mat_shape = self.A_obj.shape
         vec_shape = self.b_obj.shape
 
@@ -135,6 +181,12 @@ class DROReformulator(object):
         Fz1 = [cp.Variable(vec_shape) for _ in range(N)]
         Gz2 = [cp.Variable(mat_shape, symmetric=True) for _ in range(N)]
         Fz2 = [cp.Variable(vec_shape) for _ in range(N)]
+
+        Gz1_psd = [[cp.Variable(mat_shape, PSD=True) for _ in range(M_psd)] for _ in range(N)]
+        # Fz1_psd = [[cp.Variable(vec_shape) for _ in range(M_psd)] for _ in range(N)]
+        Gz2_psd = [[cp.Variable(mat_shape, PSD=True) for _ in range(M_psd)] for _ in range(N)]
+        # Fz2_psd = [[cp.Variable(vec_shape) for _ in range(M_psd)] for _ in range(N)]
+
 
         eps = cp.Parameter()
         alpha_inv = cp.Parameter()
@@ -167,6 +219,19 @@ class DROReformulator(object):
                 y1b_adj = y1b_adj + y1[i, m] * bm
                 y2b_adj = y2b_adj + y2[i, m] * bm
 
+            for m_psd in range(M_psd):
+                Am_psd = self.PSD_A_vals[m_psd]
+                bm_psd = self.PSD_b_vals[m_psd]
+                cm_psd = self.PSD_c_vals[m_psd] # TODO: deal with cm_psd (s[i] constraint)
+                for j in range(self.PSD_shapes[m_psd][0]) :
+                    for k in range(self.PSD_shapes[m_psd][1]) :
+                        y1A_adj = y1A_adj - Gz1_psd[i][m_psd][j,k] * Am_psd[j,k]
+                        y2A_adj = y2A_adj - Gz2_psd[i][m_psd][j,k] * Am_psd[j,k]
+                # for j in range(vec_shape)[0] :
+                #     y1b_adj = y1b_adj - Fz1_psd[i][m_psd] @ bm_psd[j]
+                #     y2b_adj = y2b_adj - Fz2_psd[i][m_psd] @ bm_psd
+
+
             constraints += [y1A_adj - Gz1[i] >> 0]
             constraints += [y1b_adj - Fz1[i] == 0]
             constraints += [y2A_adj - Gz2[i] - alpha_inv * self.A_obj >> 0]
@@ -179,6 +244,7 @@ class DROReformulator(object):
         print('A shape from cvxpy:', A_cp.shape)
 
         self.cp_problem = prob
+        self.quantile_estimate = t
         self.eps_param = eps
         self.alpha_inv_param = alpha_inv
 
@@ -193,16 +259,40 @@ class DROReformulator(object):
     def solve_single_eps_val(self, eps):
         self.eps_param.value = eps
         res = self.cp_problem.solve(solver=cp.CLARABEL)
+        if self.cp_problem.status != 'optimal' :
+            print(self.cp_problem.status)
+        return res
+
+    def solve_single_alpha_eps_val(self, alpha, eps):
+        self.alpha_inv_param.value = 1 / alpha
+        self.eps_param.value = eps
+        res = self.cp_problem.solve(solver=cp.CLARABEL)
+        if self.cp_problem.status != 'optimal' :
+            print(self.cp_problem.status)
         return res
 
     def solve_fixed_alpha_eps_vals(self, alpha, eps_vals):
         self.alpha_inv_param.value = 1 / alpha
         out = []
+        t_value = []
         for eps in eps_vals:
-            print(f'solving eps={eps}')
+            print(f'solving alpha={alpha} eps={eps}')
             res = self.solve_single_eps_val(eps)
             out.append(res)
-        return np.array(out)
+            t_value.append(self.quantile_estimate.value)
+        return np.array(out), np.array(t_value)
+    
+    def solve_fixed_eps_alpha_vals(self, alpha_vals, eps) :
+        self.eps_param.value = eps
+        out = []
+        t_value = []
+        for alpha in alpha_vals:
+            print(f'solving alpha={alpha} eps={eps}')
+            res = self.solve_single_alpha_eps_val(alpha, eps)
+            out.append(res)
+            t_value.append(self.quantile_estimate.value)
+        return np.array(out), np.array(t_value)
+        
 
     def setup_clarabel_problem(self):
         if self.measure == 'expectation':
@@ -215,6 +305,7 @@ class DROReformulator(object):
         '''
         N = len(self.samples)
         M = len(self.A_vals)
+        M_psd = len(self.PSD_A_vals)
         V = self.b_obj.shape[0]
         S_mat = self.A_obj.shape[0]
         S_vec = int(S_mat * (S_mat + 1) / 2)
