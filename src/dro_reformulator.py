@@ -25,7 +25,7 @@ VALID_WRAPPERS = [
 
 class DROReformulator(object):
 
-    def __init__(self, pep_problem, samples, measure, wrapper):
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=False):
         self.pep_problem = pep_problem
         self.samples = samples
 
@@ -47,6 +47,14 @@ class DROReformulator(object):
             self.setup_clarabel_problem()
         else:
             raise NotImplementedError(f'wrapper {wrapper} not implemented')
+        
+        self.preconditioner = ( np.ones((self.A_obj.shape[0],)), np.ones(self.b_obj.shape) )
+        if precond :
+            avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in samples], axis=0), np.average([sample[1] for sample in samples], axis=0))
+            self.preconditioner = ( 1/avg_sample[0], 1/np.sqrt(avg_sample[1]) )
+            self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
+            self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
+
 
     def extract_pep_data(self):
         problem = self.pep_problem
@@ -135,10 +143,14 @@ class DROReformulator(object):
         # obj = lambd * eps
         constraints = [y >= 0]
 
+        G_preconditioner = np.diag(self.preconditioner[0])
+        F_preconditioner = self.preconditioner[1]
+
         for i in range(N):
             G_sample, F_sample = self.samples[i]
             constraints += [- self.c_vals.T @ y[i] - cp.trace(G_sample @ Gz[i]) - F_sample.T @ Fz[i] <= s[i]]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz[i]), Fz[i]]))]
+            # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz[i]), Fz[i]]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz[i])]))]
 
             LstarG = 0
             LstarF = 0
@@ -193,8 +205,13 @@ class DROReformulator(object):
         # obj = lambd * eps
         constraints = [y >= 0]
 
+        G_preconditioner = np.diag(self.preconditioner[0])
+        F_preconditioner = self.preconditioner[1]
+
         constraints += [- self.c_vals.T @ y - cp.trace(avg_G @ Gz) - avg_F.T @ Fz <= s]
-        constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz), Fz]))]
+        # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz), Fz]))]
+        constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz)]))]
+
 
         LstarG = 0
         LstarF = 0
@@ -254,6 +271,9 @@ class DROReformulator(object):
         eps = cp.Parameter()
         alpha_inv = cp.Parameter()
 
+        G_preconditioner = np.diag(self.preconditioner[0])
+        F_preconditioner = self.preconditioner[1]
+
         obj = lambd * eps + 1 / N * cp.sum(s)
         constraints = [y1 >= 0, y2 >= 0]
 
@@ -263,8 +283,11 @@ class DROReformulator(object):
             # constraints += [t <= s[i]]
             constraints += [-(alpha_inv - 1) * t - self.c_vals.T @ y2[i] - cp.trace(G_sample @ Gz2[i]) - F_sample.T @ Fz2[i] <= s[i]]
 
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz2[i]), Fz2[i]]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz1[i]), Fz1[i]]))]
+            # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz2[i]), Fz2[i]]))]
+            # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz1[i]), Fz1[i]]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz1[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz2[i])]))]
+
 
             y1A_adj = 0
             y2A_adj = 0
@@ -337,14 +360,20 @@ class DROReformulator(object):
         eps = cp.Parameter()
         alpha_inv = cp.Parameter()
 
+        G_preconditioner = np.diag(self.preconditioner[0])
+        F_preconditioner = self.preconditioner[1]
+
         obj = lambd * eps + s
         constraints = [y1 >= 0, y2 >= 0]
 
         constraints += [t - self.c_vals.T @ y1 - cp.trace(avg_G @ Gz1) - avg_F.T @ Fz1 <= s]
         constraints += [-(alpha_inv - 1) * t - self.c_vals.T @ y2 - cp.trace(avg_G @ Gz2) - avg_F.T @ Fz2 <= s]
 
-        constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz1), Fz1]))]
-        constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz2), Fz2]))]
+        # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz1), Fz1]))]
+        # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz2), Fz2]))]
+        constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz1)]))]
+        constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz2)]))]
+
 
         y1A_adj = 0
         y2A_adj = 0

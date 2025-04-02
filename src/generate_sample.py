@@ -34,7 +34,9 @@ def generate_trajectories(params, x0, algorithm, matrix_generation, traj_seed=1)
     np.random.seed(traj_seed)
     
     samples = []
-    for _ in range(N):
+    for n in range(N):
+        if np.mod(n, 1000) == 0 and n > 0 :
+            print(f'Generated {n} samples.')
         P = matrix_generation(d, mu, L)
 
         def f(x):
