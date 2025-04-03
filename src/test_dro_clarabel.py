@@ -9,6 +9,9 @@ from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from scipy.stats import ortho_group
 
+from algorithm import gradient_descent, nesterov_accelerated_gradient
+from generate_sample import generate_P, generate_P_beta, generate_trajectories, marchenko_pastur
+
 np.set_printoptions(precision=5)  # Print few decimal places
 np.set_printoptions(suppress=True)  # Suppress scientific notation
 
@@ -30,53 +33,56 @@ def generate_P(d, mu, L):
     return U @ np.diag(sigma) @ U.T
 
 
-def generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1):
-    '''
-    Ghalf = [x^star, x0, g0, g1]
-    and
-    F = [f^star, f0, f1, tau] where tau = f1 - f^star
-    '''
-    np.random.seed(traj_seed)
-    out = []
-    for _ in range(N):
-        P = generate_P(d, mu, L)
+# def generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1):
+#     '''
+#     Ghalf = [x^star, x0, g0, g1]
+#     and
+#     F = [f^star, f0, f1, tau] where tau = f1 - f^star
+#     '''
+#     np.random.seed(traj_seed)
+#     out = []
+#     for _ in range(N):
+#         P = generate_P(d, mu, L)
 
-        def func(x):
-            return .5 * x.T @ P @ x
+#         def func(x):
+#             return .5 * x.T @ P @ x
         
-        def grad(x):
-            return P @ x
+#         def grad(x):
+#             return P @ x
 
-        Ghalf = np.zeros((d, K + 3))
-        F = np.zeros(K + 3)
+#         Ghalf = np.zeros((d, K + 3))
+#         F = np.zeros(K + 3)
 
-        Ghalf[:, 1] = x0
-        F[1] = func(x0)
+#         Ghalf[:, 1] = x0
+#         F[1] = func(x0)
         
-        Ghalf[:, 2] = grad(x0)
+#         Ghalf[:, 2] = grad(x0)
 
-        x = x0
-        for k in range(K):
-            x = x - t * grad(x)
-            F[k + 2] = func(x)
-            Ghalf[:, k + 3] = grad(x)
+#         x = x0
+#         for k in range(K):
+#             x = x - t * grad(x)
+#             F[k + 2] = func(x)
+#             Ghalf[:, k + 3] = grad(x)
 
-        F[-1] = F[K + 1] - F[0]
-        out.append((Ghalf.T @ Ghalf, F))
+#         F[-1] = F[K + 1] - F[0]
+#         out.append((Ghalf.T @ Ghalf, F))
 
-    return out
+#     return out
 
 
 def main():
+
     seed = 0
     mu = 1
     L = 10
     R = 1
     t = 0.1
-    K = 5
+    K_max = 5
 
     d = 5
     N = 5
+
+    params = {'N': N, 'd': d, 'mu': mu, 'L': L, 'R': R, 'K_max': K_max, 'K': 0, 't': t}
 
     np.random.seed(seed)
 
@@ -91,7 +97,7 @@ def main():
 
     problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
     x = x0
-    for _ in range(K):
+    for _ in range(K_max):
         x = x - t * func.gradient(x)
 
     problem.set_performance_metric(func(x) - fs)
@@ -102,24 +108,31 @@ def main():
 
     x0 = np.zeros(d)
     x0[0] = R
-    trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1)
+    # trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1)
+    algorithm = gradient_descent
+    # matrix_generation = marchenko_pastur
+    matrix_generation = generate_P
+
+    trajectories, avg_trajectories = generate_trajectories(params, x0, algorithm, matrix_generation, traj_seed=1)
 
     DR = DROReformulator(
         problem,
         trajectories,
         'expectation',
         'cvxpy',
+        precond=True,
     )
 
     eps = 0.1
-    # out = DR.solve_single_eps_val(eps)
-    # print(out)
+    out = DR.solve_single_eps_val(eps)
+    print(out)
 
     CDR = DROReformulator(
         problem,
         trajectories,
         'expectation',
         'clarabel',
+        precond=True,
     )
 
     # out = CDR.solve_single_eps_val(eps)
@@ -134,6 +147,7 @@ def main():
         trajectories,
         'cvar',
         'cvxpy',
+        precond=True,
     )
     alpha = 0.1
     out = CVar_DR.solve_fixed_alpha_eps_vals(alpha, [eps])

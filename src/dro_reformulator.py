@@ -40,6 +40,13 @@ class DROReformulator(object):
         self.mro_diff = None
 
         self.extract_pep_data()
+
+        self.preconditioner = ( np.ones((self.A_obj.shape[0],)), np.ones(self.b_obj.shape) )
+        if precond :
+            avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in samples], axis=0), np.average([sample[1] for sample in samples], axis=0))
+            self.preconditioner = ( 1/avg_sample[0], 1/np.sqrt(avg_sample[1]) )
+            self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
+            self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
         
         if wrapper == 'cvxpy':
             self.setup_cvxpy_problem()
@@ -47,13 +54,6 @@ class DROReformulator(object):
             self.setup_clarabel_problem()
         else:
             raise NotImplementedError(f'wrapper {wrapper} not implemented')
-        
-        self.preconditioner = ( np.ones((self.A_obj.shape[0],)), np.ones(self.b_obj.shape) )
-        if precond :
-            avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in samples], axis=0), np.average([sample[1] for sample in samples], axis=0))
-            self.preconditioner = ( 1/avg_sample[0], 1/np.sqrt(avg_sample[1]) )
-            self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
-            self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
 
 
     def extract_pep_data(self):
@@ -211,7 +211,6 @@ class DROReformulator(object):
         constraints += [- self.c_vals.T @ y - cp.trace(avg_G @ Gz) - avg_F.T @ Fz <= s]
         # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz), Fz]))]
         constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz)]))]
-
 
         LstarG = 0
         LstarF = 0
@@ -636,6 +635,13 @@ class DROReformulator(object):
         cones += [clarabel.PSDTriangleConeT(S_mat) for _ in range(N)]
 
         # SOCP constraints
+        G_precond_vec = self.preconditioner[0]
+        F_precond = self.preconditioner[1]
+
+        F_precond_sq = F_precond ** 2
+        scaled_G_vec_outer_prod = np.outer(G_precond_vec, G_precond_vec)
+        scaledG_mult = scaled_off_triangles(scaled_G_vec_outer_prod, np.sqrt(2.))
+
         socp_lhs = []
         socp_rhs = []
         for i in range(N):
@@ -643,10 +649,14 @@ class DROReformulator(object):
             Fz_start, Fz_end = Fz_idx(i, 0), Fz_idx(i, V)
             Gz_start, Gz_end = Gz_idx(i, 0), Gz_idx(i, S_vec)
 
-            scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
+            # scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
+            # curr_lhs[0, lambd_idx] = -1
+            # curr_lhs[1: V + 1, Fz_start: Fz_end] = -np.eye(V)
+            # curr_lhs[V + 1:, Gz_start: Gz_end] = -scaledI
+
             curr_lhs[0, lambd_idx] = -1
-            curr_lhs[1: V + 1, Fz_start: Fz_end] = -np.eye(V)
-            curr_lhs[V + 1:, Gz_start: Gz_end] = -scaledI
+            curr_lhs[1: V + 1, Fz_start: Fz_end] = -np.diag(F_precond_sq)
+            curr_lhs[V + 1:, Gz_start: Gz_end] = -scaledG_mult
 
             socp_lhs.append(spa.csc_matrix(curr_lhs))
             socp_rhs.append(np.zeros(1 + V + S_vec))
@@ -755,6 +765,13 @@ class DROReformulator(object):
         cones += [clarabel.NonnegativeConeT(2 * N * M)]
 
         # SOCP constraints
+        G_precond_vec = self.preconditioner[0]
+        F_precond = self.preconditioner[1]
+
+        F_precond_sq = F_precond ** 2
+        scaled_G_vec_outer_prod = np.outer(G_precond_vec, G_precond_vec)
+        scaledG_mult = scaled_off_triangles(scaled_G_vec_outer_prod, np.sqrt(2.))
+
         socp_lhs = []
         socp_rhs = []
         scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
@@ -765,8 +782,10 @@ class DROReformulator(object):
             Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
 
             curr_lhs[0, lambd_idx] = -1
-            curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.eye(V)
-            curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledI
+            # curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.eye(V)
+            # curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledI
+            curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.diag(F_precond_sq)
+            curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledG_mult
 
             socp_lhs.append(spa.csc_matrix(curr_lhs))
             socp_rhs.append(np.zeros(1 + V + S_vec))
@@ -777,8 +796,10 @@ class DROReformulator(object):
             Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
 
             curr_lhs[0, lambd_idx] = -1
-            curr_lhs[1:V+1, fz2_idx_start: fz2_idx_end] = -np.eye(V)
-            curr_lhs[V+1:, Gz2_idx_start: Gz2_idx_end] = -scaledI
+            # curr_lhs[1:V+1, fz2_idx_start: fz2_idx_end] = -np.eye(V)
+            # curr_lhs[V+1:, Gz2_idx_start: Gz2_idx_end] = -scaledI
+            curr_lhs[1:V+1, fz2_idx_start: fz2_idx_end] = -np.diag(F_precond_sq)
+            curr_lhs[V+1:, Gz2_idx_start: Gz2_idx_end] = -scaledG_mult
 
             socp_lhs.append(spa.csc_matrix(curr_lhs))
             socp_rhs.append(np.zeros(1 + V + S_vec))
