@@ -172,6 +172,10 @@ class ClarabelCanonicalizer(Canonicalizer):
         self.P = spa.csc_matrix((x_dim, x_dim))
         self.s_idx_func = s_idx
 
+    def setup_cvar_problem(self):
+        # sets up the part of the cvar problem that does not depend on alpha
+        pass
+
     def set_params(self, eps=0.1, alpha=0.1):
         if self.measure == 'expectation':
             self.set_expectation_eps(eps)
