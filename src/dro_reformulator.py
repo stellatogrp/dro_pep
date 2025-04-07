@@ -491,7 +491,6 @@ class DROReformulator(object):
             if self.mro_diff is not None:
                 t_value[-1] = t_value[-1] + self.mro_diff.value
         return np.array(out), np.array(t_value)
-        
 
     def setup_clarabel_problem(self):
         if self.measure == 'expectation':
@@ -507,13 +506,55 @@ class DROReformulator(object):
         N = len(self.samples)
         M = len(self.A_vals)
         M_psd = len(self.PSD_A_vals)
+
+        H_mat_dims = []
+        H_vec_dims = []
+        H_rel_offsets = [0]
+
+        # print(self.PSD_A_vals[0].shape)
+        # print(self.PSD_b_vals[0].shape)
+        # print(self.PSD_shapes[0])
+
+        C_symvecs = []
+        d_vecs = []
+
+        for m_psd in range(M_psd):
+            H_shape = self.PSD_shapes[0]
+            dim = H_shape[0]
+            svec_dim = int(dim * (dim + 1) / 2)
+            H_mat_dims.append(dim)
+            H_vec_dims.append(svec_dim)
+
+            # the offsets array tells us how far to look in the x vector to skip the previous m_psd vars
+            H_rel_offsets.append(H_rel_offsets[-1] + N * svec_dim)
+
+            rows, cols = get_triangular_idx(dim)
+
+            curr_C_symvecs = []
+            curr_d_vecs = []
+
+            for r, c in zip(rows, cols):
+                if r == c:
+                    curr_C_symvecs.append(symm_vectorize(self.PSD_A_vals[m_psd][r][c], np.sqrt(2.)))
+                    curr_d_vecs.append(self.PSD_b_vals[m_psd][r][c])
+                else:
+                    curr_C_symvecs.append(2 * symm_vectorize(self.PSD_A_vals[m_psd][r][c], np.sqrt(2.)))
+                    curr_d_vecs.append(2 * self.PSD_b_vals[m_psd][r][c])
+            curr_C_full = np.array(curr_C_symvecs)
+            curr_d_full = np.array(curr_d_vecs)
+
+            C_symvecs.append(curr_C_full.T)
+            d_vecs.append(curr_d_full.T)
+
+        H_vec_sum = sum(H_vec_dims)
+
         V = self.b_obj.shape[0]
         S_mat = self.A_obj.shape[0]
         S_vec = int(S_mat * (S_mat + 1) / 2)
 
-        print('N, M, V, S_vec:', N, M, V, S_vec)
+        print('N, M, V, S_vec, H_vec_sum:', N, M, V, S_vec, H_vec_sum)
 
-        x_dim = 1 + N * (1 + M + V + S_vec)
+        x_dim = 1 + N * (1 + M + V + S_vec + H_vec_sum)
         print('x_dim:', x_dim)
 
         lambd_idx = 0
@@ -542,6 +583,14 @@ class DROReformulator(object):
             return Fz_offset + i * S_vec + j
         Gz_offset = Gz_idx(N, 0)
         # print(Gz_offset)
+
+        def H_idx(m_psd, i, j):
+            if i == 0 and j == 0:
+                return Gz_offset + H_rel_offsets[m_psd]
+            else:
+                return Gz_offset + H_rel_offsets[m_psd] + i * H_vec_dims[m_psd] + j
+        H_full_offset = H_idx(M_psd, 0, 0)
+        # print(H_full_offset)
 
         c = self.c_vals
 
@@ -579,7 +628,21 @@ class DROReformulator(object):
         # cones.append(clarabel.NonnegativeConeT(N * M))
         cones.append(clarabel.NonnegativeConeT(N + N * M)) # coalesce from above ineq constraints
 
-        # constraints: -B^Ty_i + Fz_i = -b_obj
+        # constraints: H >> 0
+        for m_psd in range(M_psd):
+            H_mat = H_mat_dims[m_psd]
+            H_vec = H_vec_dims[m_psd]
+            for i in range(N):
+                H_start, H_end = H_idx(m_psd, i, 0), H_idx(m_psd, i, H_vec)
+                H_psd_constr = np.zeros((H_vec, x_dim))
+                scaledI = scaled_off_triangles(np.ones((H_mat, H_mat)), np.sqrt(2.))
+                H_psd_constr[:, H_start: H_end] = -scaledI
+
+                A.append(spa.csc_matrix(H_psd_constr))
+                b.append(np.zeros(H_vec))
+            cones += [clarabel.PSDTriangleConeT(H_mat) for _ in range(N)]
+
+        # constraints: -B^Ty_i + sum_{m_psd} \sum_{k, l} (H_i)_{k, l} d_{k, l} + Fz_i = -b_obj
         Bm_full = np.array(self.b_vals)
         Bm_T = Bm_full.T
 
@@ -589,6 +652,11 @@ class DROReformulator(object):
             curr_lhs = np.zeros((V, x_dim))
             y_start, y_end = y_idx(i, 0), y_idx(i, M)
             curr_lhs[:, y_start: y_end] = -Bm_T
+
+            for m_psd in range(M_psd):
+                H_vec = H_vec_dims[m_psd]
+                H_start, H_end = H_idx(m_psd, i, 0), H_idx(m_psd, i, H_vec)
+                curr_lhs[:, H_start: H_end] = d_vecs[m_psd]
 
             Fz_start, Fz_end = Fz_idx(i, 0), Fz_idx(i, V)
             curr_lhs[:, Fz_start: Fz_end] = np.eye(V)
@@ -619,6 +687,11 @@ class DROReformulator(object):
             curr_lhs = np.zeros((S_vec, x_dim))
             y_start, y_end = y_idx(i, 0), y_idx(i, M)
             curr_lhs[:, y_start: y_end] = -Am_T
+
+            for m_psd in range(M_psd):
+                H_vec = H_vec_dims[m_psd]
+                H_start, H_end = H_idx(m_psd, i, 0), H_idx(m_psd, i, H_vec)
+                curr_lhs[:, H_start: H_end] = C_symvecs[m_psd]
 
             Gz_start, Gz_end = Gz_idx(i, 0), Gz_idx(i, S_vec)
             scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
@@ -965,6 +1038,7 @@ class DROReformulator(object):
 def symm_vectorize(A, scale_factor):
     n = A.shape[0]
     rows, cols = np.tril_indices(n)  # tril is correct, need upper triangle in column order
+    # print(rows, cols)
 
     A_vec = A[rows, cols]
     off_diag_mask = rows != cols
@@ -976,3 +1050,8 @@ def symm_vectorize(A, scale_factor):
 def scaled_off_triangles(A, scale_factor):
     Avec = symm_vectorize(A, scale_factor)
     return np.diag(Avec)
+
+
+def get_triangular_idx(n):
+    rows, cols = np.tril_indices(n)
+    return cols, rows  # flip the order to get the upper triangle in column order

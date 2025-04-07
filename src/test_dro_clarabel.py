@@ -6,7 +6,7 @@ from dro_reformulator import DROReformulator
 # from reformulator.dro_reformulator import DROReformulator
 from tqdm import tqdm
 from PEPit import PEP
-from PEPit.functions import SmoothStronglyConvexFunction
+from PEPit.functions import SmoothStronglyConvexFunction, SmoothStronglyConvexQuadraticFunction
 from scipy.stats import ortho_group
 
 from algorithm import gradient_descent, nesterov_accelerated_gradient
@@ -88,7 +88,8 @@ def main():
 
     problem = PEP()
     # could do SmoothStronglyConvexQuadraticFunction if we want
-    func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
+    # func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
+    func = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=mu, L=L)
 
     xs = func.stationary_point()
     fs = func(xs)
@@ -140,6 +141,8 @@ def main():
     # CDR.set_params(eps=0.1, alpha=0.05)
     # out = CDR.solve()
     print(out)
+
+    exit(0)
 
     print('---testing cvar---')
     CVar_DR = DROReformulator(
