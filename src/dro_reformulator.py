@@ -592,6 +592,8 @@ class DROReformulator(object):
         H_full_offset = H_idx(M_psd, 0, 0)
         # print(H_full_offset)
 
+        assert H_full_offset == x_dim
+
         c = self.c_vals
 
         A = []
@@ -768,13 +770,56 @@ class DROReformulator(object):
         alpha_inv = 1 / alpha
         N = len(self.samples)
         M = len(self.A_vals)
+        M_psd = len(self.PSD_A_vals)
+
+        H_mat_dims = []
+        H_vec_dims = []
+        H_rel_offsets = [0]
+
+        # print(self.PSD_A_vals[0].shape)
+        # print(self.PSD_b_vals[0].shape)
+        # print(self.PSD_shapes[0])
+
+        C_symvecs = []
+        d_vecs = []
+
+        for m_psd in range(M_psd):
+            H_shape = self.PSD_shapes[0]
+            dim = H_shape[0]
+            svec_dim = int(dim * (dim + 1) / 2)
+            H_mat_dims.append(dim)
+            H_vec_dims.append(svec_dim)
+
+            # the offsets array tells us how far to look in the x vector to skip the previous m_psd vars
+            H_rel_offsets.append(H_rel_offsets[-1] + N * svec_dim)
+
+            rows, cols = get_triangular_idx(dim)
+
+            curr_C_symvecs = []
+            curr_d_vecs = []
+
+            for r, c in zip(rows, cols):
+                if r == c:
+                    curr_C_symvecs.append(symm_vectorize(self.PSD_A_vals[m_psd][r][c], np.sqrt(2.)))
+                    curr_d_vecs.append(self.PSD_b_vals[m_psd][r][c])
+                else:
+                    curr_C_symvecs.append(2 * symm_vectorize(self.PSD_A_vals[m_psd][r][c], np.sqrt(2.)))
+                    curr_d_vecs.append(2 * self.PSD_b_vals[m_psd][r][c])
+            curr_C_full = np.array(curr_C_symvecs)
+            curr_d_full = np.array(curr_d_vecs)
+
+            C_symvecs.append(curr_C_full.T)
+            d_vecs.append(curr_d_full.T)
+
+        H_vec_sum = sum(H_vec_dims)
+
         V = self.b_obj.shape[0]
         S_mat = self.A_obj.shape[0]
         S_vec = int(S_mat * (S_mat + 1) / 2)
 
-        print('N, M, V, S_vec:', N, M, V, S_vec)
+        print('N, M, V, S_vec, H_vec_sum:', N, M, V, S_vec, H_vec_sum)
 
-        x_dim = 2 + N * (1 + 2 * (M + V + S_vec))
+        x_dim = 2 + N * (1 + 2 * (M + V + S_vec + H_vec_sum))
         print('x_dim:', x_dim)
 
         lambd_idx = 0
@@ -816,6 +861,23 @@ class DROReformulator(object):
         Gz2_start = Gz1_offset
         def Gz2_idx(i, j):
             return Gz2_start + i * S_vec + j
+        Gz2_offset = Gz2_idx(N, 0)
+
+        def H1_idx(m_psd, i, j):
+            if i == 0 and j == 0:
+                return Gz2_offset + H_rel_offsets[m_psd]
+            else:
+                return Gz2_offset + H_rel_offsets[m_psd] + i * H_vec_dims[m_psd] + j
+        H1_offset = H1_idx(M_psd, 0, 0)
+
+        def H2_idx(m_psd, i, j):
+            if i == 0 and j == 0:
+                return H1_offset + H_rel_offsets[m_psd]
+            else:
+                return H1_offset + H_rel_offsets[m_psd] + i * H_vec_dims[m_psd] + j
+        H2_offset = H2_idx(M_psd, 0, 0)
+
+        assert H2_offset == x_dim
 
         c = self.c_vals
         A = []
@@ -836,6 +898,24 @@ class DROReformulator(object):
         A += [spa.csc_matrix(y1_nonneg), spa.csc_matrix(y2_nonneg)]
         b += [np.zeros(2 * N * M)]
         cones += [clarabel.NonnegativeConeT(2 * N * M)]
+
+        # constraints: H1 >> 0, H2 >> 0
+        for m_psd in range(M_psd):
+            H_mat = H_mat_dims[m_psd]
+            H_vec = H_vec_dims[m_psd]
+            for i in range(N):
+                H1_start, H1_end = H1_idx(m_psd, i, 0), H1_idx(m_psd, i, H_vec)
+                H1_psd_constr = np.zeros((H_vec, x_dim))
+                scaledI = scaled_off_triangles(np.ones((H_mat, H_mat)), np.sqrt(2.))
+                H1_psd_constr[:, H1_start: H1_end] = -scaledI
+
+                H2_start, H2_end = H2_idx(m_psd, i, 0), H2_idx(m_psd, i, H_vec)
+                H2_psd_constr = np.zeros((H_vec, x_dim))
+                H2_psd_constr[:, H2_start: H2_end] = -scaledI
+
+                A += [spa.csc_matrix(H1_psd_constr), spa.csc_matrix(H2_psd_constr)]
+                b.append(np.zeros(2 * H_vec))
+            cones += [clarabel.PSDTriangleConeT(H_mat) for _ in range(2 * N)]
 
         # SOCP constraints
         G_precond_vec = self.preconditioner[0]
@@ -895,6 +975,11 @@ class DROReformulator(object):
             y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
             curr_lhs[:, y1_idx_start: y1_idx_end] = -Bm_T
 
+            for m_psd in range(M_psd):
+                H_vec = H_vec_dims[m_psd]
+                H1_start, H1_end = H1_idx(m_psd, i, 0), H1_idx(m_psd, i, H_vec)
+                curr_lhs[:, H1_start: H1_end] = d_vecs[m_psd]
+
             fz1_idx_start, fz1_idx_end = fz1_idx(i, 0), fz1_idx(i, V)
             curr_lhs[:, fz1_idx_start: fz1_idx_end] = np.eye(V)
 
@@ -919,6 +1004,11 @@ class DROReformulator(object):
             curr_lhs = np.zeros((S_vec, x_dim))
             y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
             curr_lhs[:, y1_idx_start: y1_idx_end] = -Am_T
+
+            for m_psd in range(M_psd):
+                H_vec = H_vec_dims[m_psd]
+                H1_start, H1_end = H1_idx(m_psd, i, 0), H1_idx(m_psd, i, H_vec)
+                curr_lhs[:, H1_start: H1_end] = C_symvecs[m_psd]
 
             Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
             curr_lhs[:, Gz1_idx_start: Gz1_idx_end] = scaledI
@@ -980,6 +1070,11 @@ class DROReformulator(object):
             y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
             curr_lhs[:, y2_idx_start: y2_idx_end] = -Bm_T
 
+            for m_psd in range(M_psd):
+                H_vec = H_vec_dims[m_psd]
+                H2_start, H2_end = H2_idx(m_psd, i, 0), H2_idx(m_psd, i, H_vec)
+                curr_lhs[:, H2_start: H2_end] = d_vecs[m_psd]
+
             fz2_idx_start, fz2_idx_end = fz2_idx(i, 0), fz2_idx(i, V)
             curr_lhs[:, fz2_idx_start: fz2_idx_end] = np.eye(V)
 
@@ -1002,6 +1097,11 @@ class DROReformulator(object):
             curr_lhs = np.zeros((S_vec, x_dim))
             y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
             curr_lhs[:, y2_idx_start: y2_idx_end] = -Am_T
+
+            for m_psd in range(M_psd):
+                H_vec = H_vec_dims[m_psd]
+                H2_start, H2_end = H2_idx(m_psd, i, 0), H2_idx(m_psd, i, H_vec)
+                curr_lhs[:, H2_start: H2_end] = C_symvecs[m_psd]
 
             Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
             curr_lhs[:, Gz2_idx_start: Gz2_idx_end] = scaledI

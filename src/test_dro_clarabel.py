@@ -142,8 +142,6 @@ def main():
     # out = CDR.solve()
     print(out)
 
-    exit(0)
-
     print('---testing cvar---')
     CVar_DR = DROReformulator(
         problem,

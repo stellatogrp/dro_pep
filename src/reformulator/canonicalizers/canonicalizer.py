@@ -39,6 +39,35 @@ class Canonicalizer(object):
         self.b_vals = np.array(b_vals)
         self.c_vals = np.array(c_vals)
 
+        PSD_A_vals = []
+        PSD_b_vals = []
+        PSD_c_vals = []
+        PSD_shapes = []
+
+        for psd in problem._list_of_psd_sent_to_wrapper:
+            psd_expr = psd.matrix_of_expressions
+            psd_shape = psd_expr.shape
+            PSD_shapes.append(psd_shape)
+
+            PSD_A_val, PSD_b_val, PSD_c_val = [], [], []
+            for i in range(psd_shape[0]) :
+                PSD_A_row, PSD_b_row, PSD_c_row = [], [], []
+                for j in range(psd_shape[1]) :
+                    PSD_A_cons, PSD_b_cons, PSD_c_cons = expression_to_matrices(psd_expr[i,j])
+                    PSD_A_row.append(PSD_A_cons)
+                    PSD_b_row.append(PSD_b_cons[:-1])
+                    PSD_c_row.append(PSD_c_cons)
+                PSD_A_val.append(PSD_A_row)
+                PSD_b_val.append(PSD_b_row)
+                PSD_c_val.append(PSD_c_row)
+            PSD_A_vals.append(np.array(PSD_A_val))
+            PSD_b_vals.append(np.array(PSD_b_val))
+            PSD_c_vals.append(np.array(PSD_c_val))
+        self.PSD_A_vals = PSD_A_vals
+        self.PSD_b_vals = PSD_b_vals
+        self.PSD_c_vals = PSD_c_vals
+        self.PSD_shapes = PSD_shapes
+
         assert self.A_vals.shape[0] == self.b_vals.shape[0] == self.c_vals.shape[0]    
 
     def setup_problem(self):
