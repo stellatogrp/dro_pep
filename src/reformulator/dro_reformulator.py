@@ -25,9 +25,10 @@ VALID_WRAPPERS = [
 
 class DROReformulator(object):
 
-    def __init__(self, pep_problem, samples, measure, wrapper):
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True):
         self.pep_problem = pep_problem
         self.samples = samples
+
         if measure not in VALID_MEASURES:
             raise NotImplementedError('not a valid measure')
 
@@ -37,9 +38,9 @@ class DROReformulator(object):
         self.measure = measure
 
         if wrapper == 'cvxpy':
-            self.canon = CvxpyCanonicalizer(pep_problem, samples, measure, wrapper)
+            self.canon = CvxpyCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond)
         elif wrapper == 'clarabel':
-            self.canon = ClarabelCanonicalizer(pep_problem, samples, measure, wrapper)
+            self.canon = ClarabelCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond)
         else:
             raise NotImplementedError(f'wrapper {wrapper} not implemented')
 
@@ -59,6 +60,12 @@ class DROReformulator(object):
     def solve(self):
         return self.canon.solve()
 
-    def solve_single_eps_val(self, eps):
+    def set_single_eps_val(self, eps):
         self.canon.set_eps(eps)
-        return self.canon.solve()
+
+    # def solve_single_eps_val(self, eps):
+    #     self.canon.set_eps(eps)
+    #     return self.canon.solve()
+
+    def set_single_alpha_eps_val(self, alpha, eps):
+        self.canon.set_eps_alpha_value(alpha, eps)

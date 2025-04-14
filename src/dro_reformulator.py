@@ -59,6 +59,7 @@ class DROReformulator(object):
     def extract_pep_data(self):
         problem = self.pep_problem
         A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
+
         self.A_obj = - A_obj
         self.b_obj = - b_obj[:-1]
 
@@ -135,6 +136,7 @@ class DROReformulator(object):
         y = cp.Variable((N, M))
         Gz = [cp.Variable(mat_shape, symmetric=True) for _ in range(N)]
         Fz = [cp.Variable(vec_shape) for _ in range(N)]
+
         Gz_psd = [[cp.Variable(self.PSD_shapes[m_psd], PSD=True) for m_psd in range(M_psd)] for _ in range(N)]
 
         eps = cp.Parameter()
