@@ -70,7 +70,7 @@ class CvxpyCanonicalizer(Canonicalizer):
 
         probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
         A_cp = probdata['A']
-        print('A shape from cvxpy:', A_cp.shape)
+        # print('A shape from cvxpy:', A_cp.shape)
 
         self.cp_problem = prob
         self.quantile_estimate = None

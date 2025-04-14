@@ -151,6 +151,8 @@ def main():
     )
 
     NewCVar_DR.set_params(eps=eps, alpha=alpha)
+    out = NewCVar_DR.solve()
+    print('new version clarabel:', out)
 
 
 if __name__ == '__main__':

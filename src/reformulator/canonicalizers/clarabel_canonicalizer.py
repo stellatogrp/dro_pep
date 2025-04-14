@@ -700,14 +700,35 @@ class ClarabelCanonicalizer(Canonicalizer):
         A = spa.vstack(A)
         b = np.hstack(b)
 
-        print(self.cones_fixed, cones)
-        exit(0)
+        A_full = spa.vstack([self.A_fixed, A])
+        b_full = np.hstack([self.b_fixed, b])
+        cones_full = self.cones_fixed.copy() + cones
 
+        q = np.zeros(x_dim)
+        q[0] = eps
+        q[s_idx(0): s_idx(N)] = 1 / N
+
+        self.P = P
+        self.q = q
+        self.A_full = A_full
+        self.b_full = b_full
+        self.cones_full = cones_full
 
     def solve(self):
+        P = self.P
+        q = self.q
+        if self.measure == 'expectation':
+            A = self.A
+            b = self.b
+            cones = self.cones
+        elif self.measure == 'cvar':
+            A = self.A_full
+            b = self.b_full
+            cones = self.cones_full
+
         settings = clarabel.DefaultSettings()
         settings.verbose = False
-        solver = clarabel.DefaultSolver(self.P, self.q, self.A, self.b, self.cones, settings)
+        solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
         solution = solver.solve()
         out = {
             'obj': solution.obj_val,

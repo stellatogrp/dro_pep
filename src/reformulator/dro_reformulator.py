@@ -46,14 +46,6 @@ class DROReformulator(object):
 
         self.canon.setup_problem()
 
-    # def solve_eps_vals(self, eps_vals):
-    #     out = []
-    #     for eps in eps_vals:
-    #         print(f'solving eps={eps}')
-    #         res = self.solve_single_eps_val(eps)
-    #         out.append(res)
-    #     return np.array(out)
-
     def set_params(self, **kwargs):
         self.canon.set_params(**kwargs)
 
@@ -62,10 +54,6 @@ class DROReformulator(object):
 
     def set_single_eps_val(self, eps):
         self.canon.set_eps(eps)
-
-    # def solve_single_eps_val(self, eps):
-    #     self.canon.set_eps(eps)
-    #     return self.canon.solve()
 
     def set_single_alpha_eps_val(self, alpha, eps):
         self.canon.set_eps_alpha_value(alpha, eps)
