@@ -217,22 +217,16 @@ class CvxpyCanonicalizer(Canonicalizer):
                 'H': [[Hi_m.value for Hi_m in Hi]for Hi in self.H_var],
             }
         elif self.measure == 'cvar':
-            # self.lambda_var = lambd
-            # self.t_var = t
-            # self.s_var = s
-            # self.y1_var = y1
-            # self.Gz1_var = Gz1
-            # self.Fz1_var = Fz1
-
-            # self.y2_var = y1
-            # self.Gz2_var = Gz2
-            # self.Fz2_var = Fz2
-
-            # self.H1_var = Gz1_psd
-            # self.H2_var = Gz2_psd
             return {
                 'lambda': self.lambda_var.value,
-                's': self.s.value,
-                't': self.t.value,
-                # 'y1': self.y1_v
+                's': self.s_var.value,
+                't': self.t_var.value,
+                'y1': self.y1_var.value,
+                'y2': self.y2_var.value,
+                'Gz1': [G.value for G in self.Gz1_var],
+                'Gz2': [G.value for G in self.Gz2_var],
+                'Fz1': [F.value for F in self.Fz1_var],
+                'Fz2': [F.value for F in self.Fz2_var],
+                'H1': [[Hi_m.value for Hi_m in Hi]for Hi in self.H1_var],
+                'H2': [[Hi_m.value for Hi_m in Hi]for Hi in self.H2_var],
             }

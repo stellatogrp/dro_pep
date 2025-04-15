@@ -319,8 +319,10 @@ class ClarabelCanonicalizer(Canonicalizer):
 
         lambd_idx = 0
         # lambd_offset = 1
+        self.lambd_idx = lambd_idx
 
         t_idx = 1
+        self.t_idx = t_idx
         t_offset = 2
 
         s_start = t_offset
@@ -743,7 +745,7 @@ class ClarabelCanonicalizer(Canonicalizer):
         if self.measure == 'expectation':
             return self.extract_expectation_solution()
         elif self.measure == 'cvar':
-            raise NotImplementedError
+            return self.extract_cvar_solution()
 
     def extract_expectation_solution(self):
         lambd_idx = self.lambd_idx
@@ -773,7 +775,7 @@ class ClarabelCanonicalizer(Canonicalizer):
             Fz_out.append(np.array(sol[fz_idx(i, 0): fz_idx(i, V)]))
             H_curr = []
             for m_psd in range(M_psd):
-                H_curr.append(unvec_no_scale(np.array(sol[H_idx(0, 0, 0): H_idx(0, 0, H_vec_dims[0])])))
+                H_curr.append(unvec_no_scale(np.array(sol[H_idx(m_psd, i, 0): H_idx(m_psd, i, H_vec_dims[0])])))
             H_out.append(H_curr)
 
 
@@ -787,6 +789,66 @@ class ClarabelCanonicalizer(Canonicalizer):
         }
 
         return out
+
+    def extract_cvar_solution(self):
+        lambd_idx = self.lambd_idx
+        t_idx = self.t_idx
+        N = len(self.samples)
+        M = len(self.A_vals)
+        M_psd = len(self.PSD_A_vals)
+        V = self.b_obj.shape[0]
+        S_mat = self.A_obj.shape[0]
+        S_vec = int(S_mat * (S_mat + 1) / 2)
+        H_vec_dims = self.H_vec_dims
+
+        s_idx = self.s_idx_func
+        y1_idx = self.y1_idx_func # M
+        fz1_idx = self.Fz1_idx_func # V
+        Gz1_idx = self.Gz1_idx_func # S_vec
+        H1_idx = self.H1_idx_func # H_vec_dims[m_psd]
+
+        y2_idx = self.y2_idx_func # M
+        fz2_idx = self.Fz2_idx_func # V
+        Gz2_idx = self.Gz2_idx_func # S_vec
+        H2_idx = self.H2_idx_func # H_vec_dims[m_psd]
+
+        sol = self.x_sol
+
+        Gz1_out = []
+        Gz2_out = []
+        Fz1_out = []
+        Fz2_out = []
+        H1_out = []
+        H2_out = []
+
+        for i in range(N):
+            Gz1_out.append(unvec_no_scale(np.array(sol[Gz1_idx(i, 0): Gz1_idx(i, S_vec)])))
+            Gz2_out.append(unvec_no_scale(np.array(sol[Gz2_idx(i, 0): Gz2_idx(i, S_vec)])))
+
+            Fz1_out.append(np.array(sol[fz1_idx(i, 0): fz1_idx(i, V)]))
+            Fz2_out.append(np.array(sol[fz2_idx(i, 0): fz2_idx(i, V)]))
+
+            H1_curr = []
+            H2_curr = []
+            for m_psd in range(M_psd):
+                H1_curr.append(unvec_no_scale(np.array(sol[H1_idx(m_psd, i, 0): H1_idx(m_psd, i, H_vec_dims[0])])))
+                H2_curr.append(unvec_no_scale(np.array(sol[H2_idx(m_psd, i, 0): H2_idx(m_psd, i, H_vec_dims[0])])))
+            H1_out.append(H1_curr)
+            H2_out.append(H2_curr)
+
+        return {
+            'lambda': sol[lambd_idx],
+            's': sol[s_idx(0): s_idx(N)],
+            't': sol[t_idx],
+            'y1': np.vstack([sol[y1_idx(i, 0): y1_idx(i, M)] for i in range(N)]),
+            'y2': np.vstack([sol[y2_idx(i, 0): y2_idx(i, M)] for i in range(N)]),
+            'Gz1': Gz1_out,
+            'Gz2': Gz2_out,
+            'Fz1': Fz1_out,
+            'Fz2': Fz2_out,
+            'H1': H1_out,
+            'H2': H2_out,
+        }
 
 
 def symm_vectorize(A, scale_factor):

@@ -110,7 +110,7 @@ def main():
     # print('y:', data['y'])
     # print('Gz:', data['Gz'])
     # print('Fz:', data['Fz'])
-    print('H:', data['H'])
+    # print('H:', data['H'])
 
     New_DR = NewReformulator(
         problem,
@@ -130,8 +130,7 @@ def main():
     # print('y:', data['y'])
     # print('Gz:', data['Gz'])
     # print('Fz:', data['Fz'])
-    print('H:', data['H'])
-    exit(0)
+    # print('H:', data['H'])
 
     print('---testing cvar---')
     OldCVar_DR = OldReformulator(
@@ -156,6 +155,7 @@ def main():
     NewCVar_DR.set_params(eps=eps, alpha=alpha)
     out = NewCVar_DR.solve()
     print('new version cvxpy:', out)
+    data = NewCVar_DR.extract_solution()
 
     NewCVar_DR = NewReformulator(
         problem,
@@ -168,6 +168,7 @@ def main():
     NewCVar_DR.set_params(eps=eps, alpha=alpha)
     out = NewCVar_DR.solve()
     print('new version clarabel:', out)
+    data = NewCVar_DR.extract_solution()
 
 
 if __name__ == '__main__':
