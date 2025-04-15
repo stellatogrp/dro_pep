@@ -69,12 +69,19 @@ class CvxpyCanonicalizer(Canonicalizer):
         prob = cp.Problem(cp.Minimize(obj), constraints)
 
         probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
-        A_cp = probdata['A']
+        # A_cp = probdata['A']
         # print('A shape from cvxpy:', A_cp.shape)
 
         self.cp_problem = prob
         self.quantile_estimate = None
         self.eps_param = eps
+
+        self.lambda_var = lambd
+        self.s_var = s
+        self.y_var = y
+        self.Gz_var = Gz
+        self.Fz_var = Fz
+        self.H_var = Gz_psd
 
         assert self.cp_problem.is_dpp('dcp')
 
@@ -103,6 +110,20 @@ class CvxpyCanonicalizer(Canonicalizer):
 
         Gz1_psd = [[cp.Variable(self.PSD_shapes[m_psd], PSD=True) for m_psd in range(M_psd)] for _ in range(N)]
         Gz2_psd = [[cp.Variable(self.PSD_shapes[m_psd], PSD=True) for m_psd in range(M_psd)] for _ in range(N)]
+
+        self.lambda_var = lambd
+        self.t_var = t
+        self.s_var = s
+        self.y1_var = y1
+        self.Gz1_var = Gz1
+        self.Fz1_var = Fz1
+
+        self.y2_var = y1
+        self.Gz2_var = Gz2
+        self.Fz2_var = Fz2
+
+        self.H1_var = Gz1_psd
+        self.H2_var = Gz2_psd
         
         eps = cp.Parameter()
         alpha_inv = cp.Parameter()
@@ -183,3 +204,35 @@ class CvxpyCanonicalizer(Canonicalizer):
             'solvetime': self.cp_problem.solver_stats.solve_time,
         }
         return out
+
+    def extract_solution(self):
+        if self.measure == 'expectation':
+            return {
+                'lambda': self.lambda_var.value,
+                's': self.s_var.value,
+                'y': self.y_var.value,
+                'Gz': [G.value for G in self.Gz_var],
+                'Fz': [F.value for F in self.Fz_var],
+                # 'H': [[cp.Variable(self.PSD_shapes[m_psd], PSD=True) for m_psd in range(M_psd)] for _ in range(N)]
+                'H': [[Hi_m.value for Hi_m in Hi]for Hi in self.H_var],
+            }
+        elif self.measure == 'cvar':
+            # self.lambda_var = lambd
+            # self.t_var = t
+            # self.s_var = s
+            # self.y1_var = y1
+            # self.Gz1_var = Gz1
+            # self.Fz1_var = Fz1
+
+            # self.y2_var = y1
+            # self.Gz2_var = Gz2
+            # self.Fz2_var = Fz2
+
+            # self.H1_var = Gz1_psd
+            # self.H2_var = Gz2_psd
+            return {
+                'lambda': self.lambda_var.value,
+                's': self.s.value,
+                't': self.t.value,
+                # 'y1': self.y1_v
+            }

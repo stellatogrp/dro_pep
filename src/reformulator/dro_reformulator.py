@@ -57,3 +57,6 @@ class DROReformulator(object):
 
     def set_single_alpha_eps_val(self, alpha, eps):
         self.canon.set_eps_alpha_value(alpha, eps)
+
+    def extract_solution(self):
+        return self.canon.extract_solution()

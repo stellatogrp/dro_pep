@@ -57,6 +57,7 @@ class ClarabelCanonicalizer(Canonicalizer):
             d_vecs.append(curr_d_full.T)
 
         H_vec_sum = sum(H_vec_dims)
+        self.H_vec_dims = H_vec_dims
 
         V = self.b_obj.shape[0]
         S_mat = self.A_obj.shape[0]
@@ -65,6 +66,7 @@ class ClarabelCanonicalizer(Canonicalizer):
         x_dim = 1 + N * (1 + M + V + S_vec + H_vec_sum)
 
         lambd_idx = 0
+        self.lambd_idx = lambd_idx
         lambd_offset = 1
 
         s_start = lambd_offset
@@ -734,6 +736,56 @@ class ClarabelCanonicalizer(Canonicalizer):
             'obj': solution.obj_val,
             'solvetime': solution.solve_time,
         }
+        self.x_sol = solution.x
+        return out
+
+    def extract_solution(self):
+        if self.measure == 'expectation':
+            return self.extract_expectation_solution()
+        elif self.measure == 'cvar':
+            raise NotImplementedError
+
+    def extract_expectation_solution(self):
+        lambd_idx = self.lambd_idx
+        N = len(self.samples)
+        M = len(self.A_vals)
+        M_psd = len(self.PSD_A_vals)
+        V = self.b_obj.shape[0]
+        S_mat = self.A_obj.shape[0]
+        S_vec = int(S_mat * (S_mat + 1) / 2)
+
+        s_idx = self.s_idx_func
+        y_idx = self.y_idx_func # M
+        fz_idx = self.Fz_idx_func # V
+        Gz_idx = self.Gz_idx_func # S_vec
+        H_idx = self.H_idx_func # H_vec_dims[m_psd]
+
+        H_vec_dims = self.H_vec_dims
+
+        sol = self.x_sol
+
+        Gz_out = []
+        Fz_out = []
+        H_out = []
+
+        for i in range(N):
+            Gz_out.append(unvec_no_scale(np.array(sol[Gz_idx(i, 0): Gz_idx(i, S_vec)])))
+            Fz_out.append(np.array(sol[fz_idx(i, 0): fz_idx(i, V)]))
+            H_curr = []
+            for m_psd in range(M_psd):
+                H_curr.append(unvec_no_scale(np.array(sol[H_idx(0, 0, 0): H_idx(0, 0, H_vec_dims[0])])))
+            H_out.append(H_curr)
+
+
+        out = {
+            'lambda': sol[lambd_idx],
+            's': sol[s_idx(0): s_idx(N)],
+            'y': np.vstack([sol[y_idx(i, 0): y_idx(i, M)] for i in range(N)]),
+            'Gz': Gz_out,
+            'Fz': Fz_out,
+            'H': H_out,
+        }
+
         return out
 
 
@@ -756,3 +808,14 @@ def scaled_off_triangles(A, scale_factor):
 def get_triangular_idx(n):
     rows, cols = np.tril_indices(n)
     return cols, rows  # flip the order to get the upper triangle in column order
+
+
+def unvec_no_scale(v):
+    # undo the upper triangle vectorization without scaling the off diagonals
+    vec_shape = v.shape[0]
+    n = int((np.sqrt(8 * vec_shape + 1) - 1) / 2)
+    S = np.zeros((n, n))
+    S[np.tril_indices(n)] = v  # tril is again correct here
+    S = S + S.T
+    S[range(n), range(n)] /= 2
+    return S

@@ -104,6 +104,13 @@ def main():
     New_DR.set_params(eps=eps)
     out = New_DR.solve()
     print('new version cvxpy:', out)
+    data = New_DR.extract_solution()
+    # print('lambda:', data['lambda'])
+    # print('s:', data['s'])
+    # print('y:', data['y'])
+    # print('Gz:', data['Gz'])
+    # print('Fz:', data['Fz'])
+    print('H:', data['H'])
 
     New_DR = NewReformulator(
         problem,
@@ -117,6 +124,14 @@ def main():
     New_DR.set_params(eps=eps)
     out = New_DR.solve()
     print('new version clarabel:', out)
+    data = New_DR.extract_solution()
+    # print('lambda:', data['lambda'])
+    # print('s:', data['s'])
+    # print('y:', data['y'])
+    # print('Gz:', data['Gz'])
+    # print('Fz:', data['Fz'])
+    print('H:', data['H'])
+    exit(0)
 
     print('---testing cvar---')
     OldCVar_DR = OldReformulator(
