@@ -60,3 +60,6 @@ class DROReformulator(object):
 
     def extract_solution(self):
         return self.canon.extract_solution()
+
+    def extract_mro_diff(self):
+        return self.canon.extract_mro_diff()

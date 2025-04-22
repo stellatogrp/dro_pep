@@ -7,8 +7,8 @@ from .canonicalizer import Canonicalizer
 
 class ClarabelCanonicalizer(Canonicalizer):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True):
-        super().__init__(pep_problem, samples, measure, wrapper, precond=precond)
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, mro_clusters=None):
+        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, mro_clusters=mro_clusters)
 
     def setup_problem(self):
         if self.measure == 'expectation':
@@ -17,7 +17,8 @@ class ClarabelCanonicalizer(Canonicalizer):
             self.setup_cvar_problem()
 
     def setup_expectation_problem(self):
-        N = len(self.samples)
+        samples_to_use = self.samples_to_use
+        N = len(samples_to_use)
         M = len(self.A_vals)
         M_psd = len(self.PSD_A_vals)
 
@@ -110,7 +111,7 @@ class ClarabelCanonicalizer(Canonicalizer):
         # constraints: -c^T yi - Tr(G_sample @ Gz_i) - F_sample @ Fz_i - s_i <= 0
         epi_constr = np.zeros((N, x_dim))
         for i in range(N):
-            G_sample, F_sample = self.samples[i]
+            G_sample, F_sample = samples_to_use[i]
             y_start, y_end = y_idx(i, 0), y_idx(i, M)
             epi_constr[i, y_start: y_end] = -c
             epi_constr[i, s_idx(i)] = -1
@@ -260,7 +261,8 @@ class ClarabelCanonicalizer(Canonicalizer):
 
     def setup_cvar_problem(self):
         # sets up the part of the cvar problem that does not depend on alpha
-        N = len(self.samples)
+        samples_to_use = self.samples_to_use
+        N = len(samples_to_use)
         M = len(self.A_vals)
         M_psd = len(self.PSD_A_vals)
 
@@ -523,7 +525,7 @@ class ClarabelCanonicalizer(Canonicalizer):
         # constraints: t - c^T y1 - Tr(G_sample @ Gz1_i) - F_sample @ Fz1_i - s_i <= 0
         epi1_constr = np.zeros((N, x_dim))
         for i in range(N):
-            G_sample, F_sample = self.samples[i]
+            G_sample, F_sample = samples_to_use[i]
             epi1_constr[i, t_idx] = 1
             y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
             epi1_constr[i, y1_idx_start: y1_idx_end] = -c
@@ -575,7 +577,7 @@ class ClarabelCanonicalizer(Canonicalizer):
 
     def set_expectation_eps(self, eps):
         x_dim = self.P.shape[0]
-        N = len(self.samples)
+        N = len(self.samples_to_use)
         q = np.zeros(x_dim)
         q[0] = eps
         q[self.s_idx_func(0): self.s_idx_func(N)] = 1 / N
@@ -584,7 +586,8 @@ class ClarabelCanonicalizer(Canonicalizer):
 
     def set_cvar_alpha_eps(self, eps, alpha):
         alpha_inv = 1 / alpha
-        N = len(self.samples)
+        samples_to_use = self.samples_to_use
+        N = len(samples_to_use)
         M = len(self.A_vals)
         M_psd = len(self.PSD_A_vals)
 
@@ -631,7 +634,7 @@ class ClarabelCanonicalizer(Canonicalizer):
         # constraints: -(alpha_inv - 1) t - c^T y2 - Tr(G_sample @ Gz2_i) - F_sample @ Fz2_i - s_i <= 0
         epi2_constr = np.zeros((N, x_dim))
         for i in range(N):
-            G_sample, F_sample = self.samples[i]
+            G_sample, F_sample = samples_to_use[i]
             epi2_constr[i, t_idx] = -(alpha_inv - 1)
             y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
             epi2_constr[i, y2_idx_start: y2_idx_end] = -c
@@ -749,7 +752,8 @@ class ClarabelCanonicalizer(Canonicalizer):
 
     def extract_expectation_solution(self):
         lambd_idx = self.lambd_idx
-        N = len(self.samples)
+        samples_to_use = self.samples_to_use
+        N = len(samples_to_use)
         M = len(self.A_vals)
         M_psd = len(self.PSD_A_vals)
         V = self.b_obj.shape[0]
@@ -793,7 +797,8 @@ class ClarabelCanonicalizer(Canonicalizer):
     def extract_cvar_solution(self):
         lambd_idx = self.lambd_idx
         t_idx = self.t_idx
-        N = len(self.samples)
+        samples_to_use = self.samples_to_use
+        N = len(samples_to_use)
         M = len(self.A_vals)
         M_psd = len(self.PSD_A_vals)
         V = self.b_obj.shape[0]
