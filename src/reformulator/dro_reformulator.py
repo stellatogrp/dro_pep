@@ -25,7 +25,7 @@ VALID_WRAPPERS = [
 
 class DROReformulator(object):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True):
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, mro_clusters=None):
         self.pep_problem = pep_problem
         self.samples = samples
 
@@ -38,9 +38,9 @@ class DROReformulator(object):
         self.measure = measure
 
         if wrapper == 'cvxpy':
-            self.canon = CvxpyCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond)
+            self.canon = CvxpyCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond, mro_clusters=mro_clusters)
         elif wrapper == 'clarabel':
-            self.canon = ClarabelCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond)
+            self.canon = ClarabelCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond, mro_clusters=mro_clusters)
         else:
             raise NotImplementedError(f'wrapper {wrapper} not implemented')
 

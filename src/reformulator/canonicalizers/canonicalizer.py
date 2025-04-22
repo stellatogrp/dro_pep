@@ -6,14 +6,19 @@ from PEPit.tools.expressions_to_matrices import expression_to_matrices
 
 class Canonicalizer(object):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True):
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, mro_clusters=None):
         self.pep_problem = pep_problem
         self.samples = samples
         self.measure = measure
         self.wrapper = wrapper
         self.precond = precond
 
-        self.samples_to_use = samples  # TODO: add an mro flag and replace with clusters
+        if mro_clusters is None:
+            self.samples_to_use = samples  # TODO: add an mro flag and replace with clusters
+            self.full_samples = samples
+        else:
+            self.samples_to_use = self.clustered_sample_centers(samples)
+            self.full_samples = samples
 
         self.extract_pep_data()
 
