@@ -30,12 +30,13 @@ class DROReformulator(object):
         self.samples = samples
 
         if measure not in VALID_MEASURES:
-            raise NotImplementedError('not a valid measure')
+            raise NotImplementedError(f'{measure} not a valid measure')
 
         if pep_problem.objective is None:
             raise AssertionError('pep problem needs to be solved to extract data')
 
         self.measure = measure
+        self.mro_clusters = mro_clusters
 
         if wrapper == 'cvxpy':
             self.canon = CvxpyCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond, mro_clusters=mro_clusters)
@@ -62,4 +63,6 @@ class DROReformulator(object):
         return self.canon.extract_solution()
 
     def extract_mro_diff(self):
+        if self.mro_clusters is None:
+            return 0
         return self.canon.extract_mro_diff()

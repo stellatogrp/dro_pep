@@ -161,6 +161,9 @@ class Canonicalizer(object):
 
         # TODO: check if the final part of the slack calculation actually uses then entire Gz_list or if just the label
 
+        for Gz_psd in Gz_psd_list:
+            print(len(Gz_psd))
+
         out = 0
         for i, (diff, LGF, H_list) in enumerate(slacks):
             label = cluster_labels[i]

@@ -465,6 +465,7 @@ class DROReformulator(object):
         if self.cp_problem.status != 'optimal' :
             print(self.cp_problem.status)
         if self.mro_diff is not None:
+            print(f'mro diff val: {self.mro_diff.value}')
             res += self.mro_diff.value
         return res
 

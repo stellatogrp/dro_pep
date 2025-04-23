@@ -40,10 +40,10 @@ def main():
     L = 10
     R = 1
     t = 0.1
-    K_max = 5
+    K_max = 10
 
     d = 5
-    N = 100
+    N = 25
 
     params = {'N': N, 'd': d, 'mu': mu, 'L': L, 'R': R, 'K_max': K_max, 'K': 0, 't': t}
 
@@ -92,6 +92,7 @@ def main():
     alpha = 0.1
 
     CVar_DR.set_params(eps=eps, alpha=alpha)
+    print('solving')
     out = CVar_DR.solve()
     print(out)
 
@@ -99,5 +100,66 @@ def main():
     print(mro_diff)
 
 
+def old_mro_main():
+    seed = 0
+    mu = 1
+    L = 10
+    R = 1
+    t = 0.1
+    K_max = 5
+
+    d = 5
+    N = 100
+
+    params = {'N': N, 'd': d, 'mu': mu, 'L': L, 'R': R, 'K_max': K_max, 'K': 0, 't': t}
+
+    np.random.seed(seed)
+
+    problem = PEP()
+    # could do SmoothStronglyConvexQuadraticFunction if we want
+    # func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
+    func = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=mu, L=L)
+
+    xs = func.stationary_point()
+    fs = func(xs)
+
+    x0 = problem.set_initial_point()
+
+    problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
+    x = x0
+    for _ in range(K_max):
+        x = x - t * func.gradient(x)
+
+    problem.set_performance_metric(func(x) - fs)
+
+    pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
+
+    print('tau from pepit:', pepit_tau)
+
+    x0 = np.zeros(d)
+    x0[0] = R
+    # trajectories = generate_trajectories(N, d, mu, L, R, t, K, x0, traj_seed=1)
+    algorithm = gradient_descent
+    # matrix_generation = marchenko_pastur
+    matrix_generation = generate_P
+
+    trajectories, avg_trajectories = generate_trajectories(params, x0, algorithm, matrix_generation, traj_seed=1)
+
+    CVar_DR = OldReformulator(
+        problem,
+        trajectories,
+        'cvar_mro',
+        'cvxpy',
+        precond=True,
+    )
+
+    eps = 0.1
+    alpha = 0.1
+
+    out = CVar_DR.solve_single_alpha_eps_val(alpha, eps)
+    print(out)
+
+
 if __name__ == '__main__':
     main()
+    # old_mro_main()
