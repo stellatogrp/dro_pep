@@ -131,7 +131,32 @@ class Canonicalizer(object):
             return self.extract_cvar_mro_diff()
     
     def extract_expectation_mro_diff(self):
-        pass
+        solution = self.extract_solution()
+        cluster_labels = self.cluster_labels
+        cluster_centers = self.cluster_centers
+        full_samples = self.full_samples
+
+        # TODO: consolidate all of this with the cvar function
+
+        slacks = [( (sample[0]-cluster_centers[cluster_labels[k]][0], sample[1]-cluster_centers[cluster_labels[k]][1]), \
+                    np.array([-np.trace(Am@(sample[0]-cluster_centers[cluster_labels[k]][0]))-bm.T@(sample[1]-cluster_centers[cluster_labels[k]][1]) for (Am, bm) in zip(self.A_vals, self.b_vals)]), \
+                    [np.array([[np.trace(Ap[i,j]@(sample[0]-cluster_centers[cluster_labels[k]][0]))+bp[i,j].T@(sample[1]-cluster_centers[cluster_labels[k]][1]) for j in range(Ap.shape[1])] for i in range(Ap.shape[0])]) for (Ap, bp) in zip(self.PSD_A_vals, self.PSD_b_vals)] ) \
+                      for k, sample in enumerate(full_samples)]
+
+        # print(slacks)
+
+        y_list = [solution['y']]
+        Gz_list = [solution['Gz']]
+        Fz_list = [solution['Fz']]
+        Gz_psd_list = [solution['H']]
+
+        out = 0
+        for i, (diff, LGF, H_list) in enumerate(slacks):
+            label = cluster_labels[i]
+            temp = [ - np.trace(Gz[label]@diff[0]) - Fz[label].T@diff[1] - LGF.T@y[label] - np.sum([np.trace(G_psd@H) for (G_psd, H) in zip(Gz_psd, H_list)]) for (y, Gz, Fz, Gz_psd) in zip(y_list, Gz_list, Fz_list, Gz_psd_list) ]
+            out += np.max(temp)
+
+        return 1 / len(full_samples) * out
 
     def extract_cvar_mro_diff(self):
         solution = self.extract_solution()
@@ -161,8 +186,8 @@ class Canonicalizer(object):
 
         # TODO: check if the final part of the slack calculation actually uses then entire Gz_list or if just the label
 
-        for Gz_psd in Gz_psd_list:
-            print(len(Gz_psd))
+        # for Gz_psd in Gz_psd_list:
+        #     print(len(Gz_psd))
 
         out = 0
         for i, (diff, LGF, H_list) in enumerate(slacks):

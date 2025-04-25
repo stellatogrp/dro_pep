@@ -43,7 +43,7 @@ def main():
     K_max = 10
 
     d = 5
-    N = 25
+    N = 30
 
     params = {'N': N, 'd': d, 'mu': mu, 'L': L, 'R': R, 'K_max': K_max, 'K': 0, 't': t}
 
@@ -82,22 +82,71 @@ def main():
     CVar_DR = NewReformulator(
         problem,
         trajectories,
-        'cvar',
+        'expectation',
         'clarabel',
-        precond=True,
+        precond=False,
         mro_clusters=10,
     )
 
-    eps = 0.01
+    NonMRO_CVar_DR = NewReformulator(
+        problem,
+        trajectories,
+        'expectation',
+        'clarabel',
+        precond=False,
+        mro_clusters=None,
+    )
+
+    eps_vals = np.logspace(-3, 1, num=10)
     alpha = 0.1
 
-    CVar_DR.set_params(eps=eps, alpha=alpha)
-    print('solving')
-    out = CVar_DR.solve()
-    print(out)
+    objs = []
+    mro_diffs = []
+    objs_with_mro = []
+    true_objs = []
+    for eps in eps_vals:
+        CVar_DR.set_params(eps=eps, alpha=alpha)
+        out = CVar_DR.solve()
+        objs.append(out['obj'])
+        mro_diff = CVar_DR.extract_mro_diff()
+        mro_diffs.append(mro_diff)
+        objs_with_mro.append(out['obj'] + mro_diff)
 
-    mro_diff = CVar_DR.extract_mro_diff()
-    print(mro_diff)
+        NonMRO_CVar_DR.set_params(eps=eps, alpha=alpha)
+        out = NonMRO_CVar_DR.solve()
+        true_objs.append(out['obj'])
+
+    print(objs)
+    print(mro_diffs)
+    print(objs_with_mro)
+    print(true_objs)
+
+    plt.figure()
+    # plt.plot(eps_vals, res, label='full samples')
+    plt.plot(eps_vals, objs, label='mro obj values')
+    plt.plot(eps_vals, objs_with_mro, label='bound with mro delta')
+    plt.plot(eps_vals, true_objs, label='full sample bound')
+    plt.axhline(y=pepit_tau, color='black', linestyle='--', label='PEP bound')
+    # plt.axhline(y=sample_obj, color='gray', linestyle='--', label='used sample')
+    # plt.axhline(y=oos_sample_obj, color='gold', linestyle='-.', label='oos sample')
+    # # plt.plot(eps_vals, np.sqrt(np.array(eps_vals)), linestyle='--', color='gold')
+
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.xlabel(r'$\epsilon$')
+    plt.ylabel('DRO obj value')
+
+    plt.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.3)
+    plt.title(fr'$N$={N}, 10 clusters, $K$={K_max}')
+
+    plt.tight_layout()
+    # plt.savefig(f'../plots/expectation/N{N}K{K}.pdf')
+    plt.show()
+
+    # plt.clf()
+    # plt.cla()
+    # plt.close()
 
 
 def old_mro_main():
