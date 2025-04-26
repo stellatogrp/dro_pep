@@ -47,16 +47,42 @@ def main():
     for A, b in zip([A5, A6], [b5, b6]):
         D = sym.Matrix.hstack(D, sym.Matrix.vstack(A.vec(), b))
 
+    print('D:')
     sym.pprint(D)
 
+    print('DTD:')
     DTD = D.T @ D
-    sym.pprint(DTD)
+    sym.pprint(sym.simplify(DTD))
 
+    sym.pprint(DTD.evalf(subs={L:1}))
+
+    sym.pprint(DTD.evalf(subs={L:1}).det())
+
+    # sym.pprint(DTD.evalf(subs={L:1}).det())
+    # sym.pprint(DTD.det())
+
+    # test = DTD.evalf(subs={L:100})
+    # sym.pprint(test.det())
+
+    print('DTD_inv:')
     DTDinv = sym.simplify(DTD.inv())
     sym.pprint(DTDinv)
 
+    sym.pprint(DTDinv.evalf(subs={L:1}))
+
+    print('-----')
+
     DTDinv_DT = DTDinv @ D.T
+    print('DTDinv_DT:')
     sym.pprint(DTDinv_DT)
+
+    test = DTDinv_DT.evalf(subs={L:1000})
+    sym.pprint(test)
+
+    # sym.pprint(sym.limit(DTDinv_DT[5, 8], L, sym.oo))
+
+    print('D_DTDinv_DT:')
+    sym.pprint((D @ DTDinv_DT).evalf(n=5, subs={L:1}))
 
 
 if __name__ == '__main__':
