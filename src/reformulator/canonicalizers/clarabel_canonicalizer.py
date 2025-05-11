@@ -570,6 +570,8 @@ class ClarabelCanonicalizer(Canonicalizer):
         self.H2_idx_func = H2_idx
 
     def set_params(self, eps=0.1, alpha=0.1):
+        self.eps = eps
+        self.alpha = alpha
         if self.measure == 'expectation':
             self.set_expectation_eps(eps)
         if self.measure == 'cvar':
