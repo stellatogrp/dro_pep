@@ -66,3 +66,6 @@ class DROReformulator(object):
         if self.mro_clusters is None:
             return 0
         return self.canon.extract_mro_diff()
+
+    def extract_dro_feas_sol_from_mro(self, **kwargs):
+        return self.canon.extract_dro_feas_sol_from_mro(**kwargs)

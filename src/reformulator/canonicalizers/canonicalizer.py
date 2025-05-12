@@ -124,6 +124,86 @@ class Canonicalizer(object):
             out_centers.append((symm_vec_to_mat(currG_vec), currF))
         return out_centers, clusters.labels_, kmeans_obj
 
+    def extract_dro_feas_sol_from_mro(self, eps=0.1, alpha=0.1):
+        if self.measure == 'expectation':
+            return self.extract_feas_sol_mro_expectation(eps)
+        elif self.measure == 'cvar':
+            return self.extract_feas_sol_mro_cvar(eps, alpha)
+
+    def extract_feas_sol_mro_expectation(self, eps):
+        mro_sol = self.extract_solution()
+        full_samples = self.full_samples
+        
+        lambd = mro_sol['lambda']
+        y = mro_sol['y']
+        Gz = mro_sol['Gz']
+        Fz = mro_sol['Fz']
+        H = mro_sol['H']
+        c = self.c_vals
+
+        # add in H values
+
+        m_psd = len(self.PSD_c_vals)
+        mro_obj = 0
+
+        for i in range(len(full_samples)):
+            Gz_i, Fz_i = full_samples[i]
+            cluster_label = self.cluster_labels[i]
+            Gz_k = Gz[cluster_label]
+            Fz_k = Fz[cluster_label]
+            y_k = y[cluster_label]
+            s_i = -c @ y_k - np.trace(Gz_k @ Gz_i) - Fz_i @ Fz_k
+            for m in range(m_psd):
+                s_i -= np.trace(self.PSD_c_vals[m] @ H[cluster_label][m])
+            mro_obj += s_i
+
+        return lambd * eps + 1 / len(full_samples) * mro_obj
+    
+    def extract_feas_sol_mro_cvar(self, eps, alpha):
+        mro_sol = self.extract_solution()
+        full_samples = self.full_samples
+        
+        lambd = mro_sol['lambda']
+        t = mro_sol['t']
+
+        y1 = mro_sol['y1']
+        y2 = mro_sol['y2']
+        Gz1 = mro_sol['Gz1']
+        Gz2 = mro_sol['Gz2']
+        Fz1 = mro_sol['Fz1']
+        Fz2 = mro_sol['Fz2']
+        H1 = mro_sol['H1']
+        H2 = mro_sol['H2']
+
+        c = self.c_vals
+
+        m_psd = len(self.PSD_c_vals)
+        mro_obj = 0
+
+        for i in range(len(full_samples)):
+            Gz_i, Fz_i = full_samples[i]
+            cluster_label = self.cluster_labels[i]
+
+            Gz1_k = Gz1[cluster_label]
+            Fz1_k = Fz1[cluster_label]
+            y1_k = y1[cluster_label]
+
+            Gz2_k = Gz2[cluster_label]
+            Fz2_k = Fz2[cluster_label]
+            y2_k = y2[cluster_label]
+
+            s1_i = t - c @ y1_k - np.trace(Gz1_k @ Gz_i) - Fz_i @ Fz1_k
+            for m in range(m_psd):
+                s1_i -= np.trace(self.PSD_c_vals[m] @ H1[cluster_label][m])
+
+            s2_i = -(1 / alpha - 1) * t - c @ y2_k - np.trace(Gz2_k @ Gz_i) - Fz_i @ Fz2_k
+            for m in range(m_psd):
+                s2_i -= np.trace(self.PSD_c_vals[m] @ H2[cluster_label][m])
+            
+            mro_obj += max(s1_i, s2_i)
+
+        return lambd * eps + 1 / len(full_samples) * mro_obj
+
     def extract_mro_diff(self):
         if self.measure == 'expectation':
             return self.extract_expectation_mro_diff()

@@ -82,7 +82,7 @@ def main():
     CVar_DR = NewReformulator(
         problem,
         trajectories,
-        'expectation',
+        'cvar',
         'clarabel',
         precond=False,
         mro_clusters=10,
@@ -91,7 +91,7 @@ def main():
     NonMRO_CVar_DR = NewReformulator(
         problem,
         trajectories,
-        'expectation',
+        'cvar',
         'clarabel',
         precond=False,
         mro_clusters=None,
@@ -103,28 +103,35 @@ def main():
     objs = []
     mro_diffs = []
     objs_with_mro = []
+    dro_feas_sols_mro = []
     true_objs = []
     for eps in eps_vals:
         CVar_DR.set_params(eps=eps, alpha=alpha)
         out = CVar_DR.solve()
         objs.append(out['obj'])
+
         mro_diff = CVar_DR.extract_mro_diff()
         mro_diffs.append(mro_diff)
         objs_with_mro.append(out['obj'] + mro_diff)
+
+        dro_feas = CVar_DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+        dro_feas_sols_mro.append(dro_feas)
 
         NonMRO_CVar_DR.set_params(eps=eps, alpha=alpha)
         out = NonMRO_CVar_DR.solve()
         true_objs.append(out['obj'])
 
     print(objs)
-    print(mro_diffs)
+    # print(mro_diffs)
     print(objs_with_mro)
+    print(dro_feas_sols_mro)
     print(true_objs)
 
     plt.figure()
     # plt.plot(eps_vals, res, label='full samples')
-    plt.plot(eps_vals, objs, label='mro obj values')
-    plt.plot(eps_vals, objs_with_mro, label='bound with mro delta')
+    # plt.plot(eps_vals, objs, label='mro obj values')
+    # plt.plot(eps_vals, objs_with_mro, label='bound with mro delta')
+    plt.plot(eps_vals, dro_feas_sols_mro, label='dro feas obj from mro')
     plt.plot(eps_vals, true_objs, label='full sample bound')
     plt.axhline(y=pepit_tau, color='black', linestyle='--', label='PEP bound')
     # plt.axhline(y=sample_obj, color='gray', linestyle='--', label='used sample')
