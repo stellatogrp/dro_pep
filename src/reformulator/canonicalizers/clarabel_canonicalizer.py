@@ -213,8 +213,11 @@ class ClarabelCanonicalizer(Canonicalizer):
         cones += [clarabel.PSDTriangleConeT(S_mat) for _ in range(N)]
 
         # SOCP constraints
-        G_precond_vec = self.preconditioner[0]
-        F_precond = self.preconditioner[1]
+        # G_precond_vec = self.preconditioner[0]
+        # F_precond = self.preconditioner[1]
+
+        G_precond_vec = self.precond_inv[0]
+        F_precond = self.precond_inv[1]
 
         F_precond_sq = F_precond ** 2
         scaled_G_vec_outer_prod = np.outer(G_precond_vec, G_precond_vec)
@@ -417,8 +420,11 @@ class ClarabelCanonicalizer(Canonicalizer):
             cones += [clarabel.PSDTriangleConeT(H_mat) for _ in range(2 * N)]
 
         # SOCP constraints
-        G_precond_vec = self.preconditioner[0]
-        F_precond = self.preconditioner[1]
+        # G_precond_vec = self.preconditioner[0]
+        # F_precond = self.preconditioner[1]
+
+        G_precond_vec = self.precond_inv[0]
+        F_precond = self.precond_inv[1]
 
         F_precond_sq = F_precond ** 2
         scaled_G_vec_outer_prod = np.outer(G_precond_vec, G_precond_vec)

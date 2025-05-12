@@ -37,8 +37,11 @@ class CvxpyCanonicalizer(Canonicalizer):
         # obj = lambd * eps
         constraints = [y >= 0]
 
-        G_preconditioner = np.diag(self.preconditioner[0])
-        F_preconditioner = self.preconditioner[1]
+        # G_preconditioner = np.diag(self.preconditioner[0])
+        # F_preconditioner = self.preconditioner[1]
+
+        G_preconditioner = np.diag(self.precond_inv[0])
+        F_preconditioner = self.precond_inv[1]
 
         for i in range(N):
             G_sample, F_sample = samples_to_use[i]
@@ -128,8 +131,11 @@ class CvxpyCanonicalizer(Canonicalizer):
         eps = cp.Parameter()
         alpha_inv = cp.Parameter()
 
-        G_preconditioner = np.diag(self.preconditioner[0])
-        F_preconditioner = self.preconditioner[1]
+        # G_preconditioner = np.diag(self.preconditioner[0])
+        # F_preconditioner = self.preconditioner[1]
+
+        G_preconditioner = np.diag(self.precond_inv[0])
+        F_preconditioner = self.precond_inv[1]
 
         obj = lambd * eps + 1 / N * cp.sum(s)
         constraints = [y1 >= 0, y2 >= 0]

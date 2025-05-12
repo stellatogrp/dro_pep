@@ -82,18 +82,18 @@ def main():
     CVar_DR = NewReformulator(
         problem,
         trajectories,
-        'cvar',
-        'clarabel',
-        precond=False,
+        'expectation',
+        'cvxpy',
+        precond=True,
         mro_clusters=10,
     )
 
     NonMRO_CVar_DR = NewReformulator(
         problem,
         trajectories,
-        'cvar',
+        'expectation',
         'clarabel',
-        precond=False,
+        precond=True,
         mro_clusters=None,
     )
 

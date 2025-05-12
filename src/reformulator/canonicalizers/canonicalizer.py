@@ -36,6 +36,8 @@ class Canonicalizer(object):
             self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
             self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
 
+        self.precond_inv = (1 / self.preconditioner[0], 1/self.preconditioner[1])
+
         A_vals = []
         b_vals = []
         c_vals = []
