@@ -14,15 +14,17 @@ class Canonicalizer(object):
         self.wrapper = wrapper
         self.precond = precond
 
+        self.set_preconditioner()
+
         if mro_clusters is None:
             self.samples_to_use = samples
         else:
             self.cluster_centers, self.cluster_labels, self.kmeans_obj = self.clustered_sample_centers(samples, mro_clusters)
             self.samples_to_use = self.cluster_centers
-            self.full_samples = samples
+        self.full_samples = samples
         self.extract_pep_data()
 
-    def extract_pep_data(self):
+    def set_preconditioner(self):
         problem = self.pep_problem
         A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
 
@@ -31,12 +33,19 @@ class Canonicalizer(object):
 
         self.preconditioner = ( np.ones((self.A_obj.shape[0],)), np.ones(self.b_obj.shape) )
         if self.precond :
-            avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in self.samples_to_use], axis=0), np.average([sample[1] for sample in self.samples_to_use], axis=0))
+            avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in self.samples], axis=0), np.average([sample[1] for sample in self.samples], axis=0))
             self.preconditioner = ( 1/avg_sample[0], 1/np.sqrt(avg_sample[1]) )
             self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
             self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
 
         self.precond_inv = (1 / self.preconditioner[0], 1/self.preconditioner[1])
+
+    def extract_pep_data(self):
+        problem = self.pep_problem
+        A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
+
+        self.A_obj = - A_obj
+        self.b_obj = - b_obj[:-1]
 
         A_vals = []
         b_vals = []
@@ -105,11 +114,19 @@ class Canonicalizer(object):
         print(f'clustering into {num_clusters} clusters')
 
         F_idx_cutoff = samples[0][1].shape[0]
+        precondG, precondF = self.preconditioner
+        precondinvG, precondinvF = self.precond_inv
+
+        precondG = np.diag(precondG)
+        precondF = np.diag(precondF)
+        precondinvG = np.diag(precondinvG)
+        precondinvF = np.diag(precondinvF)
 
         X = []
         for samp in samples:
             G, F = samp
-            X.append(np.hstack([symm_vectorize(G), F]))
+            # X.append(np.hstack([symm_vectorize(G), F]))
+            X.append(np.hstack([symm_vectorize(precondG @ G @ precondG), precondF @ F @ precondF]))
         X = np.array(X)
 
         clusters = KMeans(n_clusters=num_clusters, random_state=rng_seed).fit(X)
@@ -123,7 +140,11 @@ class Canonicalizer(object):
             curr_cluster = X[j]
             currG_vec = curr_cluster[:n-F_idx_cutoff]
             currF = curr_cluster[n-F_idx_cutoff:]
-            out_centers.append((symm_vec_to_mat(currG_vec), currF))
+            # out_centers.append((symm_vec_to_mat(currG_vec), currF))
+            out_centers.append((precondinvG @ symm_vec_to_mat(currG_vec) @ precondinvG, precondinvF @ currF @ precondinvF))
+        # print(clusters.labels_)
+        # print(samples)
+        # print(out_centers)
         return out_centers, clusters.labels_, kmeans_obj
 
     def extract_dro_feas_sol_from_mro(self, eps=0.1, alpha=0.1):

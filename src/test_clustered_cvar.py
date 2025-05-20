@@ -43,7 +43,7 @@ def main():
     K_max = 10
 
     d = 5
-    N = 30
+    N = 20
 
     params = {'N': N, 'd': d, 'mu': mu, 'L': L, 'R': R, 'K_max': K_max, 'K': 0, 't': t}
 
@@ -77,15 +77,17 @@ def main():
     # matrix_generation = marchenko_pastur
     matrix_generation = generate_P
 
+    num_clusters = 20
+
     trajectories, avg_trajectories = generate_trajectories(params, x0, algorithm, matrix_generation, traj_seed=1)
 
     CVar_DR = NewReformulator(
         problem,
         trajectories,
         'expectation',
-        'cvxpy',
-        precond=True,
-        mro_clusters=10,
+        'clarabel',
+        precond=False,
+        mro_clusters=num_clusters,
     )
 
     NonMRO_CVar_DR = NewReformulator(
@@ -93,7 +95,7 @@ def main():
         trajectories,
         'expectation',
         'clarabel',
-        precond=True,
+        precond=False,
         mro_clusters=None,
     )
 
@@ -145,7 +147,7 @@ def main():
 
     plt.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.3)
-    plt.title(fr'$N$={N}, 10 clusters, $K$={K_max}')
+    plt.title(fr'$N$={N}, {num_clusters} clusters, $K$={K_max}')
 
     plt.tight_layout()
     # plt.savefig(f'../plots/expectation/N{N}K{K}.pdf')
