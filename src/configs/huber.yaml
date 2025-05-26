@@ -1,0 +1,26 @@
+mu: 0.
+L: 10
+eta: 1  # final step size = eta / L 
+dim: 200
+delta: 0.5
+R: 5
+
+K_min: 1
+K_max: 100
+
+alg: grad_desc
+
+seed:
+  full_samples: 0
+  train: 100
+
+sample_N: 10000
+cluster_N: 20
+
+sample_fname: samples.csv
+pep_fname: pep.csv
+
+eps:
+  log_min: -3
+  log_max: -1
+  logspace_count: 10

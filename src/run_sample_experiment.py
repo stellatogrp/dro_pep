@@ -5,27 +5,33 @@ import sys
 
 log = logging.getLogger(__name__)
 
-# import train_model as train
+from experiment_classes.huber import huber_samples
 
-
-# @hydra.main(version_base='1.2', config_path='.', config_name='train.yaml')
-# def driver(cfg):
-#     train.train(cfg)
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='qgd.yaml')
-def qgd_driver(cfg):
+def quad_driver(cfg):
     pass
 
 
-QGD_params = [
+@hydra.main(version_base='1.2', config_path='configs', config_name='huber.yaml')
+def huber_driver(cfg):
+    huber_samples(cfg)
+
+
+Quad_params = [
+]
+
+Huber_params = [
 ]
 
 func_driver_map = {
-    'QGD': qgd_driver,
+    'Huber': huber_driver,
+    'Quad': quad_driver,
 }
 
 base_dir_map = {
-    'QGD': 'QGD/outputs'
+    'Huber': 'sample_outputs/Huber',
+    'Quad': 'sample_outputs/Quad',
 }
 
 
@@ -59,8 +65,11 @@ def main():
         log.info(f'job id: {job_idx}')
         hydra_tags = [f'hydra.run.dir={base_dir}/${{now:%Y-%m-%d}}/${{now:%H-%M-%S}}_{job_idx}', 'hydra.job.chdir=True']
 
-        if experiment == 'QGD':
-            hydra_tags += QGD_params[job_idx]
+        if experiment == 'Quad':
+            hydra_tags += Quad_params[job_idx]
+
+        if experiment == 'Huber':
+            hydra_tags += Huber_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
 

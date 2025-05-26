@@ -22,8 +22,6 @@ plt.rcParams.update({
     "figure.figsize": (9, 6)})
 
 
-
-
 def main():
     seed = 0
     mu = 0
