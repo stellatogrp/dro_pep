@@ -6,11 +6,12 @@ import sys
 log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_pep
+from experiment_classes.quad import quad_pep
 
 
-@hydra.main(version_base='1.2', config_path='configs', config_name='qgd.yaml')
+@hydra.main(version_base='1.2', config_path='configs', config_name='quad.yaml')
 def quad_driver(cfg):
-    pass
+    quad_pep(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='huber.yaml')

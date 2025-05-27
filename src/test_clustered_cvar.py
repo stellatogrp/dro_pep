@@ -77,7 +77,7 @@ def main():
     # matrix_generation = marchenko_pastur
     matrix_generation = generate_P
 
-    num_clusters = 20
+    num_clusters = 1
 
     trajectories, avg_trajectories = generate_trajectories(params, x0, algorithm, matrix_generation, traj_seed=1)
 
@@ -86,7 +86,7 @@ def main():
         trajectories,
         'expectation',
         'clarabel',
-        precond=False,
+        precond=True,
         mro_clusters=num_clusters,
     )
 
@@ -95,7 +95,7 @@ def main():
         trajectories,
         'expectation',
         'clarabel',
-        precond=False,
+        precond=True,
         mro_clusters=None,
     )
 

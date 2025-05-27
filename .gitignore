@@ -27,6 +27,8 @@
 *.pdf
 outputs/
 sample_outputs/
+dro_outputs/
+data/
 
 ## Bibliography auxiliary files (bibtex/biblatex/biber):
 *.bbl

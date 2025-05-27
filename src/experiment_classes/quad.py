@@ -4,21 +4,20 @@ import logging
 import time
 from tqdm import trange
 
-from .utils import generate_P_bounded_mu_L, gradient_descent, nesterov_accelerated_gradient, generate_trajectories
+from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories
 from PEPit import PEP
-from PEPit.functions import SmoothStronglyConvexFunction
+from PEPit.functions import SmoothStronglyConvexQuadraticFunction
 from reformulator.dro_reformulator import DROReformulator
 
 log = logging.getLogger(__name__)
 
 
-class Huber(object):
+class Quad(object):
 
-    def __init__(self, dim, mu=0, L=10, delta=0.25, R=1):
+    def __init__(self, dim, mu=0, L=10, R=1):
         self.dim = dim
         self.mu = mu
         self.L = L
-        self.delta = delta
         self.R = R
 
         self.x0 = np.zeros(dim)
@@ -27,27 +26,16 @@ class Huber(object):
         self.f_star = 0
         self.x_star = np.zeros(dim)
 
-        self.Q = generate_P_bounded_mu_L(dim, mu, L)
+        self.Q = marchenko_pastur(dim, mu, L)
 
     def f(self, x):
-        Q, delta = self.Q, self.delta
-        bound = np.sqrt(x.T @ Q @ x)
-        if bound <= delta:
-            # return .5 * x.T @ Q @ x
-            return .5 * bound ** 2
-        else:
-            return delta * (bound - .5 * delta)
-
+        return .5 * x.T @ self.Q @ x
+    
     def g(self, x):
-        Q, delta = self.Q, self.delta
-        bound = np.sqrt(x.T @ Q @ x)
-        if bound <= delta:
-            return Q @ x
-        else:
-            return (delta / bound) * Q @ x
+        return self.Q @ x
 
 
-def huber_samples(cfg):
+def quad_samples(cfg):
     log.info(cfg)
     np.random.seed(cfg.seed.full_samples)
 
@@ -67,7 +55,7 @@ def huber_samples(cfg):
         exit(0)
 
     for i in trange(cfg.sample_N):
-        h = Huber(cfg.dim, mu=cfg.mu, L=cfg.L, delta=cfg.delta, R=cfg.R)
+        h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
         x0 = h.x0
         xs = h.x_star
         fs = h.f_star
@@ -92,7 +80,7 @@ def huber_samples(cfg):
     df_to_save.to_csv(cfg.sample_fname, index=False)
 
 
-def huber_pep(cfg):
+def quad_pep(cfg):
     log.info(cfg)
     if cfg.alg == 'grad_desc':
         algo = gradient_descent
@@ -106,10 +94,10 @@ def huber_pep(cfg):
 
     res = []
 
-    huber_pep_subproblem(cfg, algo, 1, objs[0])
+    quad_pep_subproblem(cfg, algo, 1, objs[0])
     for k in range(cfg.K_min, cfg.K_max + 1):
         for obj in objs:
-            tau, solvetime = huber_pep_subproblem(cfg, algo, k, obj)
+            tau, solvetime = quad_pep_subproblem(cfg, algo, k, obj)
 
             res.append(pd.Series({
                 'K': k,
@@ -121,9 +109,9 @@ def huber_pep(cfg):
             df.to_csv(cfg.pep_fname, index=False)
 
 
-def huber_pep_subproblem(cfg, algo, k, obj, return_problem=False):
+def quad_pep_subproblem(cfg, algo, k, obj, return_problem=False):
     problem = PEP()
-    func = problem.declare_function(SmoothStronglyConvexFunction, mu=cfg.mu, L=cfg.L)
+    func = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=cfg.mu, L=cfg.L)
     xs = func.stationary_point()
     fs = func(xs)
     x0 = problem.set_initial_point()
@@ -152,14 +140,15 @@ def huber_pep_subproblem(cfg, algo, k, obj, return_problem=False):
         return problem
 
     start = time.time()
-    pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
+    # pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
+    pepit_tau = problem.solve(wrapper='mosek')
     solvetime = time.time() - start
 
     log.info(pepit_tau)
     return pepit_tau, solvetime
 
 
-def huber_dro(cfg):
+def quad_dro(cfg):
     log.info(cfg)
 
     if cfg.alg == 'grad_desc':
@@ -188,21 +177,21 @@ def huber_dro(cfg):
     alpha = cfg.alpha
 
     np.random.seed(cfg.seed.train)
-    huber_funcs = []
+    quad_funcs = []
     for i in range(N):
-        h = Huber(cfg.dim, mu=cfg.mu, L=cfg.L, delta=cfg.delta, R=cfg.R)
-        huber_funcs.append(h)
+        q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        quad_funcs.append(q)
     
     res = []
 
     for k in range(cfg.K_min, cfg.K_max + 1):
         samples = []
-        problem = huber_pep_subproblem(cfg, algo, k, cfg.dro_pep_obj, return_problem=True)
+        problem = quad_pep_subproblem(cfg, algo, k, cfg.dro_pep_obj, return_problem=True)
         problem.solve()
         log.info(f'----pep problem solved at k={k}----')
 
         for i in range(N):
-            h = huber_funcs[i]
+            h = quad_funcs[i]
             x0 = h.x0
             xs = h.x_star
             fs = h.f_star
@@ -246,34 +235,3 @@ def huber_dro(cfg):
         
             df = pd.DataFrame(res)
             df.to_csv(cfg.dro_fname, index=False)
-
-
-def main():
-    np.random.seed(0)
-    dim = 300
-    L = 10
-    delta = 1
-    h = Huber(dim, L=L, delta=delta, R=10)
-    print(h.x0)
-    print(h.Q)
-    print(np.linalg.eigvals(h.Q))
-
-    # x_test = .5 * np.random.uniform(size=(dim,))
-    # print(np.linalg.norm(x_test))
-    # print(h.f(x_test))
-    # print(.5 * x_test.T @ h.Q @ x_test)
-    # print(h.delta * (np.sqrt(x_test.T @ h.Q @ x_test) - .5 * h.delta))
-    x_test = h.x0
-
-    K = 100
-    for i in range(K):
-        print(f'---{i}---')
-        x_new = x_test - 1 / L * h.g(x_test)
-        print(f'obj: {h.f(x_new) - h.f_star}')
-        print(f'grad sq norm: {np.linalg.norm(h.g(x_new)) ** 2}')
-        print(f'sq dist: {np.linalg.norm(x_new - h.x_star) ** 2}')
-        x_test = x_new
-
-
-if __name__ == '__main__':
-    main()
