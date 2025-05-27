@@ -20,9 +20,17 @@ def huber_driver(cfg):
 
 
 Quad_params = [
+    ['alg=grad_desc', 'dro_obj=expectation'],
+    ['alg=nesterov_grad_desc', 'dro_obj=expectation'],
+    ['alg=grad_desc', 'dro_obj=cvar'],
+    ['alg=nesterov_grad_desc', 'dro_obj=cvar'],
 ]
 
 Huber_params = [
+    ['alg=grad_desc', 'dro_obj=expectation'],
+    ['alg=nesterov_grad_desc', 'dro_obj=expectation'],
+    ['alg=grad_desc', 'dro_obj=cvar'],
+    ['alg=nesterov_grad_desc', 'dro_obj=cvar'],
 ]
 
 func_driver_map = {
