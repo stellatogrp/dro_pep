@@ -20,10 +20,14 @@ sample_N: 10000
 
 training:
   expectation_N: 100
-  cvar_N: 100
+  cvar_N: 10
 num_clusters:
   expectation: 1
+<<<<<<< Updated upstream
   cvar: 20
+=======
+  cvar: null
+>>>>>>> Stashed changes
 
 sample_fname: samples.csv
 pep_fname: pep.csv
@@ -32,5 +36,5 @@ dro_fname: dro.csv
 eps:
   log_min: -3
   log_max: 0
-  logspace_count: 20
+  logspace_count: 4
 alpha: 0.1

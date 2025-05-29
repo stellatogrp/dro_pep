@@ -22,7 +22,7 @@ training:
   cvar_N: 100
 num_clusters:
   expectation: 1
-  cvar: 10
+  cvar: 20
 
 sample_fname: samples.csv
 pep_fname: pep.csv
