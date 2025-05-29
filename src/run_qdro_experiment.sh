@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=20
 #SBATCH --mem-per-cpu=4G
-#SBATCH --time=01-23:59:59
+#SBATCH --time=02-23:59:59
 #SBATCH --array=2-3
 #SBATCH -o /scratch/gpfs/vranjan/dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT

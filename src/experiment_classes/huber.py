@@ -198,7 +198,7 @@ def huber_dro(cfg):
     for k in range(cfg.K_min, cfg.K_max + 1):
         samples = []
         problem = huber_pep_subproblem(cfg, algo, k, cfg.dro_pep_obj, return_problem=True)
-        problem.solve()
+        problem.solve(wrapper='cvxpy', solver='CLARABEL')
         log.info(f'----pep problem solved at k={k}----')
 
         for i in range(N):
@@ -232,7 +232,10 @@ def huber_dro(cfg):
 
             DR.set_params(eps=eps, alpha=alpha)
             out = DR.solve()
-            dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            if num_clusters is not None:
+                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            else:
+                dro_feas = out['obj']
 
             res.append(pd.Series({
                 'K': k,
