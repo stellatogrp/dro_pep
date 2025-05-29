@@ -8,7 +8,7 @@ R: 5
 K_min: 1
 K_max: 50
 
-alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
+alg: grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
@@ -23,7 +23,7 @@ training:
   cvar_N: 100
 num_clusters:
   expectation: 1
-  cvar: 10
+  cvar: 20
 
 sample_fname: samples.csv
 pep_fname: pep.csv
