@@ -141,7 +141,8 @@ def quad_pep_subproblem(cfg, algo, k, obj, return_problem=False):
 
     start = time.time()
     # pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
-    pepit_tau = problem.solve(wrapper='mosek')
+    pepit_tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
+    # pepit_tau = problem.solve(wrapper='mosek')
     solvetime = time.time() - start
 
     log.info(pepit_tau)

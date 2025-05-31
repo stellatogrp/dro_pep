@@ -23,11 +23,7 @@ training:
   cvar_N: 10
 num_clusters:
   expectation: 1
-<<<<<<< Updated upstream
-  cvar: 20
-=======
   cvar: null
->>>>>>> Stashed changes
 
 sample_fname: samples.csv
 pep_fname: pep.csv
