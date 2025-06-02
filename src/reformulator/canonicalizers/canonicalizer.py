@@ -63,6 +63,9 @@ class Canonicalizer(object):
         for constr in problem._list_of_constraints_sent_to_wrapper[1:]:
             A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
 
+            if np.all(A_cons == 0) and np.all(b_cons[:-1] == 0):
+                continue
+
             A_vals.append(A_cons)
             b_vals.append(b_cons[:-1])
             c_vals.append(c_cons)
