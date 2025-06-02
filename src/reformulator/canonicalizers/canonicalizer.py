@@ -7,12 +7,13 @@ from sklearn.cluster import KMeans
 
 class Canonicalizer(object):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, mro_clusters=None):
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
         self.pep_problem = pep_problem
         self.samples = samples
         self.measure = measure
         self.wrapper = wrapper
         self.precond = precond
+        self.precond_type = precond_type
 
         self.set_preconditioner()
 
@@ -32,9 +33,18 @@ class Canonicalizer(object):
         self.b_obj = - b_obj[:-1]
 
         self.preconditioner = ( np.ones((self.A_obj.shape[0],)), np.ones(self.b_obj.shape) )
-        if self.precond :
-            avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in self.samples], axis=0), np.average([sample[1] for sample in self.samples], axis=0))
-            self.preconditioner = ( 1/avg_sample[0], 1/np.sqrt(avg_sample[1]) )
+        if self.precond:
+            if self.precond_type == 'average':
+                avg_sample = (np.average([np.sqrt(np.diag(sample[0])) for sample in self.samples], axis=0), np.average([sample[1] for sample in self.samples], axis=0))
+                self.preconditioner = ( 1/avg_sample[0], 1/np.sqrt(avg_sample[1]) )
+            elif self.precond_type == 'max':
+                max_sample = (np.max([np.sqrt(np.diag(sample[0])) for sample in self.samples], axis=0), np.max([sample[1] for sample in self.samples], axis=0))
+                self.preconditioner = ( 1/max_sample[0], 1/np.sqrt(max_sample[1]) )
+            elif self.precond_type == 'min':
+                min_sample = (np.min([np.sqrt(np.diag(sample[0])) for sample in self.samples], axis=0), np.min([sample[1] for sample in self.samples], axis=0))
+                self.preconditioner = ( 1/min_sample[0], 1/np.sqrt(min_sample[1]) )
+            else:
+                raise ValueError(f'{self.precond_type} is invalid precond_type')
             self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
             self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
 

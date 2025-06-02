@@ -7,8 +7,8 @@ from .canonicalizer import Canonicalizer
 
 class ClarabelCanonicalizer(Canonicalizer):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, mro_clusters=None):
-        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, mro_clusters=mro_clusters)
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
+        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
 
     def setup_problem(self):
         if self.measure == 'expectation':

@@ -87,6 +87,7 @@ def main():
         'expectation',
         'clarabel',
         precond=True,
+        precond_type='average',
         mro_clusters=num_clusters,
     )
 
@@ -96,10 +97,11 @@ def main():
         'expectation',
         'clarabel',
         precond=True,
+        precond_type='average',
         mro_clusters=None,
     )
 
-    eps_vals = np.logspace(-3, 1, num=10)
+    eps_vals = np.logspace(-3, 1, num=5)
     alpha = 0.1
 
     objs = []
