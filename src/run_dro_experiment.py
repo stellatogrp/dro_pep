@@ -7,11 +7,17 @@ log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_dro
 from experiment_classes.quad import quad_dro
+from experiment_classes.simple_quad import simple_quad_dro
 
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='quad.yaml')
 def quad_driver(cfg):
     quad_dro(cfg)
+
+
+@hydra.main(version_base='1.2', config_path='configs', config_name='simple_quad.yaml')
+def simple_quad_driver(cfg):
+    simple_quad_dro(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='huber.yaml')
@@ -36,11 +42,13 @@ Huber_params = [
 func_driver_map = {
     'Huber': huber_driver,
     'Quad': quad_driver,
+    'SimpleQuad': simple_quad_driver,
 }
 
 base_dir_map = {
     'Huber': 'dro_outputs/Huber',
     'Quad': 'dro_outputs/Quad',
+    'SimpleQuad': 'dro_outputs/SimpleQuad',
 }
 
 
