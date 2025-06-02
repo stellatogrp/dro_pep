@@ -11,6 +11,8 @@ alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
+precond_type: max # 'average' or 'max' or 'min'
+
 seed:
   full_samples: 0
   train: 100

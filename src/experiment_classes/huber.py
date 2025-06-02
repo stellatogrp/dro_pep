@@ -223,6 +223,7 @@ def huber_dro(cfg):
             dro_obj,
             'clarabel',
             precond=True,
+            precond_type=cfg.precond_type,
             mro_clusters=num_clusters,
         )
 

@@ -1,0 +1,19 @@
+mu: 0.0
+L: 1
+eta: 1.5
+dim: 200
+R: 1
+K_vals:
+- 1
+- 5
+- 10
+dro_obj: cvar
+pep_obj: obj_val
+seed: 42
+sample_N: 10
+pep_fname: pep.csv
+dro_fname: dro.csv
+eps:
+  log_min: -5
+  log_max: 2
+  logspace_count: 20

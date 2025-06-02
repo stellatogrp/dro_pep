@@ -19,10 +19,10 @@ def test_pep():
     lambd = 0.1
 
     # Declare a strongly convex smooth function and a closed convex proper function
-    f1 = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=mu, L=L)
+    f1 = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=mu, L=L, reuse_gradient=True)
     # f1 = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
     # f2 = problem.declare_function(ConvexFunction)
-    f2 = problem.declare_function(ConvexLipschitzFunction, M=lambd)
+    f2 = problem.declare_function(ConvexLipschitzFunction, M=lambd, reuse_gradient=True)
     func = f1 + f2
 
     # Start by defining its unique optimal point xs = x_*
@@ -60,7 +60,8 @@ def test_pep():
 
     # problem.set_initial_condition(x[1] ** 2 <= 9)
     # problem.set_initial_condition(func(x[1]) <= 9)
-    # problem.set_initial_condition(f2.gradient(xs) ** 2 <= 5)
+    # problem.set_initial_condition(f1.gradient(xs) ** 2 <= 9)
+    problem.set_initial_condition(func.gradient(x[0]) ** 2 <= 9)
 
     pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
 
@@ -71,7 +72,7 @@ def test_pep():
     print(A_obj.shape, b_obj.shape)
 
     print(len(problem._list_of_constraints_sent_to_wrapper))
-    for constr in problem._list_of_constraints_sent_to_wrapper[1:]:
+    for constr in problem._list_of_constraints_sent_to_wrapper[1:4]:
         A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
 
         print(A_cons, b_cons, c_cons)
