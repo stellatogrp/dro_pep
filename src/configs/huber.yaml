@@ -1,5 +1,5 @@
 mu: 0.
-L: 10
+L: 5
 eta: 1  # final step size = eta / L 
 dim: 200
 delta: 0.5
@@ -14,16 +14,16 @@ dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
 seed:
   full_samples: 0
-  train: 100
+  train: 101
 
 sample_N: 10000
 
 training:
-  expectation_N: 100
-  cvar_N: 10
+  expectation_N: 1000
+  cvar_N: 1000
 num_clusters:
   expectation: 1
-  cvar: null
+  cvar: 10
 
 sample_fname: samples.csv
 pep_fname: pep.csv
@@ -32,5 +32,5 @@ dro_fname: dro.csv
 eps:
   log_min: -3
   log_max: 0
-  logspace_count: 4
+  logspace_count: 20
 alpha: 0.1

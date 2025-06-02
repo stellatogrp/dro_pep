@@ -2,9 +2,9 @@
 #SBATCH --job-name=QPEP
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=20
-#SBATCH --mem-per-cpu=4G
-#SBATCH --time=01-23:59:59
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=80G
+#SBATCH --time=00-01:59:59
 #SBATCH --array=0-1
 #SBATCH -o /scratch/gpfs/vranjan/dro_pep_out/Huber/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
