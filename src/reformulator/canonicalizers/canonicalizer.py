@@ -7,13 +7,14 @@ from sklearn.cluster import KMeans
 
 class Canonicalizer(object):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None, obj_vec_cutoff=1):
         self.pep_problem = pep_problem
         self.samples = samples
         self.measure = measure
         self.wrapper = wrapper
         self.precond = precond
         self.precond_type = precond_type
+        self.obj_vec_cutoff = obj_vec_cutoff
 
         self.set_preconditioner()
 
@@ -30,7 +31,7 @@ class Canonicalizer(object):
         A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
 
         self.A_obj = - A_obj
-        self.b_obj = - b_obj[:-1]
+        self.b_obj = - b_obj[:-self.obj_vec_cutoff]
 
         self.preconditioner = ( np.ones((self.A_obj.shape[0],)), np.ones(self.b_obj.shape) )
         if self.precond:
@@ -55,7 +56,7 @@ class Canonicalizer(object):
         A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
 
         self.A_obj = - A_obj
-        self.b_obj = - b_obj[:-1]
+        self.b_obj = - b_obj[:-self.obj_vec_cutoff]
 
         A_vals = []
         b_vals = []
@@ -63,17 +64,17 @@ class Canonicalizer(object):
         for constr in problem._list_of_constraints_sent_to_wrapper[1:]:
             A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
 
-            if np.all(A_cons == 0) and np.all(b_cons[:-1] == 0):
+            if np.all(A_cons == 0) and np.all(b_cons[:-self.obj_vec_cutoff] == 0):
                 continue
 
             A_vals.append(A_cons)
-            b_vals.append(b_cons[:-1])
+            b_vals.append(b_cons[:-self.obj_vec_cutoff])
             c_vals.append(c_cons)
 
             if constr.equality_or_inequality == 'equality':
                 # raise NotImplementedError # TODO add the extra constraints for the double sided inequalities
                 A_vals.append(-A_cons)
-                b_vals.append(-b_cons[:-1])
+                b_vals.append(-b_cons[:-self.obj_vec_cutoff])
                 c_vals.append(-c_cons)
         self.A_vals = np.array(A_vals)
         self.b_vals = np.array(b_vals)
@@ -96,7 +97,7 @@ class Canonicalizer(object):
                 for j in range(psd_shape[1]) :
                     PSD_A_cons, PSD_b_cons, PSD_c_cons = expression_to_matrices(psd_expr[i,j])
                     PSD_A_row.append(PSD_A_cons)
-                    PSD_b_row.append(PSD_b_cons[:-1])
+                    PSD_b_row.append(PSD_b_cons[:-self.obj_vec_cutoff])
                     PSD_c_row.append(PSD_c_cons)
                 PSD_A_val.append(PSD_A_row)
                 PSD_b_val.append(PSD_b_row)

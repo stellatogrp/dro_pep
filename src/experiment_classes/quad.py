@@ -188,7 +188,7 @@ def quad_dro(cfg):
     for k in range(cfg.K_min, cfg.K_max + 1):
         samples = []
         problem = quad_pep_subproblem(cfg, algo, k, cfg.dro_pep_obj, return_problem=True)
-        problem.solve()
+        problem.solve(wrapper='cvxpy', solver='CLARABEL')
         log.info(f'----pep problem solved at k={k}----')
 
         for i in range(N):
@@ -203,7 +203,7 @@ def quad_dro(cfg):
             }
 
             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
-            log.info(F.shape)
+            # log.info(F.shape)
             samples.append((G, F))
         # log.info(samples)
 

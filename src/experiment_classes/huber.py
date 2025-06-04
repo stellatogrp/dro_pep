@@ -213,7 +213,7 @@ def huber_dro(cfg):
             }
 
             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
-            log.info(F.shape)
+            # log.info(F.shape)
             samples.append((G, F))
         # log.info(samples)
 

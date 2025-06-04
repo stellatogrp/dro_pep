@@ -89,6 +89,7 @@ def main():
         precond=True,
         precond_type='average',
         mro_clusters=num_clusters,
+        obj_vec_cutoff=1,
     )
 
     NonMRO_CVar_DR = NewReformulator(

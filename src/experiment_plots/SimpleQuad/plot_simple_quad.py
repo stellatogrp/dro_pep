@@ -14,8 +14,11 @@ plt.rcParams.update({
 def main():
     fig, ax = plt.subplots()
 
-    pep_df = pd.read_csv('data/pep.csv')
-    dro_df = pd.read_csv('data/dro.csv')
+    # pep_df = pd.read_csv('data/pep.csv')
+    # dro_df = pd.read_csv('data/dro.csv')
+
+    pep_df = pd.read_csv('K1_5_10/pep.csv')
+    dro_df = pd.read_csv('K1_5_10/dro.csv')
 
     ax.set_xlabel(r'$\varepsilon$')
     ax.set_ylabel(r'$f(x^K) - f(x^\star)$')
@@ -40,7 +43,8 @@ def main():
     plt.suptitle('Quadratic GD experiment')
 
     # plt.show()
-    plt.savefig('simple_quad_gd.pdf')
+    # plt.savefig('simple_quad_gd.pdf')
+    plt.savefig('K1_5_10.pdf')
 
 
 if __name__ == '__main__':

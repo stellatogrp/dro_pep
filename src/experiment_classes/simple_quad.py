@@ -95,7 +95,10 @@ def simple_quad_dro(cfg):
 
             DR.set_params(eps=eps)
             out = DR.solve()
-            dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps)
+            if cfg.num_clusters is not None:
+                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps)
+            else:
+                dro_feas = out['obj']
 
             res.append(pd.Series({
                 'K': k,

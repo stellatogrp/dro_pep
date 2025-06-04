@@ -6,8 +6,8 @@ from .canonicalizer import Canonicalizer
 
 class CvxpyCanonicalizer(Canonicalizer):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
-        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
+    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None, obj_vec_cutoff=1):
+        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters, obj_vec_cutoff=obj_vec_cutoff)
 
     def setup_problem(self):
         if self.measure == 'expectation':
