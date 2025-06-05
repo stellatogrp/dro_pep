@@ -4,7 +4,7 @@ import logging
 import time
 from tqdm import trange
 
-from .utils import generate_P_fixed_mu_L, gradient_descent, generate_trajectories
+from .utils import generate_P_bounded_mu_L, gradient_descent, generate_trajectories
 from PEPit import PEP
 from PEPit.functions import SmoothConvexFunction
 from reformulator.dro_reformulator import DROReformulator
@@ -26,7 +26,7 @@ class Quad(object):
         self.f_star = 0
         self.x_star = np.zeros(dim)
 
-        self.Q = generate_P_fixed_mu_L(dim, mu, L)
+        self.Q = generate_P_bounded_mu_L(dim, mu, L)
 
     def f(self, x):
         return .5 * x.T @ self.Q @ x
@@ -39,8 +39,8 @@ def simple_quad_dro(cfg):
     log.info(cfg)
     np.random.seed(cfg.seed)
 
-    # eps_vals = [0] + list(np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count))
     eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
+    eps_vals = [0] + list(eps_vals)
 
     quad_funcs = []
     for i in trange(cfg.sample_N):

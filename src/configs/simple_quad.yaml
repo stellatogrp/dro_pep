@@ -4,15 +4,15 @@ eta: 1.5  # final step size = eta / L
 dim: 200
 R: 1
 
-K_vals: [1, 5, 20]
+K_vals: [1, 5, 10]
 
 dro_obj: cvar  # expectation or cvar
 pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
 seed: 42
 
-sample_N: 1000
-num_clusters: 10
+sample_N: 50
+num_clusters: null
 
 pep_fname: pep.csv
 dro_fname: dro.csv
