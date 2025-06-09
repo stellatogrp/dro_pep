@@ -12,10 +12,11 @@ log = logging.getLogger(__name__)
 
 def generate_A(cfg):
     np.random.seed(cfg.seed)
-    A = np.random.normal(scale=1, size=(cfg.m, cfg.n))
+    A = np.random.normal(scale=1/cfg.m, size=(cfg.m, cfg.n))
 
-    # A_mask = np.random.binomial(1, p=cfg.p_A_nonzero, size=(cfg.m, cfg.n))
-    # A = np.multiply(A, A_mask)
+    A_mask = np.random.binomial(1, p=cfg.p_A_nonzero, size=(cfg.m, cfg.n))
+
+    A = np.multiply(A, A_mask)
 
     A = A / np.linalg.norm(A, axis=0)
     return A
@@ -37,13 +38,11 @@ def generate_b_samples(cfg, A, gamma, strong_cvx=True):
     x0 = np.zeros(cfg.n)
 
     for _ in trange(cfg.N):
+        x_samp = np.random.normal(size=(cfg.n,))
+        x_mask = np.random.binomial(1, p=cfg.p_xsamp_nonzero, size=(cfg.n,))
+        x_samp = np.multiply(x_samp, x_mask)
 
-        # x_samp = np.random.normal(size=(cfg.n,))
-        # x_mask = np.random.binomial(1, p=cfg.p_xsamp_nonzero, size=(cfg.n,))
-        # x_samp = np.multiply(x_samp, x_mask)
-        # b = A @ x_samp + cfg.noise_eps * np.random.normal(size=(cfg.m, ))
-
-        b = np.random.normal(size=(cfg.m,))
+        b = A @ x_samp + cfg.noise_eps * np.random.normal(size=(cfg.m, ))
         
         x_star = sp.linalg.lu_solve((lu, piv), A.T @ b)
 
@@ -101,5 +100,3 @@ def lstsq_samples(cfg):
         df.to_csv('theory.csv', header=None, index=None)
     else:
         R_max, opt_objs = generate_b_samples(cfg, A, gamma, strong_cvx=False)
-        opt_objs = np.array(opt_objs)
-        log.info(opt_objs)
