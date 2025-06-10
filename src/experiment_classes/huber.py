@@ -151,9 +151,11 @@ def huber_pep_subproblem(cfg, algo, k, obj, return_problem=False):
     if return_problem:
         return problem
 
-    start = time.time()
+    # start = time.time()
     pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
-    solvetime = time.time() - start
+    # solvetime = time.time() - start
+
+    solvetime = problem.wrapper.prob.solver_stats.solve_time
 
     # problem.wrapper.prob.solver_stats.solve_time
 
@@ -176,12 +178,10 @@ def huber_dro(cfg):
         N = cfg.training.expectation_N
         num_clusters = cfg.num_clusters.expectation
         dro_obj = 'expectation'
-
     elif cfg.dro_obj == 'cvar':
         N = cfg.training.cvar_N
         num_clusters = cfg.num_clusters.cvar
         dro_obj = 'cvar'
-
     else:
         log.info('invalid dro obj')
         exit(0)

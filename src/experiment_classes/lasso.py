@@ -47,24 +47,180 @@ def solve_single_cvxpy(cfg, A, b):
     obj = .5 * cp.sum_squares(A @ x - b) + cfg.lambd * cp.norm(x, 1)
     prob = cp.Problem(cp.Minimize(obj))
     res = prob.solve()
-    log.info(f'single x sol with lambda = {cfg.lambd}: {x.value}')
-    log.info(f'opt value = {res}')
+    # log.info(f'single x sol with lambda = {cfg.lambd}: {x.value}')
+    # log.info(f'opt value = {res}')
 
     R = np.linalg.norm(x.value)
     return x.value, R
 
 
+def simulate_alg(cfg, x0, A, b, x_opt, L, lu, piv, alg='ista'):
+    K_max = cfg.K_max
+    x_ls = sp.linalg.lu_solve((lu, piv), A.T @ b)
+    lambd = cfg.lambd
+    def f1(x):
+        return .5 * np.linalg.norm(A @ x - b) ** 2 - .5 * np.linalg.norm(A @ x_ls - b)
+
+    def f2(x):
+        return lambd * np.linalg.norm(x, 1)
+
+    def f(x):
+        return f1(x) + f2(x)
+
+    def grad_f1(x):
+        return A.T @ (A @ x - b)
+
+    f_opt = f(x_opt)
+
+    # only doing obj_val for this experiment
+
+    if alg == 'ista':
+        gamma = cfg.eta / L
+
+        xk = x0
+        # F_vals = [f(x0) - f_opt]
+        F_vals = []
+        for _ in range(K_max):
+            xnew = soft_threshold(xk - gamma * grad_f1(xk), gamma * lambd)
+            F_vals.append(f(xnew) - f_opt)
+            xk = xnew
+    if alg == 'fista':
+        gamma = cfg.eta / L
+
+        xk = x0
+        yk = x0
+        beta_k = 1
+        F_vals = []
+        for _ in range(K_max):
+            xkplus1 = soft_threshold(yk - gamma * grad_f1(yk), gamma * lambd)
+
+            beta_kplus1 = .5 * (1 + np.sqrt(1 + 4 * beta_k ** 2))
+            ykplus1 = xkplus1 + (beta_k - 1) / beta_kplus1 * (xkplus1 - xk)
+
+            F_vals.append(f(xkplus1) - f_opt)
+
+            xk = xkplus1
+            yk = ykplus1
+            beta_k = beta_kplus1
+    else:
+        raise NotImplementedError
+        exit(0)
+
+    return F_vals
+
+
 def lasso_samples(cfg):
     log.info(cfg)
+    A = generate_A(cfg)
+    log.info(A)
+    ATA = A.T @ A
+
+    ATA_lu, ATA_piv = sp.linalg.lu_factor(ATA)
+
+    ATA_eigvals = np.real(np.linalg.eigvals(ATA))
+    L = np.max(ATA_eigvals)
+
+    if cfg.m >= cfg.n:
+        mu = np.min(ATA_eigvals)
+    else:
+        mu = 0
+    log.info(f'L: {L}, mu: {mu}')
+
+    x0 = np.zeros(cfg.n)
+
+    np.random.seed(cfg.seed.out_of_sample)
+    sample_b = []
+    sample_xopt = []
+    max_R = 0
+
+    df = []
+
+    for i in trange(cfg.N):
+        b_samp = generate_single_b(cfg, A)
+        xopt_samp, R_samp = solve_single_cvxpy(cfg, A, b_samp)
+        max_R = max(max_R, R_samp)
+
+        sample_b.append(b_samp)
+        sample_xopt.append(xopt_samp)
+
+        F_vals = simulate_alg(cfg, x0, A, b_samp, xopt_samp, L, ATA_lu, ATA_piv, alg=cfg.alg)
+        # log.info(F_vals)
+
+        for k in range(1, cfg.K_max + 1):
+            df.append(pd.Series({
+                'i': i,
+                'K': k,
+                'obj_val': F_vals[k-1],
+            }))
+
+        if i % 1000 == 0:
+            log.info(f'saving at i={i}')
+            df_to_save = pd.DataFrame(df)
+            df_to_save.to_csv(cfg.sample_fname, index=False)
+    
+    log.info(f'maximum sample radius: {max_R}')
+
+    df_to_save = pd.DataFrame(df)
+    df_to_save.to_csv(cfg.sample_fname, index=False)
 
 
 def lasso_pep(cfg):
     log.info(cfg)
+    # if cfg.alg == 'grad_desc':
+    #     algo = gradient_descent
+    # elif cfg.alg == 'nesterov_grad_desc':
+    #     algo = nesterov_accelerated_gradient
+    # else:
+    #     log.info('invalid alg in cfg')
+    #     exit(0)
+
+    # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
+
+    # res = []
+
+    # huber_pep_subproblem(cfg, algo, 1, objs[0])
+    # for k in range(cfg.K_min, cfg.K_max + 1):
+    #     for obj in objs:
+    #         tau, solvetime = huber_pep_subproblem(cfg, algo, k, obj)
+
+    #         res.append(pd.Series({
+    #             'K': k,
+    #             'obj': obj,
+    #             'val': tau,
+    #             'solvetime': solvetime,
+    #         }))
+    #         df = pd.DataFrame(res)
+    #         df.to_csv(cfg.pep_fname, index=False)
+
+    obj = 'obj_val'
+
+    A = generate_A(cfg)
+    log.info(A)
+    ATA = A.T @ A
+
+    ATA_eigvals = np.real(np.linalg.eigvals(ATA))
+    L = np.max(ATA_eigvals)
+    if cfg.m >= cfg.n:
+        mu = np.min(ATA_eigvals)
+    else:
+        mu = 0
+    log.info(f'L: {L}, mu: {mu}')
+
+    res = []
+    for k in range(cfg.K_min, cfg.K_max + 1):
+        tau, solvetime = pep_subproblem(cfg, k, mu, L, cfg.R, alg=cfg.alg)
+        res.append(pd.Series({
+            'K': k,
+            'obj': obj,
+            'val': tau,
+            'solvetime': solvetime,
+        }))
+        df = pd.DataFrame(res)
+        df.to_csv(cfg.pep_fname, index=False)
 
 
-def ista_pep_subproblem(cfg, K, mu, L, R, return_problem=False):
+def pep_subproblem(cfg, K, mu, L, R, return_problem=False, alg='ista'):
     problem = PEP()
-    gamma = cfg.eta / L
     lambd = cfg.lambd
 
     f1 = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=mu, L=L, reuse_gradient=True)
@@ -77,13 +233,37 @@ def ista_pep_subproblem(cfg, K, mu, L, R, return_problem=False):
 
     problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
 
-    x = [x0 for _ in range(K+1)]
-    g = [None for _ in range(K+1)]
-    f = [None for _ in range(K+1)]
+    if alg == 'ista':
+        gamma = cfg.eta / L
 
-    for k in range(K):
-        y = x[k] - gamma * f1.gradient(x[k])
-        x[k+1], g[k+1], f[k+1] = proximal_step(y, f2, gamma)
+        x = [x0 for _ in range(K+1)]
+        g = [None for _ in range(K+1)]
+        f = [None for _ in range(K+1)]
+
+        for k in range(K):
+            y = x[k] - gamma * f1.gradient(x[k])
+            x[k+1], g[k+1], f[k+1] = proximal_step(y, f2, gamma)
+    elif alg == 'fista':
+        gamma = cfg.eta / L
+
+        x = [x0 for _ in range(K+1)]
+        y = [x0 for _ in range(K+1)]
+        g = [None for _ in range(K+1)]
+        f = [None for _ in range(K+1)]
+        beta_k = 1
+
+        for k in range(K):
+
+            xtilde = y[k] - gamma * f1.gradient(y[k])
+            x[k+1], g[k+1], f[k+1] = proximal_step(xtilde, f2, gamma)
+
+            beta_kplus1 = .5 * (1 + np.sqrt(1 + 4 * beta_k ** 2))
+            y[k+1] = x[k+1] + (beta_k - 1) / beta_kplus1 * (x[k+1] - x[k])
+
+            beta_k = beta_kplus1
+    else:
+        raise NotImplementedError
+        exit(0)
 
     if cfg.pep_obj == 'obj_val':
         problem.set_performance_metric(func(x[-1]) - func(xs))
@@ -111,7 +291,6 @@ def ista_pep_subproblem(cfg, K, mu, L, R, return_problem=False):
 def single_trajectory(cfg, K, A, b, x_opt, x0, lu, piv, L, alg='ista'):
     x_ls = sp.linalg.lu_solve((lu, piv), A.T @ b)
     lambd = cfg.lambd
-    gamma = cfg.eta / L
 
     def f1(x):
         return .5 * np.linalg.norm(A @ x - b) ** 2 - .5 * np.linalg.norm(A @ x_ls - b)
@@ -131,40 +310,67 @@ def single_trajectory(cfg, K, A, b, x_opt, x0, lu, piv, L, alg='ista'):
     G = [x_opt, grad_f1(x_opt), x0, grad_f1(x0)]
     F = [f(x_opt), f1(x_opt), f1(x0)]
 
-    # # TODO: fix below, this is just for K=1
-    # y1 = x0 - gamma * grad_f1(x0)
-    # x1 = soft_threshold(y1, gamma * lambd)
-    # g1 = (y1 - x1) / gamma
-    # subgrad_f1 = grad_f1(x1) + g1
-    # f2_1 = f2(x1)
-    # f_1 = f(x1)
+    if alg == 'ista':
+        gamma = cfg.eta / L
 
-    # G += [g1, subgrad_f1, x_ls]
-    # F += [f2_1, f_1]
+        xk = x0
+        for _ in range(K - 1):
+            ykplus1 = xk - gamma * grad_f1(xk)
+            xkplus1 = soft_threshold(ykplus1, gamma * lambd)
+            gkplus1 = (ykplus1 - xkplus1) / gamma
+            grad_f1_xkplus1 = grad_f1(xkplus1)
 
-    # # F+= [f(x1) - f(x_opt), f1(x_ls)]
+            G += [gkplus1, grad_f1_xkplus1]
+            F += [f2(xkplus1), f1(xkplus1)]
 
-    xk = x0
-    for _ in range(K - 1):
-        ykplus1 = xk - gamma * grad_f1(xk)
-        xkplus1 = soft_threshold(ykplus1, gamma * lambd)
-        gkplus1 = (ykplus1 - xkplus1) / gamma
-        grad_f1_xkplus1 = grad_f1(xkplus1)
+            xk = xkplus1
 
-        G += [gkplus1, grad_f1_xkplus1]
-        F += [f2(xkplus1), f1(xkplus1)]
+        yk = xk - gamma * grad_f1(xk)
+        xk = soft_threshold(yk, gamma * lambd)
+        gk = (yk - xk) / gamma
+        subgrad_f_xk = grad_f1(xk) + gk
+        f2_k = f2(xk)
+        f_k = f(xk)
 
-        xk = xkplus1
+        G += [gk, subgrad_f_xk, x_ls]
+        F += [f2_k, f_k]
+    elif alg == 'fista':
+        gamma = cfg.eta / L
 
-    yk = xk - gamma * grad_f1(xk)
-    xk = soft_threshold(yk, gamma * lambd)
-    gk = (yk - xk) / gamma
-    subgrad_f_xk = grad_f1(xk) + gk
-    f2_k = f2(xk)
-    f_k = f(xk)
+        xk = x0
+        yk = x0
+        beta_k = 1
+        for _ in range(K-1):
+            xtilde_kplus1 = yk - gamma * grad_f1(yk)
+            xkplus1 = soft_threshold(xtilde_kplus1, gamma * lambd)
+            gkplus1 = (xtilde_kplus1 - xkplus1) / gamma
 
-    G += [gk, subgrad_f_xk, x_ls]
-    F += [f2_k, f_k]
+            beta_kplus1 = .5 * (1 + np.sqrt(1 + 4 * beta_k ** 2))
+            # y[k+1] = x[k+1] + (beta_k - 1) / beta_kplus1 * (x[k+1] - x[k])
+            ykplus1 = xkplus1 + (beta_k - 1) / beta_kplus1 * (xkplus1 - xk)
+            grad_f1_ykplus1 = grad_f1(ykplus1)
+
+            G += [gkplus1, grad_f1_ykplus1]
+            F += [f2(xkplus1), f1(ykplus1)]
+
+            xk = xkplus1
+            yk = ykplus1
+            beta_k = beta_kplus1
+        
+        xtilde = yk - gamma * grad_f1(yk)
+        xk = soft_threshold(xtilde, gamma * lambd)
+        gk = (xtilde - xk) / gamma
+        # last iteration the y update is irrelevant
+        subgrad_f_xk = grad_f1(xk) + gk
+        f2_k = f2(xk)
+        f_k = f(xk)
+
+        G += [gk, subgrad_f_xk, x_ls]
+        F += [f2_k, f_k]
+
+    else:
+        raise NotImplementedError
+        exit(0)
 
     # F += [f(xk) - f(x_opt), f1(x_ls)]
 
@@ -193,17 +399,31 @@ def lasso_dro(cfg):
     
     b_test = generate_single_b(cfg, A)
     log.info(b_test)
-    x_test_opt, R = solve_single_cvxpy(cfg, A, b_test)
+    x_test_opt, _ = solve_single_cvxpy(cfg, A, b_test)
+
+    R = cfg.R
     log.info(f'radius: {R}')
 
-    K = 10
+    if cfg.dro_obj == 'expectation':
+        N = cfg.training.expectation_N
+        num_clusters = cfg.num_clusters.expectation
+        dro_obj = 'expectation'
+    elif cfg.dro_obj == 'cvar':
+        N = cfg.training.cvar_N
+        num_clusters = cfg.num_clusters.cvar
+        dro_obj = 'cvar'
+    else:
+        log.info('invalid dro obj')
+        exit(0)
+
+    K = 5
     x0 = np.zeros(cfg.n)
 
-    problem = ista_pep_subproblem(cfg, K, mu, L, R, return_problem=True)
+    problem = pep_subproblem(cfg, K, mu, L, R, return_problem=True, alg=cfg.alg)
     tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
     log.info(f'----pep problem solved at k={K} with tau={tau}----')
 
-    G, F = single_trajectory(cfg, K, A, b_test, x_test_opt, x0, ATA_lu, ATA_piv, L)
+    G, F = single_trajectory(cfg, K, A, b_test, x_test_opt, x0, ATA_lu, ATA_piv, L, alg=cfg.alg)
     # print(G, F)
     # for constr in problem._list_of_constraints_sent_to_wrapper[1:]:
     #     A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)

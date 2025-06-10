@@ -6,8 +6,8 @@ import sys
 log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_samples
+from experiment_classes.lasso import lasso_samples
 from experiment_classes.quad import quad_samples
-
 from experiment_classes.simple_lstsq import lstsq_samples
 
 
@@ -15,10 +15,13 @@ from experiment_classes.simple_lstsq import lstsq_samples
 def quad_driver(cfg):
     quad_samples(cfg)
 
-
 @hydra.main(version_base='1.2', config_path='configs', config_name='huber.yaml')
 def huber_driver(cfg):
     huber_samples(cfg)
+
+@hydra.main(version_base='1.2', config_path='configs', config_name='lasso.yaml')
+def lasso_driver(cfg):
+    lasso_samples(cfg)
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='simple_lstsq.yaml')
 def simple_lstsq_driver(cfg):
@@ -31,8 +34,12 @@ Quad_params = [
 Huber_params = [
 ]
 
+Lasso_params = [
+]
+
 func_driver_map = {
     'Huber': huber_driver,
+    'Lasso': lasso_driver,
     'Quad': quad_driver,
     'SimpleLstsq': simple_lstsq_driver,
 }
@@ -41,6 +48,7 @@ base_dir_map = {
     'Huber': 'sample_outputs/Huber',
     'Quad': 'sample_outputs/Quad',
     'SimpleLstsq': 'sample_outputs/SimpleLstsq',
+    'Lasso': 'sample_outputs/Lasso',
 }
 
 
@@ -79,6 +87,9 @@ def main():
 
         if experiment == 'Huber':
             hydra_tags += Huber_params[job_idx]
+
+        if experiment == 'Lasso':
+            hydra_tags += Lasso_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
 

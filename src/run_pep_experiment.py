@@ -7,6 +7,7 @@ log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_pep
 from experiment_classes.quad import quad_pep
+from experiment_classes.lasso import lasso_pep
 
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='quad.yaml')
@@ -19,6 +20,11 @@ def huber_driver(cfg):
     huber_pep(cfg)
 
 
+@hydra.main(version_base='1.2', config_path='configs', config_name='lasso.yaml')
+def lasso_driver(cfg):
+    lasso_pep(cfg)
+
+
 Quad_params = [
     ['alg=grad_desc'],
     ['alg=nesterov_grad_desc'],
@@ -29,14 +35,22 @@ Huber_params = [
     ['alg=nesterov_grad_desc'],
 ]
 
+Lasso_params = [
+    ['alg=ista'],
+    ['alg=fista'],
+    ['alg=optista'],
+]
+
 func_driver_map = {
     'Huber': huber_driver,
     'Quad': quad_driver,
+    'Lasso': lasso_driver,
 }
 
 base_dir_map = {
     'Huber': 'pep_outputs/Huber',
     'Quad': 'pep_outputs/Quad',
+    'Lasso': 'pep_outputs/Lasso',
 }
 
 
@@ -75,6 +89,9 @@ def main():
 
         if experiment == 'Huber':
             hydra_tags += Huber_params[job_idx]
+
+        if experiment == 'Lasso':
+            hydra_tags += Lasso_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
 

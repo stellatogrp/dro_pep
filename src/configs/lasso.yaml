@@ -3,19 +3,39 @@ n: 200
 eta: 1
 lambd: 0.01
 
+R: 8.56457 # this is found experimentally from out of sample data
+
 K_min: 1
-K_max: 2
+K_max: 30
 
 seed:
   A: 0
+  out_of_sample: 10
 
 p_A_nonzero: 0.3
 p_xsamp_nonzero: 0.25
-N: 100
+N: 1000
 noise_eps: 0.001
 
-alg: ista  # ista or fista or optista
-dro_obj: expectation  # expectation or cvar
+alg: fista  # ista or fista or optista
+dro_obj: cvar  # expectation or cvar
 pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
 precond_type: average # 'average' or 'max' or 'min'
+
+training:
+  expectation_N: 1000
+  cvar_N: 1000
+num_clusters:
+  expectation: 10
+  cvar: 10
+
+sample_fname: samples.csv
+pep_fname: pep.csv
+dro_fname: dro.csv
+
+eps:
+  log_min: -4
+  log_max: -1
+  logspace_count: 10
+alpha: 0.1

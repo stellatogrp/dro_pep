@@ -139,11 +139,13 @@ def quad_pep_subproblem(cfg, algo, k, obj, return_problem=False):
     if return_problem:
         return problem
 
-    start = time.time()
+    # start = time.time()
     # pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
     pepit_tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
     # pepit_tau = problem.solve(wrapper='mosek')
-    solvetime = time.time() - start
+    # solvetime = time.time() - start
+
+    solvetime = problem.wrapper.prob.solver_stats.solve_time
 
     log.info(pepit_tau)
     return pepit_tau, solvetime
