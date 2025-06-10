@@ -155,6 +155,8 @@ def huber_pep_subproblem(cfg, algo, k, obj, return_problem=False):
     pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
     solvetime = time.time() - start
 
+    # problem.wrapper.prob.solver_stats.solve_time
+
     log.info(pepit_tau)
     return pepit_tau, solvetime
 

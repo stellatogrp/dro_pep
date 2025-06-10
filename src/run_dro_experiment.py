@@ -6,8 +6,14 @@ import sys
 log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_dro
+from experiment_classes.lasso import lasso_dro
 from experiment_classes.quad import quad_dro
 from experiment_classes.simple_quad import simple_quad_dro
+
+
+@hydra.main(version_base='1.2', config_path='configs', config_name='lasso.yaml')
+def lasso_driver(cfg):
+    lasso_dro(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='quad.yaml')
@@ -39,16 +45,22 @@ Huber_params = [
     ['alg=nesterov_grad_desc', 'dro_obj=cvar'],
 ]
 
+Lasso_params = [
+
+]
+
 func_driver_map = {
     'Huber': huber_driver,
     'Quad': quad_driver,
     'SimpleQuad': simple_quad_driver,
+    'Lasso': lasso_driver,
 }
 
 base_dir_map = {
     'Huber': 'dro_outputs/Huber',
     'Quad': 'dro_outputs/Quad',
     'SimpleQuad': 'dro_outputs/SimpleQuad',
+    'Lasso': 'dro_outputs/Lasso',
 }
 
 
@@ -87,6 +99,9 @@ def main():
 
         if experiment == 'Huber':
             hydra_tags += Huber_params[job_idx]
+        
+        if experiment == 'Lasso':
+            hydra_tags += Lasso_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
 

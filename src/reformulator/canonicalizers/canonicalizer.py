@@ -46,6 +46,8 @@ class Canonicalizer(object):
                 self.preconditioner = ( 1/min_sample[0], 1/np.sqrt(min_sample[1]) )
             else:
                 raise ValueError(f'{self.precond_type} is invalid precond_type')
+            print(self.preconditioner)
+            exit(0)
             self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
             self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
 

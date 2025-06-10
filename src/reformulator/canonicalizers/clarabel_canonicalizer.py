@@ -743,6 +743,7 @@ class ClarabelCanonicalizer(Canonicalizer):
 
         settings = clarabel.DefaultSettings()
         settings.verbose = False
+        # settings.verbose = True
         solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
         solution = solver.solve()
         out = {

@@ -13,10 +13,10 @@ from PEPit.tools.expressions_to_matrices import expression_to_matrices
 
 def test_pep():
     problem = PEP()
-    mu = 0.1
+    mu = 0.
     L = 1
-    gamma = 0.5 / L
-    K = 2
+    gamma = 1 / L
+    K = 5
     lambd = 0.1
 
     # Declare a strongly convex smooth function and a closed convex proper function
@@ -56,16 +56,14 @@ def test_pep():
     # Set the performance metric to the distance between x and xs
     # problem.set_performance_metric((x - xs) ** 2)
     # problem.set_performance_metric(func(x0) - func(xs))
-    # problem.set_performance_metric(f[-1] - func(xs))
     problem.set_performance_metric(func(x[-1]) - func(xs))
-
 
     # Solve the PEP
     # pepit_tau = problem.solve(wrapper=wrapper, solver=solver, verbose=pepit_verbose)
 
     # problem.set_initial_condition(x[1] ** 2 <= 9)
-    # problem.set_initial_condition(func(x[2]) <= 7)
-    problem.set_initial_condition(f1.gradient(xs) ** 2 <= 7)
+    # problem.set_initial_condition(func(x[1]) <= 7)
+    # problem.set_initial_condition(f1.gradient(x[1]) ** 2 <= 7)
 
     print(Point.list_of_leaf_points)
 
@@ -79,16 +77,16 @@ def test_pep():
 
     print(pepit_tau)
 
-    A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
-    print(A_obj, b_obj)
-    print(A_obj.shape, b_obj.shape)
+    # A_obj, b_obj, _ = expression_to_matrices(problem._list_of_constraints_sent_to_wrapper[0].expression)
+    # print(A_obj, b_obj)
+    # print(A_obj.shape, b_obj.shape)
 
-    print(len(problem._list_of_constraints_sent_to_wrapper))
-    for constr in problem._list_of_constraints_sent_to_wrapper[1:4]:
-        A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
-        print(constr.equality_or_inequality)
+    # print(len(problem._list_of_constraints_sent_to_wrapper))
+    # for constr in problem._list_of_constraints_sent_to_wrapper[1:4]:
+    #     A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
+    #     print(constr.equality_or_inequality)
 
-        print(A_cons, b_cons, c_cons)
+    #     print(A_cons, b_cons, c_cons)
 
 
 
