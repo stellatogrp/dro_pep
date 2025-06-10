@@ -166,31 +166,6 @@ def lasso_samples(cfg):
 
 def lasso_pep(cfg):
     log.info(cfg)
-    # if cfg.alg == 'grad_desc':
-    #     algo = gradient_descent
-    # elif cfg.alg == 'nesterov_grad_desc':
-    #     algo = nesterov_accelerated_gradient
-    # else:
-    #     log.info('invalid alg in cfg')
-    #     exit(0)
-
-    # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
-
-    # res = []
-
-    # huber_pep_subproblem(cfg, algo, 1, objs[0])
-    # for k in range(cfg.K_min, cfg.K_max + 1):
-    #     for obj in objs:
-    #         tau, solvetime = huber_pep_subproblem(cfg, algo, k, obj)
-
-    #         res.append(pd.Series({
-    #             'K': k,
-    #             'obj': obj,
-    #             'val': tau,
-    #             'solvetime': solvetime,
-    #         }))
-    #         df = pd.DataFrame(res)
-    #         df.to_csv(cfg.pep_fname, index=False)
 
     obj = 'obj_val'
 
@@ -416,37 +391,100 @@ def lasso_dro(cfg):
         log.info('invalid dro obj')
         exit(0)
 
-    K = 5
+    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
+    alpha = cfg.alpha
     x0 = np.zeros(cfg.n)
 
-    problem = pep_subproblem(cfg, K, mu, L, R, return_problem=True, alg=cfg.alg)
-    tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
-    log.info(f'----pep problem solved at k={K} with tau={tau}----')
+    np.random.seed(cfg.seed.in_sample)
 
-    G, F = single_trajectory(cfg, K, A, b_test, x_test_opt, x0, ATA_lu, ATA_piv, L, alg=cfg.alg)
-    # print(G, F)
-    # for constr in problem._list_of_constraints_sent_to_wrapper[1:]:
-    #     A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
-    #     print('---')
-    #     print(A_cons, b_cons, c_cons)
-    #     print(constr.equality_or_inequality)
-    #     print(np.trace(A_cons @ G) + b_cons @ F + c_cons)
+    sample_b = []
+    sample_xopt = []
+    for _ in trange(N):
+        b_samp = generate_single_b(cfg, A)
+        xopt_samp, _ = solve_single_cvxpy(cfg, A, b_samp)
 
-    samples = [(G, F)]
-    DR = DROReformulator(
-        problem,
-        samples,
-        cfg.dro_obj,
-        'clarabel',
-        precond=True,
-        precond_type=cfg.precond_type,
-        mro_clusters=None,
-        obj_vec_cutoff=2,
-    )
+        sample_b.append(b_samp)
+        sample_xopt.append(xopt_samp)
 
-    eps = 1e-3
-    alpha = 0.1
+    res = []
+    for k in range(cfg.K_min, cfg.K_max + 1):
+        samples = []
+        problem = pep_subproblem(cfg, k, mu, L, R, return_problem=True, alg=cfg.alg)
+        problem.solve(wrapper='cvxpy', solver='MOSEK')
+        log.info(f'----pep problem solved at k={k}----')
 
-    DR.set_params(eps=eps, alpha=alpha)
-    out = DR.solve()
-    log.info(out['obj'])
+        for i in range(N):
+            b_samp = sample_b[i]
+            xopt_samp = sample_xopt[i]
+
+            G, F = single_trajectory(cfg, k, A, b_test, x_test_opt, x0, ATA_lu, ATA_piv, L, alg=cfg.alg)
+            samples.append((G, F))
+
+        DR = DROReformulator(
+            problem,
+            samples,
+            dro_obj,
+            'clarabel',
+            precond=True,
+            precond_type=cfg.precond_type,
+            mro_clusters=num_clusters,
+            obj_vec_cutoff=2,
+        )
+        for eps_idx, eps in enumerate(eps_vals):
+            log.info(eps_idx)
+            log.info(eps)
+
+            DR.set_params(eps=eps, alpha=alpha)
+            out = DR.solve()
+            if num_clusters is not None:
+                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            else:
+                dro_feas = out['obj']
+
+            res.append(pd.Series({
+                'K': k,
+                'eps_idx': eps_idx,
+                'eps': eps,
+                'alpha': alpha,
+                'mro_sol': out['obj'],
+                'solvetime': out['solvetime'],
+                'dro_feas_sol': dro_feas,
+            }))
+        
+            df = pd.DataFrame(res)
+            df.to_csv(cfg.dro_fname, index=False)
+
+    # K = 5
+    # x0 = np.zeros(cfg.n)
+
+    # problem = pep_subproblem(cfg, K, mu, L, R, return_problem=True, alg=cfg.alg)
+    # tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
+    # log.info(f'----pep problem solved at k={K} with tau={tau}----')
+
+    # G, F = single_trajectory(cfg, K, A, b_test, x_test_opt, x0, ATA_lu, ATA_piv, L, alg=cfg.alg)
+    # # print(G, F)
+    # # for constr in problem._list_of_constraints_sent_to_wrapper[1:]:
+    # #     A_cons, b_cons, c_cons = expression_to_matrices(constr.expression)
+    # #     print('---')
+    # #     print(A_cons, b_cons, c_cons)
+    # #     print(constr.equality_or_inequality)
+    # #     print(np.trace(A_cons @ G) + b_cons @ F + c_cons)
+
+    # samples = [(G, F)]
+    # DR = DROReformulator(
+    #     problem,
+    #     samples,
+    #     cfg.dro_obj,
+    #     'clarabel',
+    #     precond=True,
+    #     precond_type=cfg.precond_type,
+    #     mro_clusters=None,
+    #     obj_vec_cutoff=2,
+    # )
+
+    # eps = 1e-3
+    # alpha = 0.1
+
+    # DR.set_params(eps=eps, alpha=alpha)
+    # out = DR.solve()
+    # log.info(out['obj'])
