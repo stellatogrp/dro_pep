@@ -46,7 +46,12 @@ Huber_params = [
 ]
 
 Lasso_params = [
-
+    ['alg=ista', 'dro_obj=expectation'],
+    ['alg=ista', 'dro_obj=cvar'],
+    ['alg=fista', 'dro_obj=expectation'],
+    ['alg=fista', 'dro_obj=cvar'],
+    ['alg=optista', 'dro_obj=expectation'],
+    ['alg=optista', 'dro_obj=cvar'],
 ]
 
 func_driver_map = {
