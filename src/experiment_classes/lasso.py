@@ -196,7 +196,7 @@ def lasso_dro(cfg):
     x_test_opt, R = solve_single_cvxpy(cfg, A, b_test)
     log.info(f'radius: {R}')
 
-    K = 5
+    K = 10
     x0 = np.zeros(cfg.n)
 
     problem = ista_pep_subproblem(cfg, K, mu, L, R, return_problem=True)
@@ -218,7 +218,7 @@ def lasso_dro(cfg):
         samples,
         cfg.dro_obj,
         'clarabel',
-        precond=False,
+        precond=True,
         precond_type=cfg.precond_type,
         mro_clusters=None,
         obj_vec_cutoff=2,
