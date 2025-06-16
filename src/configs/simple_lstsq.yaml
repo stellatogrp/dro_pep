@@ -1,11 +1,12 @@
-m: 50
-n: 100
+m: 100
+n: 200
+L: 1
 
 seed: 0
 p_A_nonzero: 1.0
 p_xsamp_nonzero: 0.25
-N: 100
+N: 1000
 noise_eps: 0.001
 
-K_max: 200
-gamma: 1  # if 'opt' then use 2 / (mu + L) otherwise this value / L
+K_max: 100
+gamma: 1.  # if 'opt' then use 2 / (mu + L) otherwise this value / L

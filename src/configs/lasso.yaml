@@ -18,7 +18,7 @@ p_xsamp_nonzero: 0.25
 N: 1000
 noise_eps: 0.001
 
-alg: ista  # ista or fista or optista
+alg: optista  # ista or fista or optista
 dro_obj: expectation  # expectation or cvar
 pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
