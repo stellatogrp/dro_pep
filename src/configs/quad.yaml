@@ -1,7 +1,7 @@
 mu: 0.
-L: 5
+L: 1
 eta: 0.5  # final step size = eta / L 
-dim: 200
+dim: 100
 R: 5
 
 K_min: 1
@@ -23,15 +23,15 @@ training:
   expectation_N: 1000
   cvar_N: 1000
 num_clusters:
-  expectation: 10
-  cvar: 10
+  expectation: 20
+  cvar: 20
 
 sample_fname: samples.csv
 pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -3
-  log_max: 0
-  logspace_count: 20
+  log_min: -4
+  log_max: -2
+  logspace_count: 7
 alpha: 0.1

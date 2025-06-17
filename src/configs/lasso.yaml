@@ -6,7 +6,7 @@ lambd: 0.01
 R: 8.56457 # this is found experimentally from out of sample data
 
 K_min: 1
-K_max: 40
+K_max: 30
 
 seed:
   A: 0
@@ -28,8 +28,8 @@ training:
   expectation_N: 1000
   cvar_N: 1000
 num_clusters:
-  expectation: 10
-  cvar: 10
+  expectation: 20
+  cvar: 20
 
 sample_fname: samples.csv
 pep_fname: pep.csv
@@ -37,6 +37,6 @@ dro_fname: dro.csv
 
 eps:
   log_min: -4
-  log_max: -1
-  logspace_count: 10
+  log_max: -2
+  logspace_count: 7
 alpha: 0.1
