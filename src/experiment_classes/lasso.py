@@ -529,6 +529,7 @@ def lasso_dro(cfg):
         sample_xopt.append(xopt_samp)
 
     res = []
+    sample_df_list = []
     for k in range(cfg.K_min, cfg.K_max + 1):
         samples = []
         problem = pep_subproblem(cfg, k, mu, L, R, return_problem=True, alg=cfg.alg)
@@ -553,6 +554,13 @@ def lasso_dro(cfg):
             G, F = single_trajectory(cfg, k, A, b_samp, xopt_samp, x0, ATA_lu, ATA_piv, L, alg=cfg.alg)
             samples.append((G, F))
             # log.info((G, F))
+            sample_df_list.append(pd.Series({
+                'i': i,
+                'K': k,
+                'obj_val': F[-1] - F[0],
+            }))
+        sample_df = pd.DataFrame(sample_df_list)
+        sample_df.to_csv('samples.csv', index=False)
 
         DR = DROReformulator(
             problem,

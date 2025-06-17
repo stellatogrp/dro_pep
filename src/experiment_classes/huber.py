@@ -102,7 +102,8 @@ def huber_pep(cfg):
         log.info('invalid alg in cfg')
         exit(0)
 
-    objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
+    # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
+    objs = ['obj_val', 'grad_sq_norm']
 
     res = []
 

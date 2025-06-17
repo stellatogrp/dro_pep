@@ -25,7 +25,7 @@ pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 precond_type: average # 'average' or 'max' or 'min'
 
 training:
-  expectation_N: 1000
+  expectation_N: 100
   cvar_N: 1000
 num_clusters:
   expectation: 20

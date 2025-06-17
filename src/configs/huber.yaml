@@ -18,7 +18,7 @@ seed:
   full_samples: 0
   train: 101
 
-sample_N: 1000
+sample_N: 10000
 
 training:
   expectation_N: 1000
