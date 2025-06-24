@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 25
-cvar_K_max = 25
+exp_K_max = 40
+cvar_K_max = 40
 
 num_eps_vals = 5
 
@@ -20,7 +20,7 @@ groups = 100
 
 def compute_exp_prob(samples, pep, dro, k):
     dro_bound = dro[dro['K'] == k]['dro_feas_sol'].iloc[0]
-    count = 0 
+    count = 0
     for g in range(groups):
         idx_low = g * num_per_group
         idx_high = g * num_per_group + num_per_group
@@ -65,22 +65,28 @@ def compute_empirical_cvar(samples, k, alpha=0.1):
 
 
 # precond = 'precond_avg'
+# precond = 'precond_max'
 
-GD_samples = pd.read_csv('data/samples/grad_desc_1_50/samples.csv')
-NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_50/samples.csv')
+GD_samples = pd.read_csv('test/samples/grad_desc/samples.csv')
+NGD_samples = pd.read_csv('test/samples/nesterov_grad_desc/samples.csv')
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_50/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_50/pep.csv')
 
-# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_40/dro.csv')
-# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_40/dro.csv')
-# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_exp_1_40/dro.csv')
-# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_cvar_1_40/dro.csv')
+# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_50/dro.csv')
+# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_50/dro.csv')
+# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_exp_1_50/dro.csv')
+# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_cvar_1_50/dro.csv')
 
-GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_40/dro.csv')
-GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_40/dro.csv')
-NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_exp_1_40/dro.csv')
-NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_cvar_1_40/dro.csv')
+# GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_50/dro.csv')
+# GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_50/dro.csv')
+# NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_exp_1_50/dro.csv')
+# NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_cvar_1_50/dro.csv')
+
+GD_exp_dro = pd.read_csv(f'test/dro/grad_desc_exp_1_40/dro.csv')
+GD_cvar_dro = pd.read_csv(f'test/dro/grad_desc_cvar_1_40/dro.csv')
+NGD_exp_dro = pd.read_csv(f'test/dro/nesterov_grad_desc_exp_1_40/dro.csv')
+NGD_cvar_dro = pd.read_csv(f'test/dro/nesterov_grad_desc_cvar_1_40/dro.csv')
 
 
 def main_bounds():
@@ -90,9 +96,9 @@ def main_bounds():
     NGD_color = 'tab:green'
 
     GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 0]
-    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 0]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 2]
     NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 0]
-    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 0]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 2]
 
     GD_worst_k = []
     NGD_worst_k = []
@@ -146,21 +152,19 @@ def main_bounds():
     ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Sample GD', linestyle='--', color=GD_color)
     ax[2].plot(range(1, exp_K_max + 1), GD_exp_k, label='Sample', linestyle='--', color=GD_color)
     ax[2].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Exp', color=GD_color)
-    # ax[1].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['mro_sol'][:exp_K_max], label='Exp', color=GD_color)
 
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='Sample', linestyle='--', color=GD_color)
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=GD_color)
-    # # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
+    # ax[2].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar', color=GD_color)
 
     ax[0].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='AGD', color=NGD_color)
     ax[0].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Sample AGD', linestyle='--', color=NGD_color)
     ax[2].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Sample', linestyle='--', color=NGD_color)
     ax[2].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Exp', color=NGD_color)
-    # ax[1].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['mro_sol'][:exp_K_max], label='Exp', color=NGD_color)
 
     ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='Sample', linestyle='--', color=NGD_color)
     ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=NGD_color)
-    # ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
+    # ax[2].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
 
     for axi in ax:
         box = axi.get_position()
@@ -171,10 +175,10 @@ def main_bounds():
     handles, labels = ax[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncols=4)
 
-    plt.suptitle('Quadratic Minimization, Objective Value')
-
-    plt.show()
-    # plt.savefig(f'quad_obj_val.pdf')
+    plt.suptitle('Huber Minimization')
+    # plt.tight_layout()
+    # plt.show()
+    plt.savefig(f'huber.pdf')
 
 
 if __name__ == '__main__':
