@@ -30,6 +30,7 @@ sample_outputs/
 dro_outputs/
 data/
 old_data/
+test/
 
 ## Bibliography auxiliary files (bibtex/biblatex/biber):
 *.bbl

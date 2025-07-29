@@ -12,7 +12,7 @@ plt.rcParams.update({
 
 
 def main():
-    avg_color = 'tab:purple'
+    avg_color = 'tab:blue'
     pep_color = 'tab:green'
     sm_color = 'tab:red'
 
@@ -32,7 +32,7 @@ def main():
     ax.set_xlabel(r'$K$')
 
     average = np.mean(samples, axis=0)
-    quantiles = np.percentile(samples, 99, axis=0)
+    quantiles = np.percentile(samples, 90, axis=0)
     sample_max = np.max(samples, axis=0)
 
     plt.title('Projected Gradient Descent for Box-constrained Least Squares')
@@ -40,9 +40,9 @@ def main():
     K_max = 100
     K_vals = range(1, K_max+1)
 
-    plt.plot(K_vals, average, label='Sample average', color=avg_color)
-    # plt.plot(K_vals, quantiles, label='Sample 99th percentile')
-    plt.plot(K_vals, sample_max, label='Sample worst-case', color=sm_color)
+    plt.plot(K_vals, average, label='Sample average', color=avg_color, linestyle='dashed')
+    plt.plot(K_vals, quantiles, label='Sample 90th percentile', color='tab:red', linestyle='dotted')
+    # plt.plot(K_vals, sample_max, label='Sample worst-case', color=sm_color)
     plt.plot(K_vals, theory, label='Theoretical worst-case', color=pep_color)
     # plt.plot(K_vals, scaled_theory)
     plt.legend()

@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 25
-cvar_K_max = 25
+exp_K_max = 35
+cvar_K_max = 35
 
 num_eps_vals = 5
 
