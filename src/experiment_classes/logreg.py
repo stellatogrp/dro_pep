@@ -9,6 +9,9 @@ class LogReg(object):
         print(full_y)
         print(full_X.shape, full_y.shape)
 
+    def sample(self):
+        pass
+
 
 def main():
     lr = LogReg()
