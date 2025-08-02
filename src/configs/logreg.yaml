@@ -1,0 +1,38 @@
+sample_frac: 0.8
+delta: 0.1
+R: 1
+eta: 0.05
+
+L: 3.6062264877007264  # FILL THIS IN ONCE KNOWN
+
+K_min: 1
+K_max: 5
+
+alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
+dro_obj: cvar  # expectation or cvar
+dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
+
+precond_type: average # 'average' or 'max' or 'min'
+
+seed:
+  full_samples: 0
+  train: 101
+
+sample_N: 1000
+
+training:
+  expectation_N: 100
+  cvar_N: 100
+num_clusters:
+  expectation: 20
+  cvar: 20
+
+sample_fname: samples.csv
+pep_fname: pep.csv
+dro_fname: dro.csv
+
+eps:
+  log_min: -4
+  log_max: -2
+  logspace_count: 7
+alpha: 0.1

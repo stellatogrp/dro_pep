@@ -48,10 +48,10 @@ class Canonicalizer(object):
                 raise ValueError(f'{self.precond_type} is invalid precond_type')
             
             for i in range(self.A_obj.shape[0]):
-                if self.preconditioner[0][i] == np.inf:
+                if self.preconditioner[0][i] == np.inf or np.isnan(self.preconditioner[0][i]):
                     self.preconditioner[0][i] = 1.0
             for i in range(self.b_obj.shape[0]):
-                if self.preconditioner[1][i] == np.inf:
+                if self.preconditioner[1][i] == np.inf or np.isnan(self.preconditioner[1][i]):
                     self.preconditioner[1][i] = 1.0
                 # self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
                 # self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
@@ -146,6 +146,7 @@ class Canonicalizer(object):
         precondinvF = np.diag(precondinvF)
 
         X = []
+
         for samp in samples:
             G, F = samp
             # X.append(np.hstack([symm_vectorize(G), F]))

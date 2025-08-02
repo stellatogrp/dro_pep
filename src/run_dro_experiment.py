@@ -7,6 +7,7 @@ log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_dro
 from experiment_classes.lasso import lasso_dro
+from experiment_classes.logreg import logreg_dro
 from experiment_classes.quad import quad_dro
 from experiment_classes.simple_quad import simple_quad_dro
 
@@ -14,6 +15,11 @@ from experiment_classes.simple_quad import simple_quad_dro
 @hydra.main(version_base='1.2', config_path='configs', config_name='lasso.yaml')
 def lasso_driver(cfg):
     lasso_dro(cfg)
+
+
+@hydra.main(version_base='1.2', config_path='configs', config_name='logreg.yaml')
+def logreg_driver(cfg):
+    logreg_dro(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='quad.yaml')
@@ -58,11 +64,19 @@ Lasso_params = [
     ['alg=optista', 'dro_obj=cvar'],
 ]
 
+LogReg_params = [
+    ['alg=grad_desc', 'dro_obj=expectation'],
+    ['alg=nesterov_grad_desc', 'dro_obj=expectation'],
+    ['alg=grad_desc', 'dro_obj=cvar'],
+    ['alg=nesterov_grad_desc', 'dro_obj=cvar'],
+]
+
 func_driver_map = {
     'Huber': huber_driver,
     'Quad': quad_driver,
     'SimpleQuad': simple_quad_driver,
     'Lasso': lasso_driver,
+    'LogReg': logreg_driver,
 }
 
 base_dir_map = {
@@ -70,6 +84,7 @@ base_dir_map = {
     'Quad': 'dro_outputs/Quad',
     'SimpleQuad': 'dro_outputs/SimpleQuad',
     'Lasso': 'dro_outputs/Lasso',
+    'LogReg': 'dro_outputs/LogReg',
 }
 
 
@@ -111,6 +126,9 @@ def main():
         
         if experiment == 'Lasso':
             hydra_tags += Lasso_params[job_idx]
+
+        if experiment == 'LogReg':
+            hydra_tags += LogReg_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
 

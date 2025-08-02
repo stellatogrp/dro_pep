@@ -1,17 +1,37 @@
 import cvxpy as cp
 import numpy as np
+import pandas as pd
+import logging
+import time
+from tqdm import trange
 from sklearn.datasets import load_breast_cancer
+from .utils import gradient_descent, nesterov_accelerated_gradient, generate_trajectories
+from PEPit import PEP
+from PEPit.functions import SmoothStronglyConvexFunction
+from reformulator.dro_reformulator import DROReformulator
+
+log = logging.getLogger(__name__)
+
+
+def sigmoid(z):
+    return 1/(1 + np.exp(-z))
 
 
 class LogReg(object):
 
-    def __init__(self):
+    def __init__(self, sample_frac=0.8, delta=0.1, R=1):
+        self.delta = delta
+
         full_X, full_y = load_breast_cancer(return_X_y=True)
-        # print(full_X)
-        # print(full_y)
-        # print(full_X.shape, full_y.shape)
         self.full_X = full_X
         self.full_y = full_y
+
+        self.samp_X, self.samp_y = self.sample_normalized(sample_frac=sample_frac)
+        self.solve_optimal_values()
+        self.compute_mu_L()
+
+        self.x0 = np.zeros(self.samp_X.shape[1])
+        self.x0[0] = R
 
     def sample(self, sample_frac=0.8):
         X = self.full_X
@@ -32,33 +52,287 @@ class LogReg(object):
         X_samp_with_ones = np.hstack((X_samp_normalized, ones_column))
         return X_samp_with_ones, y_samp
 
+    def solve_optimal_values(self):
+        X, y = self.samp_X, self.samp_y
+        m, n = X.shape
+        beta = cp.Variable(n)
+        log_likelihood = cp.sum(
+            cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
+        )
+        obj = - 1 / m * log_likelihood + 0.5 * self.delta * cp.sum_squares(beta)
+        problem = cp.Problem(cp.Minimize(obj))
+        problem.solve()
+
+        self.x_opt = beta.value
+        self.f_opt = problem.value
+
+    def compute_mu_L(self):
+        X = self.samp_X
+        m = X.shape[0]
+
+        XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
+        lambd_max = np.max(XTX_eigvals)
+        L = lambd_max / (4 * m) + self.delta
+        mu = self.delta
+        
+        self.mu, self.L = mu, L
+
+    def f(self, z):
+        X, y = self.samp_X, self.samp_y
+        m = X.shape[0]
+        z = z + self.x_opt
+        log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
+        return - 1 / m * log_likeli + 0.5 * self.delta * z.T @ z - self.f_opt
+
+    def grad(self, z):
+        X, y = self.samp_X, self.samp_y
+        m = X.shape[0]
+        z = z + self.x_opt
+        return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
+
+
+def logreg_samples(cfg):
+    log.info(cfg)
+    log.info(cfg)
+    np.random.seed(cfg.seed.full_samples)
+
+    df = []
+
+    params = {
+        't': cfg.eta, # NOT cfg.eta / cfg.L
+        'K_max': cfg.K_max,
+    }
+
+    if cfg.alg == 'grad_desc':
+        algo = gradient_descent
+    elif cfg.alg == 'nesterov_grad_desc':
+        algo = nesterov_accelerated_gradient
+    else:
+        log.info('invalid alg in cfg')
+        exit(0)
+
+    L_vals = []
+
+    for i in trange(cfg.sample_N):
+        lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        x0 = lr.x0
+        # xs = lr.x_opt
+        # fs = lr.f_opt
+        xs = np.zeros(lr.samp_X.shape[1])
+        fs = 0
+
+        L_vals.append(lr.L)
+
+        x_stack, g_stack, f_stack = algo(lr.f, lr.grad, x0, xs, params)
+        # stacks: [xs, x0, ..., xK]
+        for k in range(1, cfg.K_max + 1):
+            df.append(pd.Series({
+                'i': i,
+                'K': k,
+                'obj_val': f_stack[k+1] - fs,
+                'grad_sq_norm': np.linalg.norm(g_stack[k+1]) ** 2,
+                'opt_dist_sq_norm': np.linalg.norm(x_stack[k+1] - xs) ** 2,
+            }))
+
+        if i % 1000 == 0:
+            log.info(f'saving at i={i}')
+            df_to_save = pd.DataFrame(df)
+            df_to_save.to_csv(cfg.sample_fname, index=False)
+
+    df_to_save = pd.DataFrame(df)
+    df_to_save.to_csv(cfg.sample_fname, index=False)
+
+    log.info(f'mu:{cfg.delta}')
+    log.info(f'L:{np.max(L_vals)}')
+
+
+def logreg_pep(cfg):
+    log.info(cfg)
+    if cfg.alg == 'grad_desc':
+        algo = gradient_descent
+    elif cfg.alg == 'nesterov_grad_desc':
+        algo = nesterov_accelerated_gradient
+    else:
+        log.info('invalid alg in cfg')
+        exit(0)
+
+    # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
+    objs = ['obj_val', 'grad_sq_norm']
+
+    mu = cfg.delta
+    L = cfg.L
+
+    res = []
+    for k in range(cfg.K_min, cfg.K_max + 1):
+        for obj in objs:
+            tau, solvetime = logreg_pep_subproblem(cfg, mu, L, algo, k, obj)
+
+            res.append(pd.Series({
+                'K': k,
+                'obj': obj,
+                'val': tau,
+                'solvetime': solvetime,
+            }))
+            df = pd.DataFrame(res)
+            df.to_csv(cfg.pep_fname, index=False)
+
+
+def logreg_pep_subproblem(cfg, mu, L, algo, k, obj, return_problem=False):
+    problem = PEP()
+    func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
+    xs = func.stationary_point()
+    fs = func(xs)
+    x0 = problem.set_initial_point()
+
+    params = {
+        't': cfg.eta, # NOT cfg.eta / cfg.L
+        'K_max': k,
+    }
+
+    log.info(params)
+
+    problem.set_initial_condition((x0 - xs) ** 2 <= cfg.R ** 2)
+    x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
+
+    # problem.set_performance_metric(func(x) - fs)
+    if obj == 'obj_val':
+        problem.set_performance_metric(f_stack[-1] - fs)
+    elif obj == 'grad_sq_norm':
+        problem.set_performance_metric((g_stack[-1]) ** 2)
+    elif obj == 'opt_dist_sq_norm':
+        problem.set_performance_metric((x_stack[-1] - xs) ** 2)
+    else:
+        log.info('should be unreachable code')
+        exit(0)
+
+    if return_problem:
+        return problem
+
+    # start = time.time()
+    pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
+    # solvetime = time.time() - start
+
+    solvetime = problem.wrapper.prob.solver_stats.solve_time
+
+    log.info(pepit_tau)
+    return pepit_tau, solvetime
+
+
+def logreg_dro(cfg):
+    log.info(cfg)
+
+    if cfg.alg == 'grad_desc':
+        algo = gradient_descent
+    elif cfg.alg == 'nesterov_grad_desc':
+        algo = nesterov_accelerated_gradient
+    else:
+        log.info('invalid alg in cfg')
+        exit(0)
+
+    if cfg.dro_obj == 'expectation':
+        N = cfg.training.expectation_N
+        num_clusters = cfg.num_clusters.expectation
+        dro_obj = 'expectation'
+    elif cfg.dro_obj == 'cvar':
+        N = cfg.training.cvar_N
+        num_clusters = cfg.num_clusters.cvar
+        dro_obj = 'cvar'
+    else:
+        log.info('invalid dro obj')
+        exit(0)
+
+    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
+    alpha = cfg.alpha
+
+    np.random.seed(cfg.seed.train)
+    logreg_funcs = []
+    for i in trange(N):
+        lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        logreg_funcs.append(lr)
+    
+    res = []
+
+    for k in range(cfg.K_min, cfg.K_max + 1):
+        samples = []
+        problem = logreg_pep_subproblem(cfg, cfg.delta, cfg.L, algo, k, cfg.dro_pep_obj, return_problem=True)
+        problem.solve(wrapper='cvxpy', solver='CLARABEL')
+        log.info(f'----pep problem solved at k={k}----')
+
+        for i in range(N):
+            lr = logreg_funcs[i]
+            x0 = lr.x0
+            # xs = lr.x_opt
+            # fs = lr.f_opt
+            xs = np.zeros(lr.samp_X.shape[1])
+            fs = 0
+
+            params = {
+                't': cfg.eta, # NOT cfg.eta / cfg.L
+                'K_max': k,
+            }
+
+            G, F = generate_trajectories(lr.f, lr.grad, x0, xs, fs, algo, params)
+            # log.info(F.shape)
+            samples.append((G, F))
+
+        DR = DROReformulator(
+            problem,
+            samples,
+            dro_obj,
+            'clarabel',
+            precond=True,
+            precond_type=cfg.precond_type,
+            mro_clusters=num_clusters,
+        )
+
+        for eps_idx, eps in enumerate(eps_vals):
+            log.info(eps_idx)
+            log.info(eps)
+
+            DR.set_params(eps=eps, alpha=alpha)
+            out = DR.solve()
+            if num_clusters is not None:
+                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            else:
+                dro_feas = out['obj']
+
+            res.append(pd.Series({
+                'K': k,
+                'eps_idx': eps_idx,
+                'eps': eps,
+                'alpha': alpha,
+                'mro_sol': out['obj'],
+                'solvetime': out['solvetime'],
+                'dro_feas_sol': dro_feas,
+            }))
+        
+            df = pd.DataFrame(res)
+            df.to_csv(cfg.dro_fname, index=False)
+
 
 def main():
     np.random.seed(0)
-    lr = LogReg()
-
-    X, y = lr.sample_normalized()
-    # print(X_samp, y_samp)
-    # print(X_samp.shape, y_samp.shape)
 
     delta = 0.1
+
+    lr = LogReg(delta=delta)
+    # X, y = lr.sample_normalized()
+    X, y = lr.samp_X, lr.samp_y
 
     m, n = X.shape
     beta = cp.Variable(n)
     log_likelihood = cp.sum(
         cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
     )
-    obj = - 1/ m * log_likelihood + 0.5 * delta * cp.sum_squares(beta)
+    obj = - 1 / m * log_likelihood + 0.5 * delta * cp.sum_squares(beta)
     problem = cp.Problem(cp.Minimize(obj))
     problem.solve()
     print(beta.value)
 
-    def sigmoid(z):
-        return 1/(1 + np.exp(-z))
-
     def f(z):
-        log_likeli = np.sum(np.multiply(y, X @ z) - np.log1p(np.exp(X @ z)))
-        return - 1/ m * log_likeli + 0.5 * delta * z.T @ z
+        # log_likeli = np.sum(np.multiply(y, X @ z) - np.log1p(np.exp(X @ z)))
+        log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
+        return - 1 / m * log_likeli + 0.5 * delta * z.T @ z
 
     def grad(z):
         return 1 / m * X.T @ (sigmoid(X @ z) - y) + delta * z
@@ -79,6 +353,16 @@ def main():
     print(problem.value)
     print(f(beta.value))
 
+    # f(x) -> f(x + x^\star) - f^\star
+
+    print('--------')
+
+    beta_k = np.ones(n)
+    for _ in range(1000):
+        beta_k = beta_k - 0.1 * lr.grad(beta_k)
+    print(beta_k)
+    print(lr.f(beta_k))
+    print(lr.grad(beta_k))
 
 if __name__ == '__main__':
     main()
