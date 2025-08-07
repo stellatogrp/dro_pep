@@ -187,6 +187,7 @@ def quad_dro(cfg):
         quad_funcs.append(q)
     
     res = []
+    sample_df_list = []
 
     for k in range(cfg.K_min, cfg.K_max + 1):
         samples = []
@@ -219,6 +220,14 @@ def quad_dro(cfg):
             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
             # log.info(F.shape)
             samples.append((G, F))
+            sample_df_list.append(pd.Series({
+                'i': i,
+                'K': k,
+                'obj_val': F[-1] - F[0],
+                'grad_sq_norm': G[-1, -1],
+            }))
+        sample_df = pd.DataFrame(sample_df_list)
+        sample_df.to_csv('samples.csv', index=False)
         # log.info(samples)
 
         DR = DROReformulator(
@@ -237,7 +246,11 @@ def quad_dro(cfg):
 
             DR.set_params(eps=eps, alpha=alpha)
             out = DR.solve()
-            dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            # dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            if num_clusters is not None:
+                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+            else:
+                dro_feas = out['obj']
 
             res.append(pd.Series({
                 'K': k,

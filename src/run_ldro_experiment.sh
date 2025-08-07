@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem-per-cpu=80G
-#SBATCH --time=02-23:59:59
+#SBATCH --time=01-23:59:59
 #SBATCH --array=0-5
 #SBATCH -o /scratch/gpfs/vranjan/dro_pep_out/Lasso/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
