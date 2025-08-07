@@ -4,7 +4,7 @@ import logging
 import time
 from tqdm import trange
 
-from .utils import generate_P_bounded_mu_L, gradient_descent, nesterov_accelerated_gradient, generate_trajectories
+from .utils import generate_P_bounded_mu_L, gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
@@ -45,6 +45,9 @@ class Huber(object):
             return Q @ x
         else:
             return (delta / bound) * Q @ x
+
+    def sample_init_point(self):
+        return sample_x0_centered_disk(self.dim, self.R)
 
 
 def huber_samples(cfg):

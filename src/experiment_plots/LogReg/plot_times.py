@@ -7,15 +7,18 @@ plt.rcParams.update({
     "font.family": "serif",
     # "font.sans-serif": ["Helvetica Neue"],
     "font.size": 14,
-    "figure.figsize": (10, 6),
+    "figure.figsize": (12, 6),
 })
+
+exp_K_max = 40
+cvar_K_max = 40
 
 pep_K_max = 40
 exp_K_max = 40
 cvar_K_max = 40
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_50/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_50/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')
 
 GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_40/dro.csv')
 GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_40/dro.csv')
@@ -34,8 +37,6 @@ def plot_times():
     GD_cvar_times = GD_cvar_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
     NGD_exp_times = NGD_exp_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
     NGD_cvar_times = NGD_cvar_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
-
-    # ax[0].legend()
 
     fig, ax = plt.subplots(1, 3)
 
@@ -84,11 +85,11 @@ def plot_times():
     handles, labels = ax[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncols=4)
 
-    plt.suptitle('Huber Minimization, Solve times')
+    plt.suptitle('Logistic Regression Minimization, Solve times')
 
     # plt.show()
 
-    plt.savefig('huber_times.pdf')
+    plt.savefig('logreg_times.pdf')
 
 
 if __name__ == '__main__':

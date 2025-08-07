@@ -132,3 +132,8 @@ def generate_trajectories(f, g, x0, xs, fs, algorithm, params):
 #         samples.append((G_half.T@G_half, F))
     
 #     return samples
+
+def sample_x0_centered_disk(n, R):
+    x = np.random.normal(0, 1, n)
+    dist = np.random.uniform(0, 1) ** (1 / n)
+    return R * dist * x

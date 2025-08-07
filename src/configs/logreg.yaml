@@ -6,9 +6,9 @@ eta: 0.05
 L: 3.6062264877007264  # FILL THIS IN ONCE KNOWN
 
 K_min: 1
-K_max: 5
+K_max: 40
 
-alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
+alg: grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
