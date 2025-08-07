@@ -71,7 +71,8 @@ def huber_samples(cfg):
 
     for i in trange(cfg.sample_N):
         h = Huber(cfg.dim, mu=cfg.mu, L=cfg.L, delta=cfg.delta, R=cfg.R)
-        x0 = h.x0
+        # x0 = h.x0
+        x0 = h.sample_init_point()
         xs = h.x_star
         fs = h.f_star
 
@@ -220,7 +221,8 @@ def huber_dro(cfg):
 
         for i in range(N):
             h = huber_funcs[i]
-            x0 = h.x0
+            # x0 = h.x0
+            x0 = h.sample_init_point()
             xs = h.x_star
             fs = h.f_star
 
@@ -275,15 +277,6 @@ def main():
     L = 10
     delta = 1
     h = Huber(dim, L=L, delta=delta, R=10)
-    print(h.x0)
-    print(h.Q)
-    print(np.linalg.eigvals(h.Q))
-
-    # x_test = .5 * np.random.uniform(size=(dim,))
-    # print(np.linalg.norm(x_test))
-    # print(h.f(x_test))
-    # print(.5 * x_test.T @ h.Q @ x_test)
-    # print(h.delta * (np.sqrt(x_test.T @ h.Q @ x_test) - .5 * h.delta))
     x_test = h.x0
 
     K = 100
