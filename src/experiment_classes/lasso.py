@@ -7,6 +7,7 @@ import time
 from tqdm import trange
 
 # from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories
+from .utils import sample_x0_centered_disk
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction, ConvexLipschitzFunction, ConvexFunction
 from PEPit.primitive_steps import proximal_step

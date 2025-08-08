@@ -4,7 +4,7 @@ import logging
 import time
 from tqdm import trange
 
-from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories
+from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction
 from reformulator.dro_reformulator import DROReformulator
@@ -34,6 +34,9 @@ class Quad(object):
     def g(self, x):
         return self.Q @ x
 
+    def sample_init_point(self):
+        return sample_x0_centered_disk(self.dim, self.R)
+
 
 def quad_samples(cfg):
     log.info(cfg)
@@ -56,7 +59,8 @@ def quad_samples(cfg):
 
     for i in trange(cfg.sample_N):
         h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        x0 = h.x0
+        # x0 = h.x0
+        x0 = h.sample_init_point()
         xs = h.x_star
         fs = h.f_star
 
@@ -208,7 +212,8 @@ def quad_dro(cfg):
 
         for i in range(N):
             h = quad_funcs[i]
-            x0 = h.x0
+            # x0 = h.x0
+            x0 = h.sample_init_point()
             xs = h.x_star
             fs = h.f_star
 
