@@ -60,6 +60,7 @@ def simulate_alg(cfg, x0, A, b, x_opt, L, lu, piv, alg='ista'):
     x_ls = sp.linalg.lu_solve((lu, piv), A.T @ b)
     lambd = cfg.lambd
     def f1(x):
+        # TODO: does this need to be ** 2 ?
         return .5 * np.linalg.norm(A @ x - b) ** 2 - .5 * np.linalg.norm(A @ x_ls - b)
 
     def f2(x):
@@ -344,6 +345,7 @@ def single_trajectory(cfg, K, A, b, x_opt, x0, lu, piv, L, alg='ista'):
     lambd = cfg.lambd
 
     def f1(x):
+        # TODO: does this need to be ** 2 ?
         return .5 * np.linalg.norm(A @ x - b) ** 2 - .5 * np.linalg.norm(A @ x_ls - b)
 
     def f2(x):
