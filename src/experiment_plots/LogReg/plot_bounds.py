@@ -173,8 +173,8 @@ def main_bounds():
 
     plt.suptitle('Logistic Regression, Objective Value')
 
-    # plt.show()
-    plt.savefig(f'logreg_obj_val.pdf')
+    plt.show()
+    # plt.savefig(f'logreg_obj_val.pdf')
 
 
 if __name__ == '__main__':

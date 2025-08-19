@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 35
-cvar_K_max = 35
+exp_K_max = 30
+cvar_K_max = 30
 
 num_eps_vals = 5
 
@@ -90,9 +90,9 @@ def main_bounds():
     NGD_color = 'tab:green'
 
     GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 2]
-    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 1]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 0]
     NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 2]
-    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 1]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 0]
 
     GD_worst_k = []
     NGD_worst_k = []
