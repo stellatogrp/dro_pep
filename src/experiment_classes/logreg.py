@@ -5,10 +5,11 @@ import logging
 import time
 from tqdm import trange
 from sklearn.datasets import load_breast_cancer
-from .utils import gradient_descent, nesterov_accelerated_gradient, generate_trajectories
+from .utils import gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
+from ucimlrepo import fetch_ucirepo
 
 log = logging.getLogger(__name__)
 
@@ -19,10 +20,17 @@ def sigmoid(z):
 
 class LogReg(object):
 
-    def __init__(self, sample_frac=0.8, delta=0.1, R=1):
+    def __init__(self, sample_frac=0.01, delta=0.1, R=1):
         self.delta = delta
 
         full_X, full_y = load_breast_cancer(return_X_y=True)
+
+        # default_of_credit_card_clients = fetch_ucirepo(id=350)
+        # X = default_of_credit_card_clients.data.features 
+        # y = default_of_credit_card_clients.data.targets 
+        # full_X = X.to_numpy()
+        # full_y = y.to_numpy().reshape(-1,)
+        
         self.full_X = full_X
         self.full_y = full_y
 
@@ -32,6 +40,8 @@ class LogReg(object):
 
         self.x0 = np.zeros(self.samp_X.shape[1])
         self.x0[0] = R
+        self.R = R
+        self.dim = self.samp_X.shape[1]
 
     def sample(self, sample_frac=0.8):
         X = self.full_X
@@ -90,6 +100,8 @@ class LogReg(object):
         z = z + self.x_opt
         return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
 
+    def sample_init_point(self):
+        return sample_x0_centered_disk(self.dim, self.R)
 
 def logreg_samples(cfg):
     log.info(cfg)
@@ -115,7 +127,8 @@ def logreg_samples(cfg):
 
     for i in trange(cfg.sample_N):
         lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
-        x0 = lr.x0
+        # x0 = lr.x0
+        x0 = lr.sample_init_point()
         # xs = lr.x_opt
         # fs = lr.f_opt
         xs = np.zeros(lr.samp_X.shape[1])
@@ -260,7 +273,8 @@ def logreg_dro(cfg):
 
         for i in range(N):
             lr = logreg_funcs[i]
-            x0 = lr.x0
+            # x0 = lr.x0
+            x0 = lr.sample_init_point()
             # xs = lr.x_opt
             # fs = lr.f_opt
             xs = np.zeros(lr.samp_X.shape[1])
@@ -363,6 +377,15 @@ def main():
     print(beta_k)
     print(lr.f(beta_k))
     print(lr.grad(beta_k))
+
+    default_of_credit_card_clients = fetch_ucirepo(id=350) 
+  
+    # data (as pandas dataframes) 
+    X = default_of_credit_card_clients.data.features 
+    y = default_of_credit_card_clients.data.targets 
+    X = X.to_numpy()
+    Y = y.to_numpy()
+    print(X.shape, y.shape)
 
 if __name__ == '__main__':
     main()
