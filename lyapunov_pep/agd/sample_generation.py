@@ -28,11 +28,27 @@ def sample_generation(iter_K=1, N=1, mu=0.0, L=np.inf) :
         PT[0,:] = x0
 
         xk = x0.copy()
-        for k in range(iter_K+1) :
+        # for k in range(iter_K+1) :
+        #     fk, gk = f(xk)
+        #     PT[k+1,:] = gk
+        #     F[k] = fk
+        #     xk = xk - (1/L) * gk  # Gradient descent step
+
+        yk = xk
+
+        for k in range(iter_K + 1):
             fk, gk = f(xk)
-            PT[k+1,:] = gk
+            PT[k+1, :] = gk
             F[k] = fk
-            xk = xk - (1/L) * gk  # Gradient descent step
+
+            # y_prev = y
+            # y = x - eta * g
+            # x = y + (i - 1) / (i + 2) * (y - y_prev) # xi
+
+            y_prev = yk
+            yk = xk - (1 / L) * gk
+            xk = yk + k / (k + 3) * (yk - y_prev)
+        
         G = PT@PT.T
 
         hatG.append(G)

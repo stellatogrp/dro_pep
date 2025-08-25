@@ -41,7 +41,7 @@ def smooth_strongly_convex(repX, repG, repF, mu=0.0, L=np.inf, varG=None, varF=N
     return idx_list, A_list, b_list, constraints
 
 # F_{mu,L} interpolation conditions
-def smooth_strongly_convex_gd(repX, repG, repF, mu=0.0, L=np.inf, varG=None, varF=None) :
+def smooth_strongly_convex_agd(repX, repG, repF, mu=0.0, L=np.inf, varG=None, varF=None) :
     
     assert mu <= L, "mu must be less than or equal to L"
     assert len(repX) == len(repG) == len(repF), "constraint on same number of points"
@@ -54,7 +54,8 @@ def smooth_strongly_convex_gd(repX, repG, repF, mu=0.0, L=np.inf, varG=None, var
         for j in range(n_points-1) : # ignore (k,s)-interpolation conditions
             # if i != j:
             # if j == i-1 or j == i+1 : # only consider (k,k-1) and (k,k+1) interpolation conditions
-            if j == i+1 : # only consider (k,k+1) interpolation conditions
+            # if j == i+1 : # only consider (k,k+1) interpolation conditions
+            if j == i+1 or j == i + 2 : # only consider (k,k+1) interpolation conditions
                 xi, xj = repX[i, :], repX[j, :]
                 gi, gj = repG[i, :], repG[j, :]
                 fi, fj = repF[i, :], repF[j, :]

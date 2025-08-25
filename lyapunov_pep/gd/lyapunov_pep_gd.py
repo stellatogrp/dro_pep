@@ -2,8 +2,12 @@ import numpy as np
 import cvxpy as cp
 import matplotlib.pyplot as plt
 from copy import copy
-from lyapunov_pep.interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
-from lyapunov_pep.sample_generation import sample_generation
+# from lyapunov_pep.interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
+# from lyapunov_pep.sample_generation import sample_generation
+
+from interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
+from sample_generation import sample_generation
+
 from argparse import ArgumentParser
 
 def solve_gd_pep_primal(mu, L, eta, n_points) :
@@ -76,7 +80,8 @@ def solve_gd_pep_primal(mu, L, eta, n_points) :
     problem = cp.Problem(cp.Maximize(objective), constraints)
 
     # Solve the problem
-    problem.solve(solver=cp.MOSEK, verbose=False)
+    # problem.solve(solver=cp.MOSEK, verbose=False)
+    problem.solve(solver=cp.CLARABEL, verbose=False)
 
     return problem.status, problem.value, {'G': G.value, 'F': F.value}
 
@@ -156,7 +161,8 @@ def solve_gd_pep_dual(mu, L, eta, n_points) :
 
     # Solve the dual PEP problem
     problem = cp.Problem(cp.Minimize(tau), constraints)
-    problem.solve(solver=cp.MOSEK, verbose=False)
+    # problem.solve(solver=cp.MOSEK, verbose=False)
+    problem.solve(solver=cp.CLARABEL, verbose=False)
 
     return problem.status, problem.value, {'idx': idx_list, 'lmbd': lmbd.value, 'tau': tau.value, 'S': PSD_dual.value}
 
@@ -277,7 +283,8 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
         print(idx_list[-1])
 
     problem = cp.Problem(cp.Maximize(tau), constraints)
-    problem.solve(solver=cp.MOSEK, verbose=False)
+    # problem.solve(solver=cp.MOSEK, verbose=False)
+    problem.solve(solver=cp.CLARABEL, verbose=False)
 
     return problem.status, problem.value, {
         'Vk_G': Vk_G.value, 'Vk_F': Vk_F.value,
@@ -430,7 +437,8 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
     ]
 
     problem = cp.Problem(cp.Maximize(tau), constraints)
-    problem.solve(solver=cp.MOSEK, verbose=False)
+    # problem.solve(solver=cp.MOSEK, verbose=False)
+    problem.solve(solver=cp.CLARABEL, verbose=False)
 
     return problem.status, problem.value, {
             'Vk_G': Vk_G.value, 'Vk_F': Vk_F.value,
@@ -571,13 +579,15 @@ if __name__ == "__main__":
     # axs[1].set_yscale('log')
 
     plt.tight_layout()
-    plt.savefig('lyapunov_pep/results/gradient_descent_pep_results.pdf', dpi=300)
+    # plt.savefig('lyapunov_pep/results/gradient_descent_pep_results.pdf', dpi=300)
+    plt.savefig('results/gradient_descent_pep_results.pdf', dpi=300)
 
     axs[0].set_xscale('log')
     axs[0].set_yscale('log')
     axs[1].set_xscale('log')
     axs[1].set_yscale('log')
 
-    plt.savefig('lyapunov_pep/results/gradient_descent_pep_results_loglog.pdf', dpi=300)
+    # plt.savefig('lyapunov_pep/results/gradient_descent_pep_results_loglog.pdf', dpi=300)
+    plt.savefig('results/gradient_descent_pep_results_loglog.pdf', dpi=300)
 
     plt.show()
