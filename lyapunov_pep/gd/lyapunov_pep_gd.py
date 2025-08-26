@@ -451,9 +451,6 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
         }
 
 
-
-
-
 if __name__ == "__main__":
     parser = ArgumentParser(description="Gradient Descent PEP Parameters")
     parser.add_argument('--mu', type=float, default=0.0, help='Strong convexity parameter')

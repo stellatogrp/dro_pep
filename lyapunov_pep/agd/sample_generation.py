@@ -47,7 +47,7 @@ def sample_generation(iter_K=1, N=1, mu=0.0, L=np.inf) :
 
             y_prev = yk
             yk = xk - (1 / L) * gk
-            xk = yk + k / (k + 3) * (yk - y_prev)
+            xk = yk + k / (k + 3) * (yk - y_prev) # TODO: make sure the indexing is correct here
         
         G = PT@PT.T
 

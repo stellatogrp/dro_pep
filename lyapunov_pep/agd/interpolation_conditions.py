@@ -55,7 +55,7 @@ def smooth_strongly_convex_agd(repX, repG, repF, mu=0.0, L=np.inf, varG=None, va
             # if i != j:
             # if j == i-1 or j == i+1 : # only consider (k,k-1) and (k,k+1) interpolation conditions
             # if j == i+1 : # only consider (k,k+1) interpolation conditions
-            if j == i+1 or j == i + 2 : # only consider (k,k+1) interpolation conditions
+            if j == i+1 or j == i + 2 : # only consider (k,k+1) and (k, k+2) interpolation conditions
                 xi, xj = repX[i, :], repX[j, :]
                 gi, gj = repG[i, :], repG[j, :]
                 fi, fj = repF[i, :], repF[j, :]
