@@ -2,11 +2,8 @@ import numpy as np
 import cvxpy as cp
 import matplotlib.pyplot as plt
 from copy import copy
-# from lyapunov_pep.interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
-# from lyapunov_pep.sample_generation import sample_generation
-
-from interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
-from sample_generation import sample_generation
+from gd.interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
+from gd.sample_generation import sample_generation
 
 from argparse import ArgumentParser
 
@@ -169,8 +166,8 @@ def solve_gd_pep_dual(mu, L, eta, n_points) :
 
 def lyap_search_for_gd(mu, L, eta, n_points) :
     
-    dimG = n_points + 2 # [x0, g0, ..., gn]
-    dimF = n_points + 1 # [f0, ..., fn]
+    dimG = n_points + 2 # [x0-xs, g0, ..., gn]
+    dimF = n_points + 1 # [f0-fs, ..., fn-fs]
     
     # Algorithm iterates representation
     eyeG = np.eye(dimG)
@@ -203,6 +200,7 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
     repX.append(xs)
     repG.append(gs)
     repF.append(fs)
+    s = len(repX) - 1   # index to the optimal point
 
     # Obtain primal- and dual- PEP data
     _, primal_obj, primal_data = solve_gd_pep_primal(mu, L, eta, n_points)
@@ -224,20 +222,20 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
 
     for k in range(n_points+1) :
         constraints += [ Vk_G[k,:,:] == \
-                            # Vk_A[k,0] * np.outer(repG[k], repG[k]) \
-                            Vk_A[k,1] * np.outer(repX[k] - xs, repX[k] - xs) \
-                            + Vk_A[k,2] * (1/2) * (np.outer(repX[k] - xs, repG[k]) + np.outer(repG[k], repX[k] - xs)),
-                         Vk_F[k,:] == Vk_B[k] * repF[k]]
+                            Vk_A[k,0] * np.outer(repG[k], repG[k]) \
+                            + Vk_A[k,1] * np.outer(repX[k] - repX[s], repX[k] - repX[s]) \
+                            + Vk_A[k,2] * (1/2) * (np.outer(repX[k] - repX[s], repG[k]) + np.outer(repG[k], repX[k] - repX[s])),
+                         Vk_F[k,:] == Vk_B[k] * (repF[k] - repF[s]) ]
 
     # Initial condition
-    V_initial_G = np.outer(repX[0] - xs, repX[0] - xs)
-    V_initial_F = 0.0 * (repF[0] - fs)
+    V_initial_G = np.outer(repX[0] - repX[s], repX[0] - repX[s])
+    V_initial_F = 0.0 * (repF[0] - repF[s])
 
     # Objective function
     tau = cp.Variable(nonneg=True)
-    V_obj_G = tau * np.outer(repX[n_points] - xs, repX[n_points] - xs)
+    V_obj_G = tau * np.outer(repX[n_points] - repX[s], repX[n_points] - repX[s])
     V_obj_G = 0.0 * V_obj_G
-    V_obj_F = tau * (repF[n_points] - fs) # We maximize tau
+    V_obj_F = tau * (repF[n_points] - repF[s]) # We maximize tau
     # V_obj_F = 0.0 * V_obj_F
 
     # Lyapunov PEP definition
@@ -246,11 +244,11 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
     # [1] V0 <= V_initial : (s, 0) interpolation condition
     lmbd0 = cp.Variable(nonneg=True)
     constraints += [
-        V_initial_G - Vk_G[0,:,:] + lmbd0 * A_list[-n_points-1] >> 0,
-        V_initial_F - Vk_F[0,:] + lmbd0 * b_list[-n_points-1] == 0
+        V_initial_G - Vk_G[0,:,:] + lmbd0 * A_list[idx_list.index((s,0))] >> 0,
+        V_initial_F - Vk_F[0,:] + lmbd0 * b_list[idx_list.index((s,0))] == 0
         ]
     if verbose == True :
-        print("00", idx_list[-n_points-1])
+        print("00", idx_list[idx_list.index((s,0))])
 
     # [2] V{k+1} <= V{k} for k=0,...,n_points-1 : (k, k+1), (s, k), (s, k+1) interpolation conditions
     if n_points > 0 :
@@ -258,29 +256,29 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
         for k in range(n_points) :
             constraints += [
                 Vk_G[k,:,:] - Vk_G[k+1,:,:] \
-                    + lmbd[k, 0] * A_list[k] \
-                    + lmbd[k, 1] * A_list[k-n_points-1] \
-                    # + lmbd[k, 2] * A_list[k-n_points] \
+                    + lmbd[k, 0] * A_list[idx_list.index((k,k+1))] \
+                    + lmbd[k, 1] * A_list[idx_list.index((s,k))] \
+                    + lmbd[k, 2] * A_list[idx_list.index((s,k+1))] \
                         >> 0,
                 Vk_F[k,:] - Vk_F[k+1,:] \
-                    + lmbd[k, 0] * b_list[k] \
-                    + lmbd[k, 1] * b_list[k-n_points-1] \
-                    # + lmbd[k, 2] * b_list[k-n_points] \
+                    + lmbd[k, 0] * b_list[idx_list.index((k,k+1))] \
+                    + lmbd[k, 1] * b_list[idx_list.index((s,k))] \
+                    + lmbd[k, 2] * b_list[idx_list.index((s,k+1))] \
                         == 0
                 ]
             if verbose == True :
-                print(k, idx_list[k], idx_list[k-n_points-1], idx_list[k-n_points])
+                print(k, idx_list[idx_list.index((k,k+1))], idx_list[idx_list.index((s,k))], idx_list[idx_list.index((s,k+1))])
 
     # [3] V_obj <= V{n_points} : (s, n_points) interpolation condition
     lmbdK = cp.Variable(nonneg=True)
     constraints += [
         Vk_G[n_points,:,:] - V_obj_G \
-            + lmbdK * A_list[-1] >> 0,
+            + lmbdK * A_list[idx_list.index((s,n_points))] >> 0,
         Vk_F[n_points,:] - V_obj_F \
-            + lmbdK * b_list[-1] == 0
+            + lmbdK * b_list[idx_list.index((s,n_points))] == 0
     ]
     if verbose == True :
-        print(idx_list[-1])
+        print(idx_list[idx_list.index((s,n_points))])
 
     problem = cp.Problem(cp.Maximize(tau), constraints)
     # problem.solve(solver=cp.MOSEK, verbose=False)
@@ -295,8 +293,8 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
 
 def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
 
-    dimG = n_points + 2 # [x0, g0, ..., gn]
-    dimF = n_points + 1 # [f0, ..., fn]
+    dimG = n_points + 2 # [x0-xs, g0, ..., gn]
+    dimF = n_points + 1 # [f0-fs, ..., fn-fs]
     
     # Algorithm iterates representation
     eyeG = np.eye(dimG)
@@ -328,6 +326,7 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
     repX.append(xs)
     repG.append(gs)
     repF.append(fs)
+    s = len(repX) - 1   # index to the optimal point
 
     # Define the interpolation conditions
     idx_list, A_list, b_list, _ = smooth_strongly_convex_gd(np.array(repX), np.array(repG), np.array(repF), mu, L)
@@ -351,20 +350,20 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
 
     for k in range(n_points+1) :
         constraints += [ Vk_G[k,:,:] == \
-                            # Vk_A[k,0] * np.outer(repG[k], repG[k]) \
-                            Vk_A[k,1] * np.outer(repX[k] - xs, repX[k] - xs) \
-                            + Vk_A[k,2] * (1/2) * (np.outer(repX[k] - xs, repG[k]) + np.outer(repG[k], repX[k] - xs)) ]
+                            Vk_A[k,0] * np.outer(repG[k], repG[k]) \
+                            + Vk_A[k,1] * np.outer(repX[k] - repX[s], repX[k] - repX[s]) \
+                            + Vk_A[k,2] * (1/2) * (np.outer(repX[k] - repX[s], repG[k]) + np.outer(repG[k], repX[k] - repX[s])) ]
         constraints += [ Vk_F[k,:] == Vk_B[k] * repF[k]]  # F must be non-negative
 
     # Initial condition
-    V_initial_G = np.outer(repX[0] - xs, repX[0] - xs)
-    V_initial_F = 0.0 * (repF[0] - fs)
+    V_initial_G = np.outer(repX[0] - repX[s], repX[0] - repX[s])
+    V_initial_F = 0.0 * (repF[0] - repF[s])
 
     # Objective function
     tau = cp.Variable(nonneg=True)
-    V_obj_G = tau * np.outer(repX[n_points] - xs, repX[n_points] - xs)
+    V_obj_G = tau * np.outer(repX[n_points] - repX[s], repX[n_points] - repX[s])
     V_obj_G = 0.0 * V_obj_G
-    V_obj_F = tau * (repF[n_points] - fs) # We maximize tau
+    V_obj_F = tau * (repF[n_points] - repF[s]) # We maximize tau
     # V_obj_F = 0.0 * V_obj_F
 
     # Sample rate
@@ -376,8 +375,8 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
     X0 = cp.Variable((dimG, dimG), symmetric=True)
     Y0 = cp.Variable(dimF)
     constraints += [
-        V_initial_G - Vk_G[0,:,:] + lmbd0 * A_list[-n_points-1] + X0 >> 0,
-        V_initial_F - Vk_F[0,:] + lmbd0 * b_list[-n_points-1] + Y0 == 0,
+        V_initial_G - Vk_G[0,:,:] + lmbd0 * A_list[idx_list.index((s,0))] + X0 >> 0,
+        V_initial_F - Vk_F[0,:] + lmbd0 * b_list[idx_list.index((s,0))] + Y0 == 0,
         eps*t0 + cp.trace(avgG@X0) + avgF.T@Y0 <= 0,
         cp.SOC(t0, cp.hstack([cp.vec(X0, order='F'), Y0]))  # SOC constraint
         ]
@@ -395,24 +394,24 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
         # Yparam = cp.Variable((n_points, 2))
         # for k in range(n_points) :
         #     constraints += [ X[k,:,:] == Xparam[k,0] * np.outer(repG[k], repG[k]) \
-        #                         + Xparam[k,1] * np.outer(repX[k] - xs, repX[k] - xs) \
-        #                         + Xparam[k,2] * (1/2) * (np.outer(repX[k] - xs, repG[k]) + np.outer(repG[k], repX[k] - xs))
-        #                         + Xparam[k,3] * (1/2) * (np.outer(repX[k] - xs, repG[k+1]) + np.outer(repG[k+1], repX[k] - xs)) \
+        #                         + Xparam[k,1] * np.outer(repX[k] - repX[s], repX[k] - repX[s]) \
+        #                         + Xparam[k,2] * (1/2) * (np.outer(repX[k] - repX[s], repG[k]) + np.outer(repG[k], repX[k] - repX[s]))
+        #                         + Xparam[k,3] * (1/2) * (np.outer(repX[k] - repX[s], repG[k+1]) + np.outer(repG[k+1], repX[k] - repX[s])) \
         #                         + Xparam[k,4] * (1/2) * (np.outer(repG[k+1], repG[k]) + np.outer(repG[k], repG[k+1])) \
         #                         + Xparam[k,5] * np.outer(repG[k+1], repG[k+1]) ]
-        #     constraints += [ Y[k,:] == Yparam[k,0] * repF[k] + Yparam[k,1] * repF[k+1] ]
+        #     constraints += [ Y[k,:] == Yparam[k,0] * (repF[k] - repF[s]) + Yparam[k,1] * (repF[k+1] - repF[s]) ]
 
         for k in range(n_points) :
             constraints += [
                 Vk_G[k,:,:] - Vk_G[k+1,:,:] \
-                    + lmbd[k, 0] * A_list[k] \
-                    + lmbd[k, 1] * A_list[k-n_points-1] \
-                    # + lmbd[k, 2] * A_list[k-n_points] \
+                    + lmbd[k, 0] * A_list[idx_list.index((k,k+1))] \
+                    + lmbd[k, 1] * A_list[idx_list.index((s,k))] \
+                    + lmbd[k, 2] * A_list[idx_list.index((s,k+1))] \
                     + X[k,:,:] >> 0,
                 Vk_F[k,:] - Vk_F[k+1,:] \
-                    + lmbd[k, 0] * b_list[k] \
-                    + lmbd[k, 1] * b_list[k-n_points-1] \
-                    # + lmbd[k, 2] * b_list[k-n_points] \
+                    + lmbd[k, 0] * b_list[idx_list.index((k,k+1))] \
+                    + lmbd[k, 1] * b_list[idx_list.index((s,k))] \
+                    + lmbd[k, 2] * b_list[idx_list.index((s,k+1))] \
                     + Y[k, :] == 0,
                 eps*t[k] + cp.trace(avgG@X[k,:,:]) + avgF.T@Y[k,:] <= 0,
                 cp.SOC(t[k], cp.hstack([cp.vec(X[k,:,:], order='F'), Y[k,:]]))  # SOC constraint
@@ -427,10 +426,10 @@ def dro_lyap_search_for_gd(mu, L, eta, n_points, eps_val=1e-4) :
 
     constraints += [
         Vk_G[n_points,:,:] - V_obj_G \
-            + lmbdK * A_list[-1] \
+            + lmbdK * A_list[idx_list.index((s,n_points))] \
             + XK >> 0,
         Vk_F[n_points,:] - V_obj_F \
-            + lmbdK * b_list[-1] \
+            + lmbdK * b_list[idx_list.index((s,n_points))] \
             + YK == 0,
         eps*tK + cp.trace(avgG@XK) + avgF.T@YK <= 0,
         cp.SOC(tK, cp.hstack([cp.vec(XK, order='F'), YK]))  # SOC constraint

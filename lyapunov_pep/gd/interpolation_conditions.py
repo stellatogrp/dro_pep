@@ -45,13 +45,13 @@ def smooth_strongly_convex_gd(repX, repG, repF, mu=0.0, L=np.inf, varG=None, var
     
     assert mu <= L, "mu must be less than or equal to L"
     assert len(repX) == len(repG) == len(repF), "constraint on same number of points"
-    n_points = len(repX)
+    n_points = len(repX) - 1
 
     idx_list = []
     A_list, b_list = [], []
 
-    for i in range(n_points-1) :
-        for j in range(n_points-1) : # ignore (k,s)-interpolation conditions
+    for i in range(n_points) :
+        for j in range(n_points) : # ignore (k,s)-interpolation conditions
             # if i != j:
             # if j == i-1 or j == i+1 : # only consider (k,k-1) and (k,k+1) interpolation conditions
             if j == i+1 : # only consider (k,k+1) interpolation conditions
@@ -72,24 +72,24 @@ def smooth_strongly_convex_gd(repX, repG, repF, mu=0.0, L=np.inf, varG=None, var
                 A_list.append(Ai)
                 b_list.append(bi)
 
-    i = n_points-1
-    for j in range(n_points-1) :
-        xi, xj = repX[i, :], repX[j, :]
-        gi, gj = repG[i, :], repG[j, :]
-        fi, fj = repF[i, :], repF[j, :]
+    s = n_points
+    for j in range(n_points) : # only consider (s,j) interpolation conditions
+        xs, xj = repX[s, :], repX[j, :]
+        gs, gj = repG[s, :], repG[j, :]
+        fs, fj = repF[s, :], repF[j, :]
 
-        Ai = (1 / 2) * np.outer(gj, xi - xj) + (1 / 2) * np.outer(xi - xj, gj)
-        Ai += 1 / 2 / (1 - (mu / L)) * (
-            (1 / L) * np.outer(gi - gj, gi - gj)
-            + mu * np.outer(xi - xj, xi - xj)
-            - (mu / L) * np.outer(gi - gj, xi - xj)
-            - (mu / L) * np.outer(xi - xj, gi - gj)
+        As = (1 / 2) * np.outer(gj, xs - xj) + (1 / 2) * np.outer(xs - xj, gj)
+        As += 1 / 2 / (1 - (mu / L)) * (
+            (1 / L) * np.outer(gs - gj, gs - gj)
+            + mu * np.outer(xs - xj, xs - xj)
+            - (mu / L) * np.outer(gs - gj, xs - xj)
+            - (mu / L) * np.outer(xs - xj, gs - gj)
         )
-        bi = (fj - fi)
+        bs = (fj - fs)
 
-        idx_list.append((i, j))
-        A_list.append(Ai)
-        b_list.append(bi)
+        idx_list.append((s, j))
+        A_list.append(As)
+        b_list.append(bs)
 
     constraints = None
     if varG is not None and varF is not None:
