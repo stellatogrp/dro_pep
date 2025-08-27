@@ -10,12 +10,12 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 40
-cvar_K_max = 40
+exp_K_max = 35
+cvar_K_max = 35
 
-pep_K_max = 40
-exp_K_max = 40
-cvar_K_max = 40
+pep_K_max = 35
+exp_K_max = 35
+cvar_K_max = 35
 
 GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
 NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')

@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 40
-cvar_K_max = 40
+exp_K_max = 35
+cvar_K_max = 35
 
 num_eps_vals = 5
 
@@ -89,10 +89,10 @@ def main_bounds():
     GD_color = 'tab:blue'
     NGD_color = 'tab:green'
 
-    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 6]
-    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 6]
-    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 6]
-    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 6]
+    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 5]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 3]
+    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 5]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 3]
 
     GD_worst_k = []
     NGD_worst_k = []
@@ -150,7 +150,7 @@ def main_bounds():
 
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='Sample', linestyle='--', color=GD_color)
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=GD_color)
-    # # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
+    # ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
 
     ax[0].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='AGD', color=NGD_color)
     ax[0].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Sample AGD', linestyle='--', color=NGD_color)
@@ -173,8 +173,8 @@ def main_bounds():
 
     plt.suptitle('Logistic Regression, Objective Value')
 
-    plt.show()
-    # plt.savefig(f'logreg_obj_val.pdf')
+    # plt.show()
+    plt.savefig(f'logreg_obj_val.pdf')
 
 
 if __name__ == '__main__':
