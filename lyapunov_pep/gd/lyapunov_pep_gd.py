@@ -2,8 +2,10 @@ import numpy as np
 import cvxpy as cp
 import matplotlib.pyplot as plt
 from copy import copy
-from gd.interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
-from gd.sample_generation import sample_generation
+from interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
+from sample_generation import sample_generation
+# from gd.interpolation_conditions import smooth_strongly_convex, smooth_strongly_convex_gd
+# from gd.sample_generation import sample_generation
 
 from argparse import ArgumentParser
 
@@ -51,6 +53,10 @@ def solve_gd_pep_primal(mu, L, eta, n_points) :
         repF.append(f)
 
     assert len(repX) == len(repG) == len(repF) == n_points + 1, "constraint on same number of points"
+
+    # print(repG)
+    # print(repF)
+    # exit(0)
 
     # Define variables
     G = cp.Variable((dimG, dimG), symmetric=True)
