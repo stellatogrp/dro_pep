@@ -14,7 +14,8 @@ plt.rcParams.update({
 def main():
     avg_color = 'tab:blue'
     pep_color = 'tab:green'
-    sm_color = 'tab:red'
+    sm_color = 'tab:orange'
+    p90_color = 'tab:gray'
 
     fig, ax = plt.subplots()
     sample_df = pd.read_csv('data/samples.csv', header=None)
@@ -28,7 +29,8 @@ def main():
     # ax.set_xscale('log')
 
     # ax.set_ylabel(r'$\| x^K - x^\star\|$')
-    ax.set_ylabel(r'$f(x^K) - f(x^\star)$')
+    # ax.set_ylabel(r'$f(x^K) - f(x^\star)$')
+    ax.set_ylabel(r'$f(z^K) - f(z^\star)$')
     ax.set_xlabel(r'$K$')
 
     average = np.mean(samples, axis=0)
@@ -41,8 +43,8 @@ def main():
     K_vals = range(1, K_max+1)
 
     plt.plot(K_vals, average, label='Sample average', color=avg_color, linestyle='dashed')
-    plt.plot(K_vals, quantiles, label='Sample 90th percentile', color='tab:red', linestyle='dotted')
-    # plt.plot(K_vals, sample_max, label='Sample worst-case', color=sm_color)
+    plt.plot(K_vals, quantiles, label='Sample 90th percentile', color=p90_color, linestyle='dotted')
+    plt.plot(K_vals, sample_max, label='Sample worst-case', color=sm_color, linestyle='dashdot')
     plt.plot(K_vals, theory, label='Theoretical worst-case', color=pep_color)
     # plt.plot(K_vals, scaled_theory)
     plt.legend()
