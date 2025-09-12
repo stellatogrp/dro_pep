@@ -10,7 +10,10 @@ def marchenko_pastur(d, mu, L):
         H = X.T@X/d
     return H
 
-def sample_generation(iter_K=1, N=1, mu=0.0, L=np.inf) :
+def gradient_descent(x, g, mu=0.0, L=1.0):
+    return x - (1/L)*g
+
+def sample_generation(iter_K=1, N=1, mu=0.0, L=np.inf, algorithm=gradient_descent) :
     d = N
     np.random.seed(42)
 
@@ -32,7 +35,8 @@ def sample_generation(iter_K=1, N=1, mu=0.0, L=np.inf) :
             fk, gk = f(xk)
             PT[k+1,:] = gk
             F[k] = fk
-            xk = xk - (1/L) * gk  # Gradient descent step
+            # xk = xk - (1/L) * gk  # Gradient descent step
+            xk = algorithm(xk, gk, mu=mu, L=L)
         G = PT@PT.T
 
         hatG.append(G)
