@@ -21,18 +21,18 @@ seed:
 sample_N: 1000
 
 training:
-  expectation_N: 100
-  cvar_N: 100
+  expectation_N: 20
+  cvar_N: 20
 num_clusters:
-  expectation: 20
-  cvar: 20
+  expectation: null
+  cvar: null
 
 sample_fname: samples.csv
 pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -4
-  log_max: -2
+  log_min: -1
+  log_max: 1
   logspace_count: 7
 alpha: 0.1

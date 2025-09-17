@@ -11,7 +11,7 @@ alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
-precond_type: max # 'average' or 'max' or 'min'
+precond_type: average # 'average' or 'max' or 'min'
 
 seed:
   full_samples: 0
@@ -20,18 +20,18 @@ seed:
 sample_N: 10000
 
 training:
-  expectation_N: 1000
-  cvar_N: 1000
+  expectation_N: 20
+  cvar_N: 20
 num_clusters:
-  expectation: 20
-  cvar: 20
+  expectation: null
+  cvar: null
 
 sample_fname: samples.csv
 pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -4
-  log_max: -2
-  logspace_count: 7
+  log_min: 1
+  log_max: 2
+  logspace_count: 8
 alpha: 0.1

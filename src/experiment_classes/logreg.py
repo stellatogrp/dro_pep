@@ -9,7 +9,7 @@ from .utils import gradient_descent, nesterov_accelerated_gradient, generate_tra
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
-from ucimlrepo import fetch_ucirepo
+# from ucimlrepo import fetch_ucirepo
 
 log = logging.getLogger(__name__)
 

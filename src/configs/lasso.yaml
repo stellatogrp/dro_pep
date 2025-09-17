@@ -25,18 +25,18 @@ pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 precond_type: average # 'average' or 'max' or 'min'
 
 training:
-  expectation_N: 100
-  cvar_N: 1000
+  expectation_N: 20
+  cvar_N: 20
 num_clusters:
-  expectation: 20
-  cvar: 20
+  expectation: null
+  cvar: null
 
 sample_fname: samples.csv
 pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -4
-  log_max: -2
-  logspace_count: 7
+  log_min: 0
+  log_max: 1
+  logspace_count: 3
 alpha: 0.1
