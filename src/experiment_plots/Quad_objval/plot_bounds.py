@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 30
-cvar_K_max = 30
+exp_K_max = 20
+cvar_K_max = 20
 
 num_eps_vals = 5
 
@@ -66,11 +66,11 @@ def compute_empirical_cvar(samples, k, alpha=0.1):
 
 # precond = 'precond_avg'
 
-GD_samples = pd.read_csv('data/samples/grad_desc_1_40/samples.csv')
-NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_40/samples.csv')
+GD_samples = pd.read_csv('data/samples/grad_desc_1_30/samples.csv')
+NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_30/samples.csv')
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_30/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_30/pep.csv')
 
 # GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_40/dro.csv')
 # GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_40/dro.csv')
@@ -173,8 +173,8 @@ def main_bounds():
 
     plt.suptitle('Quadratic Minimization, Objective Value')
 
-    # plt.show()
-    plt.savefig(f'quad_obj_val.pdf')
+    plt.show()
+    # plt.savefig(f'quad_obj_val.pdf')
 
 
 if __name__ == '__main__':

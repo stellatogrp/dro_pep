@@ -6,7 +6,7 @@ from tqdm import trange
 
 from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk
 from PEPit import PEP
-from PEPit.functions import SmoothStronglyConvexQuadraticFunction
+from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
 
 log = logging.getLogger(__name__)
@@ -38,6 +38,31 @@ class Quad(object):
         return sample_x0_centered_disk(self.dim, self.R)
 
 
+class QuadBadAccel(object):
+    def __init__(self, dim, mu=1, L=2, R=1):
+        self.dim = dim
+        self.mu = mu
+        self.L = L
+        self.R = R
+
+        self.x0 = np.zeros(dim)
+        self.x0[0] = R
+
+        self.f_star = 0
+        self.x_star = np.zeros(dim)
+
+        self.Q = np.diag(mu + np.random.uniform(high=L-mu, size=(dim,)))
+
+    def f(self, x):
+        return .5 * x.T @ self.Q @ x
+    
+    def g(self, x):
+        return self.Q @ x
+
+    def sample_init_point(self):
+        return sample_x0_centered_disk(self.dim, self.R)
+
+
 def quad_samples(cfg):
     log.info(cfg)
     np.random.seed(cfg.seed.full_samples)
@@ -58,7 +83,8 @@ def quad_samples(cfg):
         exit(0)
 
     for i in trange(cfg.sample_N):
-        h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        # h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        h = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
         # x0 = h.x0
         x0 = h.sample_init_point()
         xs = h.x_star
@@ -99,7 +125,7 @@ def quad_pep(cfg):
 
     res = []
 
-    quad_pep_subproblem(cfg, algo, 1, objs[0])
+    # quad_pep_subproblem(cfg, algo, 1, objs[0])
     for k in range(cfg.K_min, cfg.K_max + 1):
         for obj in objs:
             tau, solvetime = quad_pep_subproblem(cfg, algo, k, obj)
@@ -116,7 +142,8 @@ def quad_pep(cfg):
 
 def quad_pep_subproblem(cfg, algo, k, obj, return_problem=False):
     problem = PEP()
-    func = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=cfg.mu, L=cfg.L)
+    # func = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=cfg.mu, L=cfg.L)
+    func = problem.declare_function(SmoothStronglyConvexFunction, mu=cfg.mu, L=cfg.L)
     xs = func.stationary_point()
     fs = func(xs)
     x0 = problem.set_initial_point()
@@ -187,7 +214,8 @@ def quad_dro(cfg):
     np.random.seed(cfg.seed.train)
     quad_funcs = []
     for i in range(N):
-        q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        # q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
         quad_funcs.append(q)
     
     res = []
