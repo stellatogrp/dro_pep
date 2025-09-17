@@ -22,7 +22,7 @@ def interpolation_inequalities_mu_L(repX, repG, repF, mu=0.0, L=np.inf, varG=Non
     for i in range(n_points):
         for j in range(n_points):
             if i == j:
-                pass
+                continue
             xi, xj = repX[i, :], repX[j, :]
             gi, gj = repG[i, :], repG[j, :]
             fi, fj = repF[i, :], repF[j, :]
@@ -40,6 +40,66 @@ def interpolation_inequalities_mu_L(repX, repG, repF, mu=0.0, L=np.inf, varG=Non
             A_list.append(Ai)
             b_list.append(bi)
     
+    constraints = None
+    if varG is not None and varF is not None:
+        constraints = []
+        for (Am, bm) in zip(A_list, b_list) :
+            constraints += [cp.trace(Am @ varG) + bm.T @ varF <= 0]
+    
+    return idx_list, A_list, b_list, constraints
+
+
+def interpolation_inequalities_mu_L_restricted(repX, repG, repF, mu=0.0, L=np.inf, varG=None, varF=None):
+    
+    assert mu <= L, "mu must be less than or equal to L"
+    # print(len(repX), len(repG), len(repF))
+    assert len(repX) == len(repG) == len(repF), "constraint on same number of points"
+
+    n_points = len(repX) - 1
+
+    idx_list = []
+    A_list, b_list = [], []
+
+    for i in range(n_points):
+        for j in range(n_points):
+            # if j != i:
+            if j == i + 1:  # only interpolate k -> k+1
+                xi, xj = repX[i, :], repX[j, :]
+                gi, gj = repG[i, :], repG[j, :]
+                fi, fj = repF[i, :], repF[j, :]
+
+                Ai = (1 / 2) * np.outer(gj, xi - xj) + (1 / 2) * np.outer(xi - xj, gj)
+                Ai += 1 / 2 / (1 - (mu / L)) * (
+                    (1 / L) * np.outer(gi - gj, gi - gj)
+                    + mu * np.outer(xi - xj, xi - xj)
+                    - (mu / L) * np.outer(gi - gj, xi - xj)
+                    - (mu / L) * np.outer(xi - xj, gi - gj)
+                )
+                bi = (fj - fi)
+
+                idx_list.append((i, j))
+                A_list.append(Ai)
+                b_list.append(bi)
+
+    s = n_points
+    for j in range(n_points) : # only consider (s,j) interpolation conditions
+        xs, xj = repX[s, :], repX[j, :]
+        gs, gj = repG[s, :], repG[j, :]
+        fs, fj = repF[s, :], repF[j, :]
+
+        As = (1 / 2) * np.outer(gj, xs - xj) + (1 / 2) * np.outer(xs - xj, gj)
+        As += 1 / 2 / (1 - (mu / L)) * (
+            (1 / L) * np.outer(gs - gj, gs - gj)
+            + mu * np.outer(xs - xj, xs - xj)
+            - (mu / L) * np.outer(gs - gj, xs - xj)
+            - (mu / L) * np.outer(xs - xj, gs - gj)
+        )
+        bs = (fj - fs)
+
+        idx_list.append((s, j))
+        A_list.append(As)
+        b_list.append(bs)
+
     constraints = None
     if varG is not None and varF is not None:
         constraints = []
@@ -69,9 +129,56 @@ def interpolation_inequalities_convex(repX, repG, repF, varG=None, varF=None):
             Ai = (1 / 2) * np.outer(gj, xi - xj) + (1 / 2) * np.outer(xi - xj, gj)
             bi = (fj - fi)
 
-            idx_list.append((i, j)) # TODO: figure out if this should be (i+1, j) since we removed x0
+            idx_list.append((i + 1, j)) # TODO: figure out if this should be (i+1, j) since we removed x0
             A_list.append(Ai)
             b_list.append(bi)
+
+    constraints = None
+    if varG is not None and varF is not None:
+        constraints = []
+        for (Am, bm) in zip(A_list, b_list) :
+            constraints += [cp.trace(Am @ varG) + bm.T @ varF <= 0]
+    
+    return idx_list, A_list, b_list, constraints
+
+
+def interpolation_inequalities_convex_restricted(repX, repG, repF, varG=None, varF=None):
+    assert mu <= L, "mu must be less than or equal to L"
+    # print(len(repX), len(repG), len(repF))
+    assert len(repX) == len(repG) == len(repF), "constraint on same number of points"
+
+    n_points = len(repX) - 1
+    idx_list = []
+    A_list, b_list = [], []
+
+    for i in range(n_points):
+        for j in range(n_points):
+            # if i == j:
+            #     continue
+            if j == i + 1:
+                xi, xj = repX[i, :], repX[j, :]
+                gi, gj = repG[i, :], repG[j, :]
+                fi, fj = repF[i, :], repF[j, :]
+
+                Ai = (1 / 2) * np.outer(gj, xi - xj) + (1 / 2) * np.outer(xi - xj, gj)
+                bi = (fj - fi)
+
+                idx_list.append((i + 1, j)) # TODO: figure out if this should be (i+1, j) since we removed x0
+                A_list.append(Ai)
+                b_list.append(bi)
+
+    s = n_points
+    for j in range(n_points):
+        xs, xj = repX[s, :], repX[j, :]
+        gs, gj = repG[s, :], repG[j, :]
+        fs, fj = repF[s, :], repF[j, :]
+
+        As = (1 / 2) * np.outer(gj, xs - xj) + (1 / 2) * np.outer(xs - xj, gj)
+        bs = (fj - fs)
+
+        idx_list.append((s+1, j)) # TODO: figure out if this should be (s+1, j) since we removed x0
+        A_list.append(As)
+        b_list.append(bs)
 
     constraints = None
     if varG is not None and varF is not None:
@@ -263,10 +370,10 @@ def solve_ista_pep_dual(mu, L, eta, n_points):
 
     constraints = []
 
-    # idx_list, A_list, b_list, _ = 
-
-    F_idx_list, F_A_list, F_b_list, _ = interpolation_inequalities_mu_L(np.array(repX), np.array(repF_grad), np.array(repF_funcval), mu=mu, L=L)
-    G_idx_list, G_A_list, G_b_list, _ = interpolation_inequalities_convex(np.array(repX[1:]), np.array(repG_grad), np.array(repG_funcval))
+    # F_idx_list, F_A_list, F_b_list, _ = interpolation_inequalities_mu_L(np.array(repX), np.array(repF_grad), np.array(repF_funcval), mu=mu, L=L)
+    F_idx_list, F_A_list, F_b_list, _ = interpolation_inequalities_mu_L_restricted(np.array(repX), np.array(repF_grad), np.array(repF_funcval), mu=mu, L=L)
+    # G_idx_list, G_A_list, G_b_list, _ = interpolation_inequalities_convex(np.array(repX[1:]), np.array(repG_grad), np.array(repG_funcval))
+    G_idx_list, G_A_list, G_b_list, _ = interpolation_inequalities_convex_restricted(np.array(repX[1:]), np.array(repG_grad), np.array(repG_funcval))
 
     # Initial condition: <A0, G> + b0.T @ F + c0 <= 0
     A0 = np.outer(repX[0] - xs, repX[0] - xs)
@@ -303,10 +410,96 @@ def solve_ista_pep_dual(mu, L, eta, n_points):
     # problem.solve(solver=cp.MOSEK, verbose=False)
     problem.solve(solver=cp.CLARABEL, verbose=False)
 
-    # print(problem.status, problem.value)
-
     # return problem.status, problem.value, {'idx': idx_list, 'lmbd': lmbd.value, 'tau': tau.value, 'S': PSD_dual.value}
-    return problem.status, problem.value, {'S': PSD_dual.value}
+    out_dict = {'S': PSD_dual.value}
+    return problem.status, problem.value, out_dict
+
+
+def lyap_search_for_ista(mu, L, eta, n_points):
+    K = n_points
+
+    # G = [xs, x0, df(x0), ..., df(x_K-1), df(x_K), dg(x1), ..., dg(xK), dfs, dgs] -> dim: 2K + 5
+    # F = [fs, f0, ..., fK, gs, g0, ..., gK] -> dim: 2K + 4
+
+    # reduced version:
+    # G = [x0, df(x0), ..., df(x_K), dg(x1), ..., dg(xK), dfs] -> dim: 2K + 3
+    # F = [f0, ..., fK, g1, ..., gK, fs] -> dim: 2K + 2
+
+    dimG = 2 * K + 3  # 1 + K + K + 1
+    dimF = 2 * K + 2  # 1 + (K+1) + (K+1)
+
+    eyeG = np.eye(dimG)
+    eyeF = np.eye(dimF)
+
+    dfs_idx = dimG - 1
+    def df_idx(k):
+        return k + 1
+    
+    def dg_idx(k):
+        # return K + k + 1  # 1 + (K + 1) + (k - 1)
+        return df_idx(K) + k
+
+    fs_idx = dimF - 1
+    def func_f_idx(k):
+        return k
+
+    def func_g_idx(k):
+        # return (K + 1) + k # (K + 2) + k - 1
+        return func_f_idx(K) + k
+
+    repX, repF_grad, repF_funcval, repG_grad, repG_funcval = [], [], [], [], []
+    x = eyeG[0, :] # x0
+    # y = x # y0
+    dfx = eyeG[df_idx(0), :] # df(x0)
+    fx = eyeF[func_f_idx(0), :] # f(x0)
+
+    # dgx = eyeG[dg_idx(0), :] # dg(x0)
+    # gx = eyeF[func_g_idx(0), :] # g(x0)
+
+    xs = 0.0 * x
+    dfs = eyeG[dfs_idx, :]
+    dgs = - dfs
+
+    fs = eyeF[fs_idx, :]
+    gs = - fs
+
+    repX.append(x)
+    repF_grad.append(dfx)
+    repF_funcval.append(fx)
+
+    for k in range(1, K+1):
+        dgx = eyeG[dg_idx(k), :]
+        gx = eyeF[func_g_idx(k), :]
+
+        y = x - eta * dfx
+        x = y - eta * dgx
+
+        dfx = eyeG[df_idx(k), :]
+        fx = eyeF[func_f_idx(k), :]
+
+        repX.append(x)
+        repF_grad.append(dfx)
+        repF_funcval.append(fx)
+        
+        repG_grad.append(dgx)
+        repG_funcval.append(gx)
+
+    assert len(repX) == len(repF_grad) == len(repF_funcval) == K + 1
+
+    assert len(repX) - 1 == len(repG_grad) == len(repG_funcval) == K
+    
+    repX.append(xs)
+    repF_grad.append(dfs)
+    repF_funcval.append(fs)
+    repG_grad.append(dgs)
+    repG_funcval.append(gs)
+
+    # Lyapunov function definition
+    Vk_G = cp.Variable((n_points+1, dimG, dimG))
+    Vk_F = cp.Variable((n_points+1, dimF))
+    constraints = [Vk_G[k,:,:] == Vk_G[k,:za ,:].T for k in range(n_points+1)]
+
+    exit(0)
 
 
 if __name__ == "__main__":
@@ -370,3 +563,19 @@ if __name__ == "__main__":
     #         lmbd = dual_var['lmbd']
     #         (i, j) = last_idx_list[m]
     #         print(f"\t\tlmbd[{i if i < n_points+1 else 's'}, {j if j < n_points+1 else 's'}] = {lmbd[m]}")
+
+    lyap_obj = []
+    print("\nSolve [Lyapunov PEP]")
+    for n_points in range(1, iter_K) :
+        lyap_stat, rate_inv, lyap_var = lyap_search_for_ista(mu, L, eta, n_points)
+        lyap_obj.append(1.0 / rate_inv if rate_inv > 0 else np.inf)
+        print("[Lyapunov PEP at iteration", n_points, "] Status:", lyap_stat, ", rate_inv:", rate_inv)
+
+        # if n_points == iter_K - 1 :
+        #     for (Ak, Bk, lmbdk) in zip(lyap_var['Vk_A'], lyap_var['Vk_B'], lyap_var['lmbd']) :
+        #         print("\tGk = ", Ak)
+        #         print("\tFk = ", Bk)
+        #         print("\tlamda =", lmbdk)
+        #         print()
+        #     print("\tlmbd0 =", lyap_var['lmbd0'])
+        #     print("\tlmbdK =", lyap_var['lmbdK'])

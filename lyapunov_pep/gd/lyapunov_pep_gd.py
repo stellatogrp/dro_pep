@@ -212,8 +212,8 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
     _, primal_obj, primal_data = solve_gd_pep_primal(mu, L, eta, n_points)
     _, dual_obj, dual_data = solve_gd_pep_dual(mu, L, eta, n_points)
 
-    G, F = primal_data['G'], primal_data['F']
-    lmbd, tau, S = dual_data['lmbd'], dual_data['tau'], dual_data['S']
+    # G, F = primal_data['G'], primal_data['F']
+    # lmbd, tau, S = dual_data['lmbd'], dual_data['tau'], dual_data['S']
 
     ##### Lyapunov PEP Definition
     
@@ -227,8 +227,8 @@ def lyap_search_for_gd(mu, L, eta, n_points) :
     Vk_B = cp.Variable((n_points+1))
 
     for k in range(n_points+1) :
-        constraints += [ Vk_G[k,:,:] == \
-                            Vk_A[k,0] * np.outer(repG[k], repG[k]) \
+        constraints += [ Vk_G[k,:,:] == 0 \
+                            + Vk_A[k,0] * np.outer(repG[k], repG[k]) \
                             + Vk_A[k,1] * np.outer(repX[k] - repX[s], repX[k] - repX[s]) \
                             + Vk_A[k,2] * (1/2) * (np.outer(repX[k] - repX[s], repG[k]) + np.outer(repG[k], repX[k] - repX[s])),
                          Vk_F[k,:] == Vk_B[k] * (repF[k] - repF[s]) ]
@@ -499,7 +499,7 @@ if __name__ == "__main__":
                 idx_list = dual_var['idx']
                 lmbd = dual_var['lmbd']
                 (i, j) = idx_list[m]
-                print(f"\t\tlmbd[{i if i < n_points+1 else "s"}, {j if j < n_points+1 else "s"}] = {lmbd[m]}")
+                print(f"\t\tlmbd[{i if i < n_points+1 else 's'}, {j if j < n_points+1 else 's'}] = {lmbd[m]}")
         
         if n_points == iter_K - 1 :
             last_idx_list = copy(dual_var['idx'])
@@ -510,7 +510,7 @@ if __name__ == "__main__":
         for m in range(len(last_idx_list)) :
             lmbd = dual_var['lmbd']
             (i, j) = last_idx_list[m]
-            print(f"\t\tlmbd[{i if i < n_points+1 else "s"}, {j if j < n_points+1 else "s"}] = {lmbd[m]}")
+            print(f"\t\tlmbd[{i if i < n_points+1 else 's'}, {j if j < n_points+1 else 's'}] = {lmbd[m]}")
 
     # Lyapunov search PEP
     lyap_obj = []
