@@ -28,6 +28,7 @@
 outputs/
 sample_outputs/
 dro_outputs/
+lyap_outputs/
 data/
 old_data/
 test/

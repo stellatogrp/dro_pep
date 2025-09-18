@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 def main():
     np.random.seed(5)
-    n = 100
+    n = 300
     mu = 1
 
     # P = np.array([
@@ -11,7 +11,9 @@ def main():
     #     [0, 2, 0],
     #     [0, 0, 3],
     # ])
-    P = np.diag(mu + 1 * np.random.uniform(size=(n,)))
+    offset = 1.0
+
+    P = np.diag(mu + offset * np.random.uniform(size=(n,)))
 
     def f(z):
         return .5 * z.T @ P @ z 
@@ -20,9 +22,9 @@ def main():
         return P @ z
 
     # L = np.max(np.linalg.eigvals(P))
-    L = mu + 1
+    L = mu + offset
     eta = 1 / L
-    K = 20
+    K = 30
 
     zk = 10 * np.ones(n)
     GD_vals = [f(zk)]
