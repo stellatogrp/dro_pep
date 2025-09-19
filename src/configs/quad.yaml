@@ -5,7 +5,7 @@ dim: 500
 R: 20
 
 K_min: 1
-K_max: 5
+K_max: 2
 
 alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
@@ -20,7 +20,7 @@ seed:
 sample_N: 10000
 
 training:
-  expectation_N: 20
+  expectation_N: 1
   cvar_N: 20
 num_clusters:
   expectation: null

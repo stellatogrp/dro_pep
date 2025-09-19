@@ -339,6 +339,7 @@ def quad_lyap(cfg):
     sample_df_list = []
 
     for k in range(cfg.K_min, cfg.K_max + 1):
+        log.info(f'----k={k}----')
         samples = []
 
         for i in range(N):
@@ -365,4 +366,5 @@ def quad_lyap(cfg):
         sample_df = pd.DataFrame(sample_df_list)
         sample_df.to_csv('samples.csv', index=False)
 
-    gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 2, samples, 0.1)
+        lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, k, samples, 0.1)
+        log.info(lyap_res)
