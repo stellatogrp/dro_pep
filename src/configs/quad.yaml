@@ -2,10 +2,10 @@ mu: 1.
 L: 3
 eta: 1  # final step size = eta / L 
 dim: 500
-R: 20
+R: 1
 
 K_min: 1
-K_max: 2
+K_max: 1
 
 alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar

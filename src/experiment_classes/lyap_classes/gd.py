@@ -137,8 +137,8 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
     s = len(repX) - 1   # index to the optimal point
 
     # Define the interpolation conditions
-    idx_list, A_list, b_list, _ = smooth_strongly_convex(np.array(repX), np.array(repG), np.array(repF), mu, L)
-    # idx_list, A_list, b_list, _ = smooth_strongly_convex_gd(np.array(repX), np.array(repG), np.array(repF), mu, L)
+    # idx_list, A_list, b_list, _ = smooth_strongly_convex(np.array(repX), np.array(repG), np.array(repF), mu, L)
+    idx_list, A_list, b_list, _ = smooth_strongly_convex_gd(np.array(repX), np.array(repG), np.array(repF), mu, L)
     print(idx_list)
 
     # Initial condition: <A0, G> + b0.T @ F + c0 <= 0
@@ -153,82 +153,101 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
     bobj = repF[n_points] - fs
     # bobj = 0.0 * bobj
 
-
     # Corresponding dual variables to primal constriants
     # lmbd = cp.Variable(len(A_list), nonneg=True)    # Interpolation conditions
-    tau = cp.Variable()                             # Initial condition
-    lambd = cp.Variable()
-    t = cp.Variable()
+    # rho = cp.Variable()
+    for rho in np.arange(0, 0.51, .1):
+    # rho = 0.5
+        lambd = cp.Variable(nonneg=True)
+        t = cp.Variable()
 
-    # G0, F0 = samples[0]
-    N = len(samples)
-    s = cp.Variable(N)
-    
-    X = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
-    Xtilde = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
-    Y = [cp.Variable(bobj.shape) for _ in range(N)]
-    Ytilde = [cp.Variable(bobj.shape) for _ in range(N)]
-    y = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
-    ytilde = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+        N = len(samples)
+        MAT_SIZE = 3
+        VEC_SIZE = 2
+        alpha_inv = 1 / cvar_alpha
 
-    alpha_inv = 1 / cvar_alpha
+        s = cp.Variable(N)
 
-    constraints = [1 / N * cp.sum(s) <= 0]
-    # constraints = []
-    for i in range(N):
-        # print(f'--i={i}--')
-        Gi, Fi = samples[i]
-        Gi = Gi[1:, 1:]
-        Fi = Fi[1:]
+        X0 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+        Y0 = [cp.Variable(bobj.shape) for _ in range(N)]
+        X1 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+        Y1 = [cp.Variable(bobj.shape) for _ in range(N)]
+        X2 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+        Y2 = [cp.Variable(bobj.shape) for _ in range(N)]
+        X3 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+        Y3 = [cp.Variable(bobj.shape) for _ in range(N)]
 
-        for m, (Am, bm) in enumerate(zip(A_list, b_list)):
-            check = np.trace(Am @ Gi) + bm.T @ Fi
-            if check > 0 :
-                print(Gi, Fi)
-                print(Am, bm)
-                print(m, idx_list[m], check)
+        y0 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+        y1 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+        y2 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+        y3 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
 
-        S_star_yA = 0
-        S_star_yb = 0
-        S_star_ytildeA = 0
-        S_star_ytildeb = 0
+        Q0_mat = cp.Variable(Aobj.shape, symmetric=True)
+        Q0_vec = cp.Variable(bobj.shape)
 
-        for j in range(len(A_list)):
-            S_star_yA += y[i][j] * A_list[j]
-            S_star_yb += y[i][j] * b_list[j]
-            S_star_ytildeA += ytilde[i][j] * A_list[j]
-            S_star_ytildeb += ytilde[i][j] * b_list[j]
-        
-        # constraints += [
-        #     (1 - alpha_inv) * t - (cp.trace(Gi @ X[i]) + Fi @ Y[i]) + lambd * dro_eps <= s[i],
-        #     t - (cp.trace(Gi @ Xtilde[i]) + Fi @ Ytilde[i]) + lambd * dro_eps <= s[i],
-        #     S_star_yA - X[i] + alpha_inv * tau * A0 - alpha_inv * Aobj >> 0,
-        #     S_star_yb - Y[i] + alpha_inv * tau * b0 - alpha_inv * bobj == 0,
-        #     S_star_ytildeA - Xtilde[i] >> 0,
-        #     S_star_ytildeb - Ytilde[i] == 0,
-        #     cp.SOC(lambd, cp.hstack([cp.vec(X[i], order='C'), Y[i]])),
-        #     cp.SOC(lambd, cp.hstack([cp.vec(Xtilde[i], order='C'), Ytilde[i]])),
-        # ]
+        Q1_mat = cp.Variable(Aobj.shape, symmetric=True)
+        Q1_vec = cp.Variable(bobj.shape)
 
-        # constraints += [
-        #     - (cp.trace(Gi @ X[i]) + Fi @ Y[i]) + lambd * dro_eps <= s[i],
-        #     S_star_yA - X[i] + tau * A0 - Aobj >> 0,
-        #     S_star_yb - Y[i] + tau * b0 - bobj == 0,
-        #     cp.SOC(lambd, cp.hstack([cp.vec(X[i], order='C'), Y[i]])),
-        # ]
+        constraints = [1 / N * cp.sum(s) <= 0]
 
-        constraints += [
-            - (cp.trace(Gi @ X[i]) + Fi @ Y[i]) + lambd * dro_eps <= s[i],
-            S_star_yA - X[i] + tau * A0 - Aobj >> 0,
-            S_star_yb - Y[i] + tau * b0 - bobj == 0,
-            cp.SOC(lambd, cp.hstack([cp.vec(X[i], order='C'), Y[i]])),
-        ]
+        for i in range(N):
+            Gi, Fi = samples[i]
+            Gi = Gi[1:, 1:]
+            Fi = Fi[1:]
+            # print(Gi, Fi)
 
+            S_star_y0A = 0
+            S_star_y0b = 0
+            S_star_y1A = 0
+            S_star_y1b = 0
+            S_star_y2A = 0
+            S_star_y2b = 0
+            S_star_y3A = 0
+            S_star_y3b = 0
 
-    obj = cp.Minimize(tau)
-    # obj = cp.Minimize(1 / N * cp.sum(s))
-    prob = cp.Problem(obj, constraints)
-    res = prob.solve(solver=cp.MOSEK, verbose=False)
-    # print(res)
+            for j in range(len(A_list)):
+                S_star_y0A += y0[i][j] * A_list[j]
+                S_star_y0b += y0[i][j] * b_list[j]
+
+                S_star_y1A += y1[i][j] * A_list[j]
+                S_star_y1b += y1[i][j] * b_list[j]
+
+                S_star_y2A += y2[i][j] * A_list[j]
+                S_star_y2b += y2[i][j] * b_list[j]
+
+                S_star_y3A += y3[i][j] * A_list[j]
+                S_star_y3b += y3[i][j] * b_list[j]
+
+            constraints += [
+                t - (cp.trace(X0[i] @ Gi) + Y0[i] @ Fi) + lambd * dro_eps <= s[i],
+                (1 - alpha_inv) * t - (cp.trace(X1[i] @ Gi) + Y1[i] @ Fi) + lambd * dro_eps <= s[i],
+                (1 - alpha_inv) * t - (cp.trace(X2[i] @ Gi) + Y2[i] @ Fi) + lambd * dro_eps <= s[i],
+                (1 - alpha_inv) * t - (cp.trace(X3[i] @ Gi) + Y3[i] @ Fi) + lambd * dro_eps <= s[i],
+                cp.SOC(lambd, cp.hstack([cp.vec(X0[i], order='C'), Y0[i]])),
+                cp.SOC(lambd, cp.hstack([cp.vec(X1[i], order='C'), Y1[i]])),
+                cp.SOC(lambd, cp.hstack([cp.vec(X2[i], order='C'), Y2[i]])),
+                cp.SOC(lambd, cp.hstack([cp.vec(X3[i], order='C'), Y3[i]]))
+            ]
+
+            constraints += [
+                S_star_y0A - X0[i] >> 0,
+                S_star_y0b - Y0[i] == 0,
+                S_star_y1A - X1[i] - alpha_inv * (Aobj - Q1_mat) >> 0,
+                S_star_y1b - Y1[i] - alpha_inv * (bobj - Q1_vec) == 0,
+                S_star_y2A - X2[i] - alpha_inv * (Q1_mat - rho * Q0_mat) >> 0,
+                S_star_y2b - Y2[i] - alpha_inv * (Q1_vec - rho * Q0_vec) == 0,
+                S_star_y3A - X3[i] - alpha_inv * (Q0_mat - A0) >> 0,
+                S_star_y3b - Y3[i] - alpha_inv * (Q0_vec - b0) == 0,
+            ]
+
+        # obj = cp.Minimize(rho)
+        # obj = cp.Minimize(1 / N * cp.sum(s))
+        obj = cp.Minimize(0)
+        prob = cp.Problem(obj, constraints)
+        res = prob.solve(solver=cp.MOSEK, verbose=False)
+        print('rho:', rho, 'res:', res)
+
+        print(Q0_mat.value, Q0_vec.value)
+        print(Q1_mat.value, Q1_vec.value)
 
     return res
