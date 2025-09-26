@@ -156,7 +156,8 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
     # Corresponding dual variables to primal constriants
     # lmbd = cp.Variable(len(A_list), nonneg=True)    # Interpolation conditions
     # rho = cp.Variable()
-    for rho in np.arange(0, 0.51, .1):
+    for rho in np.arange(0.2, 0.31, .01):
+    # for rho in np.arange(0.1, 0.91, 0.1):
     # rho = 0.5
         lambd = cp.Variable(nonneg=True)
         t = cp.Variable()
@@ -188,7 +189,10 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
         Q1_mat = cp.Variable(Aobj.shape, symmetric=True)
         Q1_vec = cp.Variable(bobj.shape)
 
-        constraints = [1 / N * cp.sum(s) <= 0]
+        R = cp.Variable(Aobj.shape, symmetric=True)
+        r = cp.Variable(bobj.shape, nonneg=True)
+
+        constraints = [1 / N * cp.sum(s) <= 0, R >> 0]
 
         for i in range(N):
             Gi, Fi = samples[i]
@@ -234,8 +238,8 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
                 S_star_y0b - Y0[i] == 0,
                 S_star_y1A - X1[i] - alpha_inv * (Aobj - Q1_mat) >> 0,
                 S_star_y1b - Y1[i] - alpha_inv * (bobj - Q1_vec) == 0,
-                S_star_y2A - X2[i] - alpha_inv * (Q1_mat - rho * Q0_mat) >> 0,
-                S_star_y2b - Y2[i] - alpha_inv * (Q1_vec - rho * Q0_vec) == 0,
+                S_star_y2A - X2[i] - alpha_inv * (Q1_mat - rho * Q0_mat + R) >> 0,
+                S_star_y2b - Y2[i] - alpha_inv * (Q1_vec - rho * Q0_vec + r) == 0,
                 S_star_y3A - X3[i] - alpha_inv * (Q0_mat - A0) >> 0,
                 S_star_y3b - Y3[i] - alpha_inv * (Q0_vec - b0) == 0,
             ]
@@ -244,7 +248,8 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
         # obj = cp.Minimize(1 / N * cp.sum(s))
         obj = cp.Minimize(0)
         prob = cp.Problem(obj, constraints)
-        res = prob.solve(solver=cp.MOSEK, verbose=False)
+        # res = prob.solve(solver=cp.MOSEK, verbose=False)
+        res = prob.solve(solver=cp.CLARABEL, verbose=False)
         print('rho:', rho, 'res:', res)
 
         print(Q0_mat.value, Q0_vec.value)
