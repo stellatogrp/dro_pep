@@ -299,6 +299,7 @@ def quad_dro(cfg):
             df = pd.DataFrame(res)
             df.to_csv(cfg.dro_fname, index=False)
 
+
 def quad_lyap(cfg):
 
     log.info(cfg)
@@ -311,60 +312,103 @@ def quad_lyap(cfg):
         log.info('invalid alg in cfg')
         exit(0)
 
-    if cfg.dro_obj == 'expectation':
-        N = cfg.training.expectation_N
-        num_clusters = cfg.num_clusters.expectation
-        dro_obj = 'expectation'
-
-    elif cfg.dro_obj == 'cvar':
-        N = cfg.training.cvar_N
-        num_clusters = cfg.num_clusters.cvar
-        dro_obj = 'cvar'
-
-    else:
-        log.info('invalid dro obj')
-        exit(0)
-
+    N = cfg.training.lyap_N
     eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
     alpha = cfg.alpha
 
     np.random.seed(cfg.seed.train)
     quad_funcs = []
+    params = {
+        't': cfg.eta / cfg.L,
+        'K_max': cfg.K_max,
+    }
+
+    samples = []
     for i in range(N):
-        # q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
         quad_funcs.append(q)
+        x0 = q.sample_init_point()
+        xs = q.x_star
+        # fs = q.f_star
+        x, g, f = algo(q.f, q.g, x0, xs, params)
+        x = x[1:]
+        g = g[1:]
+        f = f[1:]
+        sample_i = {
+            'x': x,
+            'g': g,
+            'f': f,
+        }
+        samples.append(sample_i)
+
+# def quad_lyap(cfg):
+
+#     log.info(cfg)
+
+#     if cfg.alg == 'grad_desc':
+#         algo = gradient_descent
+#     elif cfg.alg == 'nesterov_grad_desc':
+#         algo = nesterov_accelerated_gradient
+#     else:
+#         log.info('invalid alg in cfg')
+#         exit(0)
+
+#     if cfg.dro_obj == 'expectation':
+#         N = cfg.training.expectation_N
+#         num_clusters = cfg.num_clusters.expectation
+#         dro_obj = 'expectation'
+
+#     elif cfg.dro_obj == 'cvar':
+#         N = cfg.training.cvar_N
+#         num_clusters = cfg.num_clusters.cvar
+#         dro_obj = 'cvar'
+
+#     else:
+#         log.info('invalid dro obj')
+#         exit(0)
+
+#     eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
+#     alpha = cfg.alpha
+
+#     np.random.seed(cfg.seed.train)
+#     quad_funcs = []
+#     for i in range(N):
+#         q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+#         # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+#         quad_funcs.append(q)
     
-    res = []
-    sample_df_list = []
+#     res = []
+#     sample_df_list = []
 
-    for k in range(cfg.K_min, cfg.K_max + 1):
-        log.info(f'----k={k}----')
-        samples = []
+#     for k in range(cfg.K_min, cfg.K_max + 1):
+#         log.info(f'----k={k}----')
+#         samples = []
 
-        for i in range(N):
-            h = quad_funcs[i]
-            # x0 = h.x0
-            x0 = h.sample_init_point()
-            xs = h.x_star
-            fs = h.f_star
+#         for i in range(N):
+#             h = quad_funcs[i]
+#             # x0 = h.x0
+#             x0 = h.sample_init_point()
+#             xs = h.x_star
+#             fs = h.f_star
 
-            params = {
-                't': cfg.eta / cfg.L,
-                'K_max': k,
-            }
+#             params = {
+#                 't': cfg.eta / cfg.L,
+#                 'K_max': k,
+#             }
 
-            G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
-            # log.info(F.shape)
-            samples.append((G, F))
-            sample_df_list.append(pd.Series({
-                'i': i,
-                'K': k,
-                'obj_val': F[-1] - F[0],
-                'grad_sq_norm': G[-1, -1],
-            }))
-        sample_df = pd.DataFrame(sample_df_list)
-        sample_df.to_csv('samples.csv', index=False)
+#             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
+#             # log.info(F.shape)
+#             samples.append((G, F))
+#             sample_df_list.append(pd.Series({
+#                 'i': i,
+#                 'K': k,
+#                 'obj_val': F[-1] - F[0],
+#                 'grad_sq_norm': G[-1, -1],
+#             }))
+#         sample_df = pd.DataFrame(sample_df_list)
+#         sample_df.to_csv('samples.csv', index=False)
 
-        lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, k, samples, 0.1)
-        log.info(lyap_res)
+#         dro_eps = 0.1
+#         lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, k, samples, 0.1)
+#         log.info(lyap_res)

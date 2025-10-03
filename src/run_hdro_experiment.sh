@@ -6,7 +6,7 @@
 #SBATCH --mem-per-cpu=120G
 #SBATCH --time=00-02:59:59
 #SBATCH --array=1,3
-#SBATCH -o /scratch/gpfs/vranjan/dro_pep_out/Huber/runs/%A.txt
+#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Huber/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1

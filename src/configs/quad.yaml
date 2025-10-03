@@ -1,11 +1,11 @@
-mu: 1.
-L: 3
+mu: 0.
+L: 1
 eta: 1  # final step size = eta / L 
-dim: 500
-R: 1
+dim: 100
+R: 5
 
 K_min: 1
-K_max: 1
+K_max: 3
 
 alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
@@ -22,6 +22,7 @@ sample_N: 10000
 training:
   expectation_N: 1
   cvar_N: 20
+  lyap_N: 100
 num_clusters:
   expectation: null
   cvar: null
@@ -31,7 +32,7 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: 1
-  log_max: 2
-  logspace_count: 8
+  log_min: -1
+  log_max: 1
+  logspace_count: 7
 alpha: 0.1
