@@ -341,6 +341,13 @@ def quad_lyap(cfg):
             'f': f,
         }
         samples.append(sample_i)
+    
+    # compute rho
+    # for now use obj value objective and initial distance
+
+def compute_sample_rho(sample):
+    x, g, f = sample['x'], sample['g'], sample['f']
+    print(x)
 
 # def quad_lyap(cfg):
 
