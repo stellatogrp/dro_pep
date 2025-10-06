@@ -345,9 +345,36 @@ def quad_lyap(cfg):
     # compute rho
     # for now use obj value objective and initial distance
 
+    GF = []
+    for i in range(N):
+        sample = samples[i]
+        G, F, q = compute_sample_rho(sample)
+        GF.append((G, F))
+        log.info(q)
+
+    dro_eps = 0.1
+    lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps)
+    log.info(lyap_res)
+
 def compute_sample_rho(sample):
     x, g, f = sample['x'], sample['g'], sample['f']
-    print(x)
+    rho_max = 0
+    K = len(x) - 1
+    q = 0
+    # print('----')
+    for i in range(K):
+        xiplus1 = x[i+1]
+        f_iplus1 = f[i+1]
+        xi = x[i]
+        # rho_i = f_iplus1 / np.linalg.norm(xi) ** 2
+        rho_i = np.linalg.norm(xiplus1) ** 2 / np.linalg.norm(xi) ** 2
+        if rho_i > rho_max:
+            rho_max = rho_i
+            q = i
+        # print(rho_i)
+    # print(rho_max, q)
+    G_half = np.array([x[q], g[q], g[q+1]])
+    return G_half @ G_half.T, np.array([f[q], f[q+1]]), q
 
 # def quad_lyap(cfg):
 

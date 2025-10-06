@@ -195,8 +195,8 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
 
     for i in range(N):
         Gi, Fi = samples[i]
-        Gi = Gi[1:, 1:]
-        Fi = Fi[1:]
+        # Gi = Gi[1:, 1:]
+        # Fi = Fi[1:]
         # print(Gi, Fi)
 
         S_star_y0A = 0
@@ -279,4 +279,4 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
             print('increasing rho')
             rho_lo = mid
 
-    return res
+    return rho_hi
