@@ -4,7 +4,7 @@ import logging
 import time
 from tqdm import trange
 
-from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk
+from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
@@ -27,7 +27,8 @@ class Quad(object):
         self.f_star = 0
         self.x_star = np.zeros(dim)
 
-        self.Q = marchenko_pastur(dim, mu, L)
+        # self.Q = marchenko_pastur(dim, mu, L)
+        self.Q = generate_P_fixed_mu_L(dim, mu, L)
 
     def f(self, x):
         return .5 * x.T @ self.Q @ x
@@ -84,8 +85,8 @@ def quad_samples(cfg):
         exit(0)
 
     for i in trange(cfg.sample_N):
-        # h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        h = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        # h = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
         # x0 = h.x0
         x0 = h.sample_init_point()
         xs = h.x_star
@@ -216,8 +217,8 @@ def quad_dro(cfg):
     np.random.seed(cfg.seed.train)
     quad_funcs = []
     for i in range(N):
-        # q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
         quad_funcs.append(q)
     
     res = []
@@ -379,40 +380,6 @@ def compute_sample_rho(sample):
 
 # def quad_lyap(cfg):
 
-#     log.info(cfg)
-
-#     if cfg.alg == 'grad_desc':
-#         algo = gradient_descent
-#     elif cfg.alg == 'nesterov_grad_desc':
-#         algo = nesterov_accelerated_gradient
-#     else:
-#         log.info('invalid alg in cfg')
-#         exit(0)
-
-#     if cfg.dro_obj == 'expectation':
-#         N = cfg.training.expectation_N
-#         num_clusters = cfg.num_clusters.expectation
-#         dro_obj = 'expectation'
-
-#     elif cfg.dro_obj == 'cvar':
-#         N = cfg.training.cvar_N
-#         num_clusters = cfg.num_clusters.cvar
-#         dro_obj = 'cvar'
-
-#     else:
-#         log.info('invalid dro obj')
-#         exit(0)
-
-#     eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
-#     alpha = cfg.alpha
-
-#     np.random.seed(cfg.seed.train)
-#     quad_funcs = []
-#     for i in range(N):
-#         q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-#         # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-#         quad_funcs.append(q)
-    
 #     res = []
 #     sample_df_list = []
 
