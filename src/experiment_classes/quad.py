@@ -122,7 +122,8 @@ def quad_pep(cfg):
         exit(0)
 
     # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
-    objs = ['obj_val', 'grad_sq_norm']
+    # objs = ['obj_val', 'grad_sq_norm']
+    objs = ['opt_dist_sq_norm']
 
     res = []
 

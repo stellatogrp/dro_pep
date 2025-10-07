@@ -37,15 +37,26 @@ def huber_driver(cfg):
     huber_dro(cfg)
 
 
+# Quad_params = [
+#     ['alg=grad_desc', 'dro_obj=expectation', 'dro_pep_obj=obj_val'],
+#     ['alg=nesterov_grad_desc', 'dro_obj=expectation', 'dro_pep_obj=obj_val'],
+#     ['alg=grad_desc', 'dro_obj=cvar', 'dro_pep_obj=obj_val'],
+#     ['alg=nesterov_grad_desc', 'dro_obj=cvar', 'dro_pep_obj=obj_val'],
+#     ['alg=grad_desc', 'dro_obj=expectation', 'dro_pep_obj=grad_sq_norm'],
+#     ['alg=nesterov_grad_desc', 'dro_obj=expectation', 'dro_pep_obj=grad_sq_norm'],
+#     ['alg=grad_desc', 'dro_obj=cvar', 'dro_pep_obj=grad_sq_norm'],
+#     ['alg=nesterov_grad_desc', 'dro_obj=cvar', 'dro_pep_obj=grad_sq_norm'],
+# ]
+
 Quad_params = [
-    ['alg=grad_desc', 'dro_obj=expectation', 'dro_pep_obj=obj_val'],
-    ['alg=nesterov_grad_desc', 'dro_obj=expectation', 'dro_pep_obj=obj_val'],
-    ['alg=grad_desc', 'dro_obj=cvar', 'dro_pep_obj=obj_val'],
-    ['alg=nesterov_grad_desc', 'dro_obj=cvar', 'dro_pep_obj=obj_val'],
-    ['alg=grad_desc', 'dro_obj=expectation', 'dro_pep_obj=grad_sq_norm'],
-    ['alg=nesterov_grad_desc', 'dro_obj=expectation', 'dro_pep_obj=grad_sq_norm'],
-    ['alg=grad_desc', 'dro_obj=cvar', 'dro_pep_obj=grad_sq_norm'],
-    ['alg=nesterov_grad_desc', 'dro_obj=cvar', 'dro_pep_obj=grad_sq_norm'],
+    ['alg=grad_desc', 'dro_obj=expectation', 'mu=0'],
+    ['alg=nesterov_grad_desc', 'dro_obj=expectation', 'mu=0'],
+    ['alg=grad_desc', 'dro_obj=cvar', 'mu=0'],
+    ['alg=nesterov_grad_desc', 'dro_obj=cvar', 'mu=0'],
+    ['alg=grad_desc', 'dro_obj=expectation', 'mu=1'],
+    ['alg=nesterov_grad_desc', 'dro_obj=expectation', 'mu=1'],
+    ['alg=grad_desc', 'dro_obj=cvar', 'mu=1'],
+    ['alg=nesterov_grad_desc', 'dro_obj=cvar', 'mu=1'],
 ]
 
 Huber_params = [

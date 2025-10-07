@@ -1,15 +1,15 @@
-mu: 0.
-L: 1
+mu: 1
+L: 10
 eta: 1  # final step size = eta / L 
-dim: 100
-R: 5
+dim: 300
+R: 10
 
 K_min: 1
 K_max: 30
 
 alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
-dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
+dro_pep_obj: opt_dist_sq_norm  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
 precond_type: average # 'average' or 'max' or 'min'
 
