@@ -18,13 +18,11 @@ def generate_P_bounded_mu_L(d, mu, L):
 
 
 def marchenko_pastur(d, mu, L):
-    assert mu == 0
-    sigma = np.sqrt(L)/2
-    X = np.random.normal(0, sigma, (d, d))
+    r = (np.sqrt(L) - np.sqrt(mu))**2 / (np.sqrt(L) + np.sqrt(mu))**2
+    sigma = (np.sqrt(L) + np.sqrt(mu)) / 2
+    X = np.random.normal(0, sigma, (d, np.round(r*d)))
+    # there is a possibility that H has eigenvalue larger than L
     H = X.T@X/d
-    # while not all(np.linalg.eigvals(H) <= L) :
-    #     X = np.random.normal(0, sigma, (d, d))
-    #     H = X.T@X/d
     return H
 
 def gradient_descent(f, g, x0, xs, params):
