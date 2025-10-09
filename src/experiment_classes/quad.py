@@ -13,10 +13,19 @@ from .lyap_classes.gd import gd_lyap
 log = logging.getLogger(__name__)
 
 
+def rejection_sample_MP(dim, mu, L):
+    Q = marchenko_pastur(dim, mu, L)
+    eigvals = np.real(np.linalg.eigvals(Q))
+    if mu > np.min(eigvals) or L < np.max(eigvals):
+        print('reject sample')
+        return rejection_sample_MP(dim, mu, L)
+    return Q
+
+
 class Quad(object):
 
     def __init__(self, dim, mu=0, L=10, R=1):
-        self.dim = dim
+        # self.dim = dim
         self.mu = mu
         self.L = L
         self.R = R
@@ -24,11 +33,17 @@ class Quad(object):
         self.x0 = np.zeros(dim)
         self.x0[0] = R
 
-        self.f_star = 0
-        self.x_star = np.zeros(dim)
-
         # self.Q = marchenko_pastur(dim, mu, L)
-        self.Q = generate_P_fixed_mu_L(dim, mu, L)
+        self.Q = rejection_sample_MP(dim, mu, L)
+        # eigvals = np.real(np.linalg.eigvals(self.Q))
+        # print(np.min(eigvals), np.max(eigvals), self.Q.shape)
+        # # print(eigvals)
+
+        self.dim = self.Q.shape[0]
+        # self.Q = generate_P_fixed_mu_L(dim, mu, L)
+
+        self.f_star = 0
+        self.x_star = np.zeros(self.dim)
 
     def f(self, x):
         return .5 * x.T @ self.Q @ x
@@ -333,6 +348,7 @@ def quad_lyap(cfg):
         x0 = q.sample_init_point()
         xs = q.x_star
         # fs = q.f_star
+
         x, g, f = algo(q.f, q.g, x0, xs, params)
         x = x[1:]
         g = g[1:]

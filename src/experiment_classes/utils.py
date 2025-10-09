@@ -20,7 +20,7 @@ def generate_P_bounded_mu_L(d, mu, L):
 def marchenko_pastur(d, mu, L):
     r = (np.sqrt(L) - np.sqrt(mu))**2 / (np.sqrt(L) + np.sqrt(mu))**2
     sigma = (np.sqrt(L) + np.sqrt(mu)) / 2
-    X = np.random.normal(0, sigma, (d, np.round(r*d)))
+    X = np.random.normal(0, sigma, size=(d, np.round(r*d).astype(np.int64)))
     # there is a possibility that H has eigenvalue larger than L
     H = X.T@X/d
     return H

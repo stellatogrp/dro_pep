@@ -195,9 +195,6 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
 
     for i in range(N):
         Gi, Fi = samples[i]
-        # Gi = Gi[1:, 1:]
-        # Fi = Fi[1:]
-        # print(Gi, Fi)
 
         S_star_y0A = 0
         S_star_y0b = 0
@@ -243,21 +240,8 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
             S_star_y3b - Y3[i] - alpha_inv * (Q0_vec - b0) == 0,
         ]
 
-        # obj = cp.Minimize(rho)
-        # obj = cp.Minimize(1 / N * cp.sum(s))
     
     binary_search_iters = 10
-    # for rho_val in np.arange(0.2, 0.31, .01):
-    #     rho.value = rho_val
-
-    #     obj = cp.Minimize(0)
-    #     prob = cp.Problem(obj, constraints)
-    #     # res = prob.solve(solver=cp.MOSEK, verbose=False)
-    #     res = prob.solve(solver=cp.CLARABEL, verbose=False)
-    #     print('rho:', rho.value, 'res:', res)
-
-    #     print(Q0_mat.value, Q0_vec.value)
-    #     print(Q1_mat.value, Q1_vec.value)
     rho_lo = 0
     rho_hi = 1
     for i in range(binary_search_iters):
