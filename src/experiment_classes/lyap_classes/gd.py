@@ -184,6 +184,16 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
 
     constraints = [1 / N * cp.sum(s) <= 0]
 
+    # Lyapunov function ansatz
+    Q_param_mat = cp.Variable((2, 2), symmetric=True)
+    Q_param_vec = cp.Variable()
+    constraints += [
+        Q_mat == np.vstack([repX[0]-repX[-1], repG[0]]).T @ Q_param_mat @ np.vstack([repX[0]-repX[-1], repG[0]]),
+        Q_vec == Q_param_vec * (repF[0] - repF[-1]),
+        Qplus_mat == np.vstack([repX[1]-repX[-1], repG[1]]).T @ Q_param_mat @ np.vstack([repX[1]-repX[-1], repG[1]]),
+        Qplus_vec == Q_param_vec * (repF[1] - repF[-1])
+    ] # had to use index '-1' instead of 's' as it overlaps with cvxpy variable 's'
+
     for i in range(N):
         Gi, Fi = samples[i]
         normalizer = Gi[0, 0]
