@@ -142,14 +142,15 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
     print(idx_list)
 
     # Initial condition: <A0, G> + b0.T @ F + c0 <= 0
-    A0 = np.outer(repX[0] - xs, repX[0] - xs)
-    b0 = 0.0 * fs
-    # c0 = - 1.0
-    c0 = - 400
+    # A0 = np.outer(repX[0] - xs, repX[0] - xs)
+    # b0 = 0.0 * fs
+    # # c0 = - 1.0
+    # c0 = - 400
 
     # Primal objective function (performance metric)
     Aobj = np.outer(repX[n_points] - xs, repX[n_points] - xs)
     Aobj = 0.0 * Aobj
+
     bobj = repF[n_points] - fs
     # bobj = 0.0 * bobj
 
@@ -165,82 +166,136 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
 
     s = cp.Variable(N)
 
-    X0 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
-    Y0 = [cp.Variable(bobj.shape) for _ in range(N)]
-    X1 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
-    Y1 = [cp.Variable(bobj.shape) for _ in range(N)]
-    X2 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
-    Y2 = [cp.Variable(bobj.shape) for _ in range(N)]
-    X3 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
-    Y3 = [cp.Variable(bobj.shape) for _ in range(N)]
+    X = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    Y = [cp.Variable(bobj.shape) for _ in range(N)]
+    Xtilde = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    Ytilde = [cp.Variable(bobj.shape) for _ in range(N)]
 
-    y0 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
-    y1 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
-    y2 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
-    y3 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+    y = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+    ytilde = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
 
-    Q0_mat = cp.Variable(Aobj.shape, symmetric=True)
-    Q0_vec = cp.Variable(bobj.shape)
+    Q_mat = cp.Variable(Aobj.shape, symmetric=True)
+    Q_vec = cp.Variable(bobj.shape)
 
-    Q1_mat = cp.Variable(Aobj.shape, symmetric=True)
-    Q1_vec = cp.Variable(bobj.shape)
-
-    R = cp.Variable(Aobj.shape, symmetric=True)
-    r = cp.Variable(bobj.shape, nonneg=True)
-    # r = cp.Variable(bobj.shape)
+    Qplus_mat = cp.Variable(Aobj.shape, symmetric=True)
+    Qplus_vec = cp.Variable(bobj.shape)
 
     rho = cp.Parameter()
 
-    constraints = [1 / N * cp.sum(s) <= 0, R >> 0]
+    constraints = [1 / N * cp.sum(s) <= 0]
 
     for i in range(N):
         Gi, Fi = samples[i]
-
-        S_star_y0A = 0
-        S_star_y0b = 0
-        S_star_y1A = 0
-        S_star_y1b = 0
-        S_star_y2A = 0
-        S_star_y2b = 0
-        S_star_y3A = 0
-        S_star_y3b = 0
+        normalizer = Gi[0, 0]
+        Gi = Gi / normalizer
+        Fi = Fi / normalizer
+        
+        S_star_yA = 0
+        S_star_yb = 0
+        S_star_ytildeA = 0
+        S_star_ytildeb = 0
 
         for j in range(len(A_list)):
-            S_star_y0A += y0[i][j] * A_list[j]
-            S_star_y0b += y0[i][j] * b_list[j]
+            S_star_yA += y[i][j] * A_list[j]
+            S_star_yb += y[i][j] * b_list[j]
 
-            S_star_y1A += y1[i][j] * A_list[j]
-            S_star_y1b += y1[i][j] * b_list[j]
-
-            S_star_y2A += y2[i][j] * A_list[j]
-            S_star_y2b += y2[i][j] * b_list[j]
-
-            S_star_y3A += y3[i][j] * A_list[j]
-            S_star_y3b += y3[i][j] * b_list[j]
-
+            S_star_ytildeA = ytilde[i][j] * A_list[j]
+            S_star_ytildeb = ytilde[i][j] * b_list[j]
+        
         constraints += [
-            t - (cp.trace(X0[i] @ Gi) + Y0[i] @ Fi) + lambd * dro_eps <= s[i],
-            (1 - alpha_inv) * t - (cp.trace(X1[i] @ Gi) + Y1[i] @ Fi) + lambd * dro_eps <= s[i],
-            (1 - alpha_inv) * t - (cp.trace(X2[i] @ Gi) + Y2[i] @ Fi) + lambd * dro_eps <= s[i],
-            (1 - alpha_inv) * t - (cp.trace(X3[i] @ Gi) + Y3[i] @ Fi) + lambd * dro_eps <= s[i],
-            cp.SOC(lambd, cp.hstack([cp.vec(X0[i], order='C'), Y0[i]])),
-            cp.SOC(lambd, cp.hstack([cp.vec(X1[i], order='C'), Y1[i]])),
-            cp.SOC(lambd, cp.hstack([cp.vec(X2[i], order='C'), Y2[i]])),
-            cp.SOC(lambd, cp.hstack([cp.vec(X3[i], order='C'), Y3[i]]))
+            (1 - alpha_inv) * t - (cp.trace(X[i] @ Gi) + Y[i] @ Fi) + lambd * dro_eps <= s[i],
+            t - (cp.trace(Xtilde[i] @ Gi) + Ytilde[i] @ Fi) + lambd * dro_eps <= s[i],
+            cp.SOC(lambd, cp.hstack([cp.vec(X[i], order='C'), Y[i]])),
+            cp.SOC(lambd, cp.hstack([cp.vec(Xtilde[i], order='C'), Ytilde[i]])),
+            Q_mat >> Aobj,
+            Q_vec >= bobj,
+            # Q_mat == Aobj,
+            # Q_vec == bobj,
         ]
 
         constraints += [
-            S_star_y0A - X0[i] >> 0,
-            S_star_y0b - Y0[i] == 0,
-            S_star_y1A - X1[i] - alpha_inv * (Aobj - Q1_mat) >> 0,
-            S_star_y1b - Y1[i] - alpha_inv * (bobj - Q1_vec) == 0,
-            S_star_y2A - X2[i] - alpha_inv * (Q1_mat - rho * Q0_mat + R) >> 0,
-            S_star_y2b - Y2[i] - alpha_inv * (Q1_vec - rho * Q0_vec + r) == 0,
-            S_star_y3A - X3[i] - alpha_inv * (Q0_mat - A0) >> 0,
-            S_star_y3b - Y3[i] - alpha_inv * (Q0_vec - b0) == 0,
+            S_star_yA - X[i] - alpha_inv * (Qplus_mat - rho * Q_mat) >> 0,
+            S_star_yb - Y[i] - alpha_inv * (Qplus_vec - rho * Q_vec) == 0,
+            S_star_ytildeA - Xtilde[i] >> 0,
+            S_star_ytildeb - Ytilde[i] == 0,
         ]
 
-    
+    # OLD VERSION BELOW
+    # X0 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    # Y0 = [cp.Variable(bobj.shape) for _ in range(N)]
+    # X1 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    # Y1 = [cp.Variable(bobj.shape) for _ in range(N)]
+    # X2 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    # Y2 = [cp.Variable(bobj.shape) for _ in range(N)]
+    # X3 = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    # Y3 = [cp.Variable(bobj.shape) for _ in range(N)]
+
+    # y0 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+    # y1 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+    # y2 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+    # y3 =[cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+
+    # Q0_mat = cp.Variable(Aobj.shape, symmetric=True)
+    # Q0_vec = cp.Variable(bobj.shape)
+
+    # Q1_mat = cp.Variable(Aobj.shape, symmetric=True)
+    # Q1_vec = cp.Variable(bobj.shape)
+
+    # R = cp.Variable(Aobj.shape, symmetric=True)
+    # r = cp.Variable(bobj.shape, nonneg=True)
+    # # r = cp.Variable(bobj.shape)
+
+    # rho = cp.Parameter()
+
+    # constraints = [1 / N * cp.sum(s) <= 0, R >> 0]
+
+    # for i in range(N):
+    #     Gi, Fi = samples[i]
+
+    #     S_star_y0A = 0
+    #     S_star_y0b = 0
+    #     S_star_y1A = 0
+    #     S_star_y1b = 0
+    #     S_star_y2A = 0
+    #     S_star_y2b = 0
+    #     S_star_y3A = 0
+    #     S_star_y3b = 0
+
+    #     for j in range(len(A_list)):
+    #         S_star_y0A += y0[i][j] * A_list[j]
+    #         S_star_y0b += y0[i][j] * b_list[j]
+
+    #         S_star_y1A += y1[i][j] * A_list[j]
+    #         S_star_y1b += y1[i][j] * b_list[j]
+
+    #         S_star_y2A += y2[i][j] * A_list[j]
+    #         S_star_y2b += y2[i][j] * b_list[j]
+
+    #         S_star_y3A += y3[i][j] * A_list[j]
+    #         S_star_y3b += y3[i][j] * b_list[j]
+
+    #     constraints += [
+    #         t - (cp.trace(X0[i] @ Gi) + Y0[i] @ Fi) + lambd * dro_eps <= s[i],
+    #         (1 - alpha_inv) * t - (cp.trace(X1[i] @ Gi) + Y1[i] @ Fi) + lambd * dro_eps <= s[i],
+    #         (1 - alpha_inv) * t - (cp.trace(X2[i] @ Gi) + Y2[i] @ Fi) + lambd * dro_eps <= s[i],
+    #         (1 - alpha_inv) * t - (cp.trace(X3[i] @ Gi) + Y3[i] @ Fi) + lambd * dro_eps <= s[i],
+    #         cp.SOC(lambd, cp.hstack([cp.vec(X0[i], order='C'), Y0[i]])),
+    #         cp.SOC(lambd, cp.hstack([cp.vec(X1[i], order='C'), Y1[i]])),
+    #         cp.SOC(lambd, cp.hstack([cp.vec(X2[i], order='C'), Y2[i]])),
+    #         cp.SOC(lambd, cp.hstack([cp.vec(X3[i], order='C'), Y3[i]]))
+    #     ]
+
+    #     constraints += [
+    #         S_star_y0A - X0[i] >> 0,
+    #         S_star_y0b - Y0[i] == 0,
+    #         S_star_y1A - X1[i] - alpha_inv * (Aobj - Q1_mat) >> 0,
+    #         S_star_y1b - Y1[i] - alpha_inv * (bobj - Q1_vec) == 0,
+    #         S_star_y2A - X2[i] - alpha_inv * (Q1_mat - rho * Q0_mat + R) >> 0,
+    #         S_star_y2b - Y2[i] - alpha_inv * (Q1_vec - rho * Q0_vec + r) == 0,
+    #         S_star_y3A - X3[i] - alpha_inv * (Q0_mat - A0) >> 0,
+    #         S_star_y3b - Y3[i] - alpha_inv * (Q0_vec - b0) == 0,
+    #     ]
+
     binary_search_iters = 10
     rho_lo = 0
     rho_hi = 1
@@ -253,8 +308,10 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
         res = prob.solve(solver=cp.CLARABEL, verbose=False)
         print('i:', i, 'rho:', rho.value, 'res:', res)
 
-        print(Q0_mat.value, Q0_vec.value)
-        print(Q1_mat.value, Q1_vec.value)
+        # print(Q0_mat.value, Q0_vec.value)
+        # print(Q1_mat.value, Q1_vec.value)
+        print(Q_mat.value, Q_vec.value)
+        print(Qplus_mat.value, Qplus_vec.value)
 
         if res == 0.0:
             print('decreasing rho')
