@@ -1,8 +1,11 @@
 import clarabel
 import numpy as np
+import logging
 import scipy.sparse as spa
 
 from .canonicalizer import Canonicalizer
+
+log = logging.getLogger(__name__)
 
 
 class ClarabelCanonicalizer(Canonicalizer):
@@ -744,7 +747,16 @@ class ClarabelCanonicalizer(Canonicalizer):
         settings = clarabel.DefaultSettings()
         settings.verbose = False
         # settings.verbose = True
-        solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+        # settings.direct_solve_method = 'mkl'
+        # solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+
+        try:
+            settings.settings.direct_solve_method = 'mkl'
+            solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+            log.info('solver switched to mkl correctly')
+        except Exception as e:
+            solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+            log.info('solver did not switch to mkl')
         solution = solver.solve()
         out = {
             'obj': solution.obj_val,

@@ -149,10 +149,10 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
 
     # Primal objective function (performance metric)
     Aobj = np.outer(repX[n_points] - xs, repX[n_points] - xs)
-    Aobj = 0.0 * Aobj
+    # Aobj = 0.0 * Aobj
 
     bobj = repF[n_points] - fs
-    # bobj = 0.0 * bobj
+    bobj = 0.0 * bobj
 
     # Corresponding dual variables to primal constriants
     # lmbd = cp.Variable(len(A_list), nonneg=True)    # Interpolation conditions
@@ -191,7 +191,7 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
         Q_mat == np.vstack([repX[0]-repX[-1], repG[0]]).T @ Q_param_mat @ np.vstack([repX[0]-repX[-1], repG[0]]),
         Q_vec == Q_param_vec * (repF[0] - repF[-1]),
         Qplus_mat == np.vstack([repX[1]-repX[-1], repG[1]]).T @ Q_param_mat @ np.vstack([repX[1]-repX[-1], repG[1]]),
-        Qplus_vec == Q_param_vec * (repF[1] - repF[-1])
+        Qplus_vec == Q_param_vec * (repF[1] - repF[-1]),
     ] # had to use index '-1' instead of 's' as it overlaps with cvxpy variable 's'
 
     for i in range(N):
@@ -217,10 +217,10 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
             t - (cp.trace(Xtilde[i] @ Gi) + Ytilde[i] @ Fi) + lambd * dro_eps <= s[i],
             cp.SOC(lambd, cp.hstack([cp.vec(X[i], order='C'), Y[i]])),
             cp.SOC(lambd, cp.hstack([cp.vec(Xtilde[i], order='C'), Ytilde[i]])),
-            Q_mat >> Aobj,
-            Q_vec >= bobj,
-            # Q_mat == Aobj,
-            # Q_vec == bobj,
+            # Q_mat >> Aobj,
+            # Q_vec >= bobj,
+            Q_mat == Aobj,
+            Q_vec == bobj,
         ]
 
         constraints += [
@@ -331,3 +331,86 @@ def gd_lyap(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
             rho_lo = mid
 
     return rho_hi
+
+def gd_lyap_nobisect(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
+    dimG = n_points + 2 # [x0-xs, g0, ..., gn]
+    dimF = n_points + 1 # [f0-fs, ..., fn-fs]
+    
+    # Algorithm iterates representation
+    eyeG = np.eye(dimG)
+    eyeF = np.eye(dimF)
+
+    x = eyeG[0, :]  # x0
+    g = eyeG[1, :]  # g0
+    f = eyeF[0, :]  # f0
+    xs = 0.0 * x
+    gs = 0.0 * g
+    fs = 0.0 * f
+
+    repX, repG, repF = [], [], []
+    repX.append(x)      # x0
+    repG.append(g)      # g0
+    repF.append(f)      # f0
+
+    for i in range(1, n_points+1):
+        x = x - eta * g     # xi
+        g = eyeG[i+1, :]    # gi
+        f = eyeF[i, :]      # fi
+
+        repX.append(x)
+        repG.append(g)
+        repF.append(f)
+
+    assert len(repX) == len(repG) == len(repF) == n_points + 1, "constraint on same number of points"
+
+    repX.append(xs)
+    repG.append(gs)
+    repF.append(fs)
+    s = len(repX) - 1   # index to the optimal point
+
+    # Define the interpolation conditions
+    # idx_list, A_list, b_list, _ = smooth_strongly_convex(np.array(repX), np.array(repG), np.array(repF), mu, L)
+    idx_list, A_list, b_list, _ = smooth_strongly_convex_gd(np.array(repX), np.array(repG), np.array(repF), mu, L)
+    print(idx_list)
+
+    # Primal objective function (performance metric)
+    Aobj = np.outer(repX[n_points] - xs, repX[n_points] - xs)
+    # Aobj = 0.0 * Aobj
+
+    bobj = repF[n_points] - fs
+    bobj = 0.0 * bobj
+
+    # Corresponding dual variables to primal constriants
+    # lmbd = cp.Variable(len(A_list), nonneg=True)    # Interpolation conditions
+    lambd = cp.Variable(nonneg=True)
+    t = cp.Variable()
+
+    N = len(samples)
+    MAT_SIZE = 3
+    VEC_SIZE = 2
+    alpha_inv = 1 / cvar_alpha
+
+    s = cp.Variable(N)
+
+    X = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    Y = [cp.Variable(bobj.shape) for _ in range(N)]
+    Xtilde = [cp.Variable(Aobj.shape, symmetric=True) for _ in range(N)]
+    Ytilde = [cp.Variable(bobj.shape) for _ in range(N)]
+
+    y = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+    ytilde = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
+
+    Q_mat = cp.Variable(Aobj.shape, symmetric=True)
+    Q_vec = cp.Variable(bobj.shape)
+
+    Qplus_mat = cp.Variable(Aobj.shape, symmetric=True)
+    Qplus_vec = cp.Variable(bobj.shape)
+
+    # rho = cp.Parameter()
+    rho = cp.Variable()
+
+    constraints = [1 / N * cp.sum(s) <= 0]
+
+    # Q_mat = 
+
+    exit(0)

@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import logging
@@ -8,7 +9,7 @@ from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_grad
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
-from .lyap_classes.gd import gd_lyap
+from .lyap_classes.gd import gd_lyap, gd_lyap_nobisect
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ def rejection_sample_MP(dim, mu, L):
     Q = marchenko_pastur(dim, mu, L)
     eigvals = np.real(np.linalg.eigvals(Q))
     if mu > np.min(eigvals) or L < np.max(eigvals):
-        print('reject sample')
+        # print('reject sample')
         return rejection_sample_MP(dim, mu, L)
     return Q
 
@@ -368,11 +369,31 @@ def quad_lyap(cfg):
         sample = samples[i]
         G, F, q = compute_sample_rho(sample)
         GF.append((G, F))
-        log.info(q)
+        # log.info(q)
+    
+    # exit(0)
 
-    dro_eps = 0.1
+    dro_eps = .01
     lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps)
+    # lyap_res = gd_lyap_nobisect(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps)
     log.info(lyap_res)
+    exit(0)
+
+    alpha_vals = np.linspace(1, .05, 20)
+    print(alpha_vals)
+    one_minus_alphas = []
+    rhos = []
+    for alpha in alpha_vals:
+        lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
+        log.info(lyap_res)
+        one_minus_alphas.append(1 - alpha)
+        rhos.append(lyap_res)
+    
+    plt.plot(one_minus_alphas, rhos)
+    plt.xlabel('one minus alpha')
+    plt.ylabel('rho')
+    # plt.show()
+    plt.savefig('rho_plot.pdf')
 
 def compute_sample_rho(sample):
     x, g, f = sample['x'], sample['g'], sample['f']
@@ -390,7 +411,7 @@ def compute_sample_rho(sample):
             rho_max = rho_i
             q = i
         # print(rho_i)
-    # print(rho_max, q)
+    print(rho_max, q)
     G_half = np.array([x[q], g[q], g[q+1]])
     return G_half @ G_half.T, np.array([f[q], f[q+1]]), q
 
