@@ -10,20 +10,20 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 35
-cvar_K_max = 35
+exp_K_max = 30
+cvar_K_max = 30
 
-pep_K_max = 35
-exp_K_max = 35
-cvar_K_max = 35
+pep_K_max = 30
+exp_K_max = 30
+cvar_K_max = 30
 
 GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
 NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')
 
-GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_40/dro.csv')
-GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_40/dro.csv')
-NGD_exp_dro = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_40/dro.csv')
-NGD_cvar_dro = pd.read_csv('data/dro/nesterov_grad_desc_cvar_1_40/dro.csv')
+GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_30/dro.csv')
+GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_30/dro.csv')
+NGD_exp_dro = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_30/dro.csv')
+NGD_cvar_dro = pd.read_csv('data/dro/nesterov_grad_desc_cvar_1_30/dro.csv')
 
 
 def plot_times():

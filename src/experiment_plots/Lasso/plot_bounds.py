@@ -10,10 +10,10 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 25
-cvar_K_max = 25
+exp_K_max = 20
+cvar_K_max = 20
 
-num_eps_vals = 7
+# num_eps_vals = 7
 
 num_per_group = 100
 groups = 100
@@ -65,56 +65,56 @@ def compute_empirical_cvar(samples, k, alpha=0.1):
 
 ISTA_samples = pd.read_csv('data/samples/ISTA_1_40/samples.csv')
 FISTA_samples = pd.read_csv('data/samples/FISTA_1_40/samples.csv')
-OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_40/samples.csv')
+# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_40/samples.csv')
 
 ISTA_pep = pd.read_csv('data/pep/ISTA_1_40/pep.csv')
 FISTA_pep = pd.read_csv('data/pep/FISTA_1_40/pep.csv')
-OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_40/pep.csv')
+# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_40/pep.csv')
 
 ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_25/dro.csv')
 ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_25/dro.csv')
 FISTA_exp_dro = pd.read_csv('data/dro/FISTA_exp_1_25/dro.csv')
 FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_25/dro.csv')
-OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_25/dro.csv')
-OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
+# OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_25/dro.csv')
+# OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
 
 
 def main_bounds():
     ISTA_color = 'tab:blue'
     FISTA_color = 'tab:green'
-    OptISTA_color = 'tab:red'
+    # OptISTA_color = 'tab:red'
 
     ISTA_exp_dro_eps = ISTA_exp_dro[ISTA_exp_dro['eps_idx'] == 2]
-    ISTA_cvar_dro_eps = ISTA_cvar_dro[ISTA_cvar_dro['eps_idx'] == 2]
+    ISTA_cvar_dro_eps = ISTA_cvar_dro[ISTA_cvar_dro['eps_idx'] == 1]
     FISTA_exp_dro_eps = FISTA_exp_dro[FISTA_exp_dro['eps_idx'] == 2]
-    FISTA_cvar_dro_eps = FISTA_cvar_dro[FISTA_cvar_dro['eps_idx'] == 2]
-    OptISTA_exp_dro_eps = OptISTA_exp_dro[OptISTA_exp_dro['eps_idx'] == 2]
-    OptISTA_cvar_dro_eps = OptISTA_cvar_dro[OptISTA_cvar_dro['eps_idx'] == 1]
+    FISTA_cvar_dro_eps = FISTA_cvar_dro[FISTA_cvar_dro['eps_idx'] == 1]
+    # OptISTA_exp_dro_eps = OptISTA_exp_dro[OptISTA_exp_dro['eps_idx'] == 2]
+    # OptISTA_cvar_dro_eps = OptISTA_cvar_dro[OptISTA_cvar_dro['eps_idx'] == 1]
 
     ISTA_worst_k = []
     FISTA_worst_k = []
-    OptISTA_worst_k = []
+    # OptISTA_worst_k = []
 
     ISTA_exp_k = []
     FISTA_exp_k = []
-    OptISTA_exp_k = []
+    # OptISTA_exp_k = []
     ISTA_cvar_k = []
     FISTA_cvar_k = []
-    OptISTA_cvar_k = []
+    # OptISTA_cvar_k = []
 
     for k in range(1, exp_K_max + 1):
         ISTA_exp_k.append(compute_empirical_avg(ISTA_samples, k))
         FISTA_exp_k.append(compute_empirical_avg(FISTA_samples, k))
-        OptISTA_exp_k.append(compute_empirical_avg(OptISTA_samples, k))
+        # OptISTA_exp_k.append(compute_empirical_avg(OptISTA_samples, k))
     
     for k in range(1, cvar_K_max + 1):
         ISTA_cvar_k.append(compute_empirical_cvar(ISTA_samples, k))
         FISTA_cvar_k.append(compute_empirical_cvar(FISTA_samples, k))
-        OptISTA_cvar_k.append(compute_empirical_cvar(OptISTA_samples, k))
+        # OptISTA_cvar_k.append(compute_empirical_cvar(OptISTA_samples, k))
 
     ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
     FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-    OptISTA_worst_cases = OptISTA_samples[['K', 'obj_val']].groupby(['K']).max()
+    # OptISTA_worst_cases = OptISTA_samples[['K', 'obj_val']].groupby(['K']).max()
 
     fig, ax = plt.subplots(1, 3)
 
@@ -139,29 +139,29 @@ def main_bounds():
     ax[1].set_xlabel(r'$K$')
 
     ax[0].set_title('Worst-case')
-    ax[1].set_title('Expectation')
-    ax[2].set_title('CVar')
+    ax[2].set_title('Expectation')
+    ax[1].set_title('CVaR')
 
     ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='ISTA', color=ISTA_color)
     ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Sample ISTA', linestyle='--', color=ISTA_color)
     ax[0].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='FISTA', color=FISTA_color)
     ax[0].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Sample FISTA', linestyle='--', color=FISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), OptISTA_pep[OptISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='OptISTA', color=OptISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), OptISTA_worst_cases[:exp_K_max], label='Sample OptISTA', linestyle='--', color=OptISTA_color)
+    # ax[0].plot(range(1, exp_K_max + 1), OptISTA_pep[OptISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='OptISTA', color=OptISTA_color)
+    # ax[0].plot(range(1, exp_K_max + 1), OptISTA_worst_cases[:exp_K_max], label='Sample OptISTA', linestyle='--', color=OptISTA_color)
 
-    ax[1].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Sample ISTA', linestyle='--', color=ISTA_color)
-    ax[1].plot(range(1, exp_K_max + 1), ISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=ISTA_color)
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Sample FISTA', linestyle='--', color=FISTA_color)
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=FISTA_color)
-    ax[1].plot(range(1, exp_K_max + 1), OptISTA_exp_k, label='Sample OptISTA', linestyle='--', color=OptISTA_color)
-    ax[1].plot(range(1, exp_K_max + 1), OptISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=OptISTA_color)
+    ax[2].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Sample ISTA', linestyle='--', color=ISTA_color)
+    ax[2].plot(range(1, exp_K_max + 1), ISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=ISTA_color)
+    ax[2].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Sample FISTA', linestyle='--', color=FISTA_color)
+    ax[2].plot(range(1, exp_K_max + 1), FISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=FISTA_color)
+    # ax[1].plot(range(1, exp_K_max + 1), OptISTA_exp_k, label='Sample OptISTA', linestyle='--', color=OptISTA_color)
+    # ax[1].plot(range(1, exp_K_max + 1), OptISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=OptISTA_color)
 
-    ax[2].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='Sample ISTA', linestyle='--', color=ISTA_color)
-    ax[2].plot(range(1, cvar_K_max + 1), ISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=ISTA_color)
-    ax[2].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='Sample FISTA', linestyle='--', color=FISTA_color)
-    ax[2].plot(range(1, cvar_K_max + 1), FISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=FISTA_color)
-    ax[2].plot(range(1, cvar_K_max + 1), OptISTA_cvar_k, label='Sample OptISTA', linestyle='--', color=OptISTA_color)
-    ax[2].plot(range(1, cvar_K_max + 1), OptISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=OptISTA_color)
+    ax[1].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='Sample ISTA', linestyle='--', color=ISTA_color)
+    ax[1].plot(range(1, cvar_K_max + 1), ISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=ISTA_color)
+    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='Sample FISTA', linestyle='--', color=FISTA_color)
+    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=FISTA_color)
+    # ax[2].plot(range(1, cvar_K_max + 1), OptISTA_cvar_k, label='Sample OptISTA', linestyle='--', color=OptISTA_color)
+    # ax[2].plot(range(1, cvar_K_max + 1), OptISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=OptISTA_color)
 
     for axi in ax:
         box = axi.get_position()
