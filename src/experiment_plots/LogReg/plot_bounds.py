@@ -140,7 +140,7 @@ def main_bounds():
 
     ax[0].set_title('Worst-case')
     ax[2].set_title('Expectation')
-    ax[1].set_title('CVar')
+    ax[1].set_title('CVaR')
 
     ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='GD', color=GD_color)
     ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Sample GD', linestyle='--', color=GD_color)

@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 20
-cvar_K_max = 20
+exp_K_max = 25
+cvar_K_max = 25
 
 # num_eps_vals = 7
 
@@ -174,8 +174,8 @@ def main_bounds():
 
     plt.suptitle('Lasso Minimization')
     # plt.tight_layout()
-    plt.show()
-    # plt.savefig(f'Lasso_all.pdf')
+    # plt.show()
+    plt.savefig(f'Lasso_all.pdf')
 
 
 if __name__ == '__main__':
