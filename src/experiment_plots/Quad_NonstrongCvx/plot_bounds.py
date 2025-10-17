@@ -84,6 +84,11 @@ GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_30/dro.csv')
 NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_exp_1_30/dro.csv')
 NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_cvar_1_30/dro.csv')
 
+GD_exp_fit_params = pd.read_csv(f'gd_exp_fit_params.csv')
+GD_cvar_fit_params = pd.read_csv(f'gd_cvar_fit_params.csv')
+NGD_exp_fit_params = pd.read_csv(f'ngd_exp_fit_params.csv')
+NGD_cvar_fit_params = pd.read_csv(f'ngd_cvar_fit_params.csv')
+
 
 def main_bounds():
 
@@ -95,6 +100,18 @@ def main_bounds():
     GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 3]
     NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 5]
     NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 3]
+
+    GD_exp_gamma = GD_exp_fit_params['gamma'].loc[0]
+    GD_exp_C = GD_exp_fit_params['C'].loc[0]
+
+    GD_cvar_gamma = GD_cvar_fit_params['gamma'].loc[0]
+    GD_cvar_C = GD_cvar_fit_params['C'].loc[0]
+
+    NGD_exp_gamma = NGD_exp_fit_params['gamma'].loc[0]
+    NGD_exp_C = NGD_exp_fit_params['C'].loc[0]
+
+    NGD_cvar_gamma = NGD_cvar_fit_params['gamma'].loc[0]
+    NGD_cvar_C = NGD_cvar_fit_params['C'].loc[0]
 
     GD_worst_k = []
     NGD_worst_k = []
@@ -147,37 +164,47 @@ def main_bounds():
 
     ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='GD', color=GD_color)
     ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Sample GD', linestyle='--', color=GD_color)
-    ax[2].plot(range(1, exp_K_max + 1), GD_exp_k, label='Sample', linestyle='--', color=GD_color)
-    ax[2].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Exp', color=GD_color)
+
     # ax[1].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['mro_sol'][:exp_K_max], label='Exp', color=GD_color)
+
+    exp_K = np.arange(1, exp_K_max + 1)
+    cvar_K = np.arange(1, cvar_K_max + 1)
+    ax[1].plot(cvar_K, GD_cvar_C * np.power(cvar_K, -GD_cvar_gamma), linestyle='dotted', color=GD_color)
 
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='Sample', linestyle='--', color=GD_color)
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=GD_color)
     # # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
 
-    ax[0].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='AGD', color=NGD_color)
-    ax[0].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Sample AGD', linestyle='--', color=NGD_color)
-    ax[2].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Sample', linestyle='--', color=NGD_color)
-    ax[2].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Exp', color=NGD_color)
+    ax[0].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='FGM', color=NGD_color)
+    ax[0].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Sample FGM', linestyle='--', color=NGD_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['mro_sol'][:exp_K_max], label='Exp', color=NGD_color)
 
     ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='Sample', linestyle='--', color=NGD_color)
     ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=NGD_color)
     # ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
 
+    ax[1].plot(cvar_K, NGD_cvar_C * np.power(cvar_K, -NGD_cvar_gamma), linestyle='dotted', color=NGD_color)
+
+    ax[2].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='GD DRO Bound', color=GD_color)
+    ax[2].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='FGM DRO Bound', color=NGD_color)
+    ax[2].plot(range(1, exp_K_max + 1), GD_exp_k, label='GD Sample', linestyle='--', color=GD_color)
+    ax[2].plot(range(1, exp_K_max + 1), NGD_exp_k, label='FGM Sample', linestyle='--', color=NGD_color)
+    ax[2].plot(exp_K, GD_exp_C * np.pow(exp_K, -GD_exp_gamma), label='Fitted GD Curve', linestyle='dotted', color=GD_color)
+    ax[2].plot(exp_K, NGD_exp_C * np.pow(exp_K, -NGD_exp_gamma), label='Fitted FGM Curve', linestyle='dotted', color=NGD_color)
+
     for axi in ax:
         box = axi.get_position()
         # x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
-        axi.set_position([box.x0, box.y0+.05, box.width, box.height-.05])
+        axi.set_position([box.x0, box.y0+.1, box.width, box.height-.1])
 
     # ax[0].legend()
-    handles, labels = ax[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center', ncols=4)
+    handles, labels = ax[2].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncols=3)
 
     plt.suptitle('Nonstrongly Convex Quadratic Minimization, Distance to Optimality')
 
-    plt.show()
-    # plt.savefig(f'quad_nonstrongcvx.pdf')
+    # plt.show()
+    plt.savefig(f'quad_nonstrongcvx.pdf')
 
 
 if __name__ == '__main__':

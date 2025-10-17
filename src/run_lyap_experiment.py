@@ -7,7 +7,7 @@ log = logging.getLogger(__name__)
 
 from experiment_classes.huber import huber_samples
 from experiment_classes.lasso import lasso_samples
-from experiment_classes.logreg import logreg_samples
+from experiment_classes.logreg import logreg_lyap
 from experiment_classes.quad import quad_lyap
 from experiment_classes.simple_lstsq import lstsq_samples
 
@@ -26,7 +26,7 @@ def lasso_driver(cfg):
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='logreg.yaml')
 def logreg_driver(cfg):
-    logreg_samples(cfg)
+    logreg_lyap(cfg)
 
 @hydra.main(version_base='1.2', config_path='configs', config_name='simple_lstsq.yaml')
 def simple_lstsq_driver(cfg):
@@ -48,7 +48,7 @@ LogReg_params = [
 func_driver_map = {
     # 'Huber': huber_driver,
     # 'Lasso': lasso_driver,
-    # 'LogReg': logreg_driver,
+    'LogReg': logreg_driver,
     'Quad': quad_driver,
     # 'SimpleLstsq': simple_lstsq_driver,
 }
@@ -58,7 +58,7 @@ base_dir_map = {
     'Quad': 'lyap_outputs/Quad',
     'SimpleLstsq': 'sample_outputs/SimpleLstsq',
     'Lasso': 'sample_outputs/Lasso',
-    'LogReg': 'sample_outputs/LogReg',
+    'LogReg': 'lyap_outputs/LogReg',
 }
 
 

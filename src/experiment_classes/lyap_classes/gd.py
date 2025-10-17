@@ -374,11 +374,25 @@ def gd_lyap_nobisect(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
     print(idx_list)
 
     # Primal objective function (performance metric)
-    Aobj = np.outer(repX[n_points] - xs, repX[n_points] - xs)
-    # Aobj = 0.0 * Aobj
+    # Aobj = np.outer(repX[n_points] - xs, repX[n_points] - xs)
+    # # Aobj = 0.0 * Aobj
+    # bobj = repF[n_points] - fs
+    # bobj = 0.0 * bobj
 
-    bobj = repF[n_points] - fs
-    bobj = 0.0 * bobj
+    Aobj = np.outer(repX[0] - xs, repX[0] - xs)
+    bobj = repF[0] - fs
+    
+    Aobj = 0.0 * Aobj
+    # bobj = 0.0 * bobj
+
+    Aobj_plus = np.outer(repX[n_points] - xs, repX[n_points] - xs)
+    bobj_plus = repF[n_points] - fs
+
+    Aobj_plus = 0.0 * Aobj_plus
+    # bobj_plus = 0.0 * bobj_plus
+
+    # print(Aobj, bobj)
+    # print(Aobj_plus, bobj_plus)
 
     # Corresponding dual variables to primal constriants
     # lmbd = cp.Variable(len(A_list), nonneg=True)    # Interpolation conditions
@@ -400,17 +414,50 @@ def gd_lyap_nobisect(mu, L, eta, n_points, samples, dro_eps, cvar_alpha=0.1):
     y = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
     ytilde = [cp.Variable(len(A_list), nonneg=True) for _ in range(N)]
 
-    Q_mat = cp.Variable(Aobj.shape, symmetric=True)
-    Q_vec = cp.Variable(bobj.shape)
+    # Q_mat = cp.Variable(Aobj.shape, symmetric=True)
+    # Q_vec = cp.Variable(bobj.shape)
 
-    Qplus_mat = cp.Variable(Aobj.shape, symmetric=True)
-    Qplus_vec = cp.Variable(bobj.shape)
+    # Qplus_mat = cp.Variable(Aobj.shape, symmetric=True)
+    # Qplus_vec = cp.Variable(bobj.shape)
 
     # rho = cp.Parameter()
     rho = cp.Variable()
 
     constraints = [1 / N * cp.sum(s) <= 0]
 
-    # Q_mat = 
+    for i in range(N):
+        Gi, Fi = samples[i]
+        normalizer = Gi[0, 0]
+        Gi = Gi / normalizer
+        Fi = Fi / normalizer
+        
+        S_star_yA = 0
+        S_star_yb = 0
+        S_star_ytildeA = 0
+        S_star_ytildeb = 0
 
-    exit(0)
+        for j in range(len(A_list)):
+            S_star_yA += y[i][j] * A_list[j]
+            S_star_yb += y[i][j] * b_list[j]
+
+            S_star_ytildeA = ytilde[i][j] * A_list[j]
+            S_star_ytildeb = ytilde[i][j] * b_list[j]
+
+        constraints += [
+            (1 - alpha_inv) * t - (cp.trace(X[i] @ Gi) + Y[i] @ Fi) + lambd * dro_eps <= s[i],
+            t - (cp.trace(Xtilde[i] @ Gi) + Ytilde[i] @ Fi) + lambd * dro_eps <= s[i],
+            cp.SOC(lambd, cp.hstack([cp.vec(X[i], order='C'), Y[i]])),
+            cp.SOC(lambd, cp.hstack([cp.vec(Xtilde[i], order='C'), Ytilde[i]])),
+            S_star_yA - X[i] - alpha_inv * (Aobj_plus - rho * Aobj) >> 0,
+            S_star_yb - Y[i] - alpha_inv * (bobj_plus - rho * bobj) == 0,
+            S_star_ytildeA - Xtilde[i] >> 0,
+            S_star_ytildeb - Ytilde[i] == 0,
+        ]
+
+    obj = cp.Minimize(rho)
+    prob = cp.Problem(obj, constraints)
+    # res = prob.solve(solver=cp.MOSEK, verbose=False)
+    res = prob.solve(solver=cp.CLARABEL, verbose=False)
+    print('rho:', rho.value)
+
+    return rho.value

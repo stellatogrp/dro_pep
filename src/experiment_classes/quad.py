@@ -373,18 +373,21 @@ def quad_lyap(cfg):
     
     # exit(0)
 
-    dro_eps = .01
-    lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps)
+    # dro_eps = .01
+    # # lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps)
     # lyap_res = gd_lyap_nobisect(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps)
-    log.info(lyap_res)
-    exit(0)
+    # log.info(lyap_res)
+
+    dro_eps = .01
+    dro_eps_vals [1e-4, 1e-3, 1e-2, 1e-1]
 
     alpha_vals = np.linspace(1, .05, 20)
     print(alpha_vals)
     one_minus_alphas = []
     rhos = []
     for alpha in alpha_vals:
-        lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
+        # lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
+        lyap_res = gd_lyap_nobisect(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
         log.info(lyap_res)
         one_minus_alphas.append(1 - alpha)
         rhos.append(lyap_res)

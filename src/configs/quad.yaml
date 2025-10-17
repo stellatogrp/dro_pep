@@ -5,9 +5,9 @@ dim: 300
 R: 10
 
 K_min: 1
-K_max: 30
+K_max: 40
 
-alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
+alg: grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
 dro_pep_obj: opt_dist_sq_norm  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
@@ -20,9 +20,9 @@ seed:
 sample_N: 10000
 
 training:
-  expectation_N: 1
-  cvar_N: 20
-  lyap_N: 25
+  expectation_N: 100
+  cvar_N: 100
+  lyap_N: 100
 num_clusters:
   expectation: null
   cvar: null

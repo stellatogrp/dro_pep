@@ -1,4 +1,5 @@
 import cvxpy as cp
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import logging
@@ -10,6 +11,7 @@ from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
 # from ucimlrepo import fetch_ucirepo
+from .lyap_classes.gd import gd_lyap, gd_lyap_nobisect
 
 log = logging.getLogger(__name__)
 
@@ -322,6 +324,98 @@ def logreg_dro(cfg):
         
             df = pd.DataFrame(res)
             df.to_csv(cfg.dro_fname, index=False)
+
+
+def logreg_lyap(cfg):
+    log.info(cfg)
+
+    log.info(cfg)
+
+    if cfg.alg == 'grad_desc':
+        algo = gradient_descent
+    elif cfg.alg == 'nesterov_grad_desc':
+        algo = nesterov_accelerated_gradient
+    else:
+        log.info('invalid alg in cfg')
+        exit(0)
+
+    N = cfg.training.lyap_N
+    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
+    alpha = cfg.alpha
+
+    np.random.seed(cfg.seed.train)
+    logreg_funcs = []
+    params = {
+        # 't': cfg.eta / cfg.L,
+        't': cfg.eta,
+        'K_max': cfg.K_max,
+    }
+
+    samples = []
+    for i in trange(N):
+        lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        logreg_funcs.append(lr)
+        x0 = lr.sample_init_point()
+        xs = np.zeros(lr.dim)
+
+        x, g, f = algo(lr.f, lr.grad, x0, xs, params)
+        x = x[1:]
+        g = g[1:]
+        f = f[1:]
+        sample_i = {
+            'x': x,
+            'g': g,
+            'f': f,
+        }
+        samples.append(sample_i)
+    
+    GF = []
+    for i in range(N):
+        sample = samples[i]
+        G, F, q = compute_sample_rho(sample)
+        GF.append((G, F))
+
+    dro_eps = .001
+    dro_eps_vals = [1e-4, 1e-3, 1e-2, 1e-1]
+
+    alpha_vals = np.linspace(1, .05, 20)
+    print(alpha_vals)
+    one_minus_alphas = []
+    rhos = []
+    for alpha in alpha_vals:
+        # lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
+        lyap_res = gd_lyap_nobisect(cfg.delta, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
+        log.info(lyap_res)
+        one_minus_alphas.append(1 - alpha)
+        rhos.append(lyap_res)
+    
+    plt.plot(one_minus_alphas, rhos)
+    plt.xlabel('one minus alpha')
+    plt.ylabel('rho')
+    # plt.show()
+    plt.savefig('rho_plot.pdf')
+
+
+def compute_sample_rho(sample):
+    x, g, f = sample['x'], sample['g'], sample['f']
+    rho_max = 0
+    K = len(x) - 1
+    q = 0
+    # print('----')
+    for i in range(K):
+        xiplus1 = x[i+1]
+        f_iplus1 = f[i+1]
+        xi = x[i]
+        fi = f[i]
+        rho_i = f_iplus1 / fi
+        # rho_i = np.linalg.norm(xiplus1) ** 2 / np.linalg.norm(xi) ** 2
+        if rho_i > rho_max:
+            rho_max = rho_i
+            q = i
+        # print(rho_i)
+    print(rho_max, q)
+    G_half = np.array([x[q], g[q], g[q+1]])
+    return G_half @ G_half.T, np.array([f[q], f[q+1]]), q
 
 
 def main():

@@ -176,8 +176,8 @@ def main_bounds():
 
     plt.suptitle('Strongly Convex Quadratic Minimization, Distance to Optimality')
 
-    # plt.show()
-    plt.savefig(f'quad_strongcvx.pdf')
+    plt.show()
+    # plt.savefig(f'quad_strongcvx.pdf')
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ eta: 0.05
 L: 3.6062264877007264  # FILL THIS IN ONCE KNOWN
 
 K_min: 1
-K_max: 40
+K_max: 1000
 
 alg: nesterov_grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: cvar  # expectation or cvar
@@ -21,8 +21,9 @@ seed:
 sample_N: 1000
 
 training:
-  expectation_N: 20
-  cvar_N: 20
+  expectation_N: 100
+  cvar_N: 100
+  lyap_N: 25
 num_clusters:
   expectation: null
   cvar: null
