@@ -1,0 +1,30 @@
+mu: 0
+L: 10
+eta: 1
+dim: 300
+R: 10
+K_min: 1
+K_max: 30
+alg: grad_desc
+dro_obj: cvar
+dro_pep_obj: opt_dist_sq_norm
+precond_type: average
+seed:
+  full_samples: 0
+  train: 100
+sample_N: 10000
+training:
+  expectation_N: 100
+  cvar_N: 100
+  lyap_N: 25
+num_clusters:
+  expectation: null
+  cvar: null
+sample_fname: samples.csv
+pep_fname: pep.csv
+dro_fname: dro.csv
+eps:
+  log_min: -1
+  log_max: 1
+  logspace_count: 7
+alpha: 0.1

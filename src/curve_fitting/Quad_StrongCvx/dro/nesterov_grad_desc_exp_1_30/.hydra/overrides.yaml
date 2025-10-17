@@ -1,0 +1,3 @@
+- alg=nesterov_grad_desc
+- dro_obj=expectation
+- mu=1

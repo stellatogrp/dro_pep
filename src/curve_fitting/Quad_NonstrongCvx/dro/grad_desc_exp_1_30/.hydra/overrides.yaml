@@ -1,0 +1,3 @@
+- alg=grad_desc
+- dro_obj=expectation
+- mu=0
