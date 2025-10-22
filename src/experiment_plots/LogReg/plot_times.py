@@ -7,7 +7,7 @@ plt.rcParams.update({
     "font.family": "serif",
     # "font.sans-serif": ["Helvetica Neue"],
     "font.size": 14,
-    "figure.figsize": (12, 6),
+    "figure.figsize": (10, 6),
 })
 
 exp_K_max = 30
@@ -17,8 +17,8 @@ pep_K_max = 30
 exp_K_max = 30
 cvar_K_max = 30
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_30/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_30/pep.csv')
 
 GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_30/dro.csv')
 GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_30/dro.csv')
@@ -65,16 +65,16 @@ def plot_times():
 
     ax[0].set_title('Worst-case')
     ax[2].set_title('Expectation')
-    ax[1].set_title('CVar')
+    ax[1].set_title('CVaR')
 
     ax[0].plot(range(1, exp_K_max + 1), GD_pep_times, label='GD', color=GD_color)
-    ax[0].plot(range(1, exp_K_max + 1), NGD_pep_times, label='NGD', color=NGD_color)
+    ax[0].plot(range(1, exp_K_max + 1), NGD_pep_times, label='FGM', color=NGD_color)
     
     ax[2].plot(range(1, exp_K_max + 1), GD_exp_times, label='GD', color=GD_color)
-    ax[2].plot(range(1, exp_K_max + 1), NGD_exp_times, label='NGD', color=NGD_color)
+    ax[2].plot(range(1, exp_K_max + 1), NGD_exp_times, label='FGM', color=NGD_color)
 
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_times, label='GD', color=GD_color)
-    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_times, label='NGD', color=NGD_color)
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_times, label='FGM', color=NGD_color)
 
     for axi in ax:
         box = axi.get_position()
@@ -85,7 +85,7 @@ def plot_times():
     handles, labels = ax[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncols=4)
 
-    plt.suptitle('Logistic Regression Minimization, Solve times')
+    plt.suptitle('Logistic Regression, Solve times')
 
     # plt.show()
 

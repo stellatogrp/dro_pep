@@ -91,10 +91,10 @@ def main_bounds():
     GD_color = 'tab:blue'
     NGD_color = 'tab:green'
 
-    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 4]
-    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 4]
-    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 4]
-    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 4]
+    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 3]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 3]
+    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 3]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 3]
 
     GD_worst_k = []
     NGD_worst_k = []
@@ -155,14 +155,14 @@ def main_bounds():
     ax[1].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=GD_color)
     # # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
 
-    ax[0].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='AGD', color=NGD_color)
-    ax[0].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Sample AGD', linestyle='--', color=NGD_color)
+    ax[0].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='FGM', color=NGD_color)
+    ax[0].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Sample FGM', linestyle='--', color=NGD_color)
     ax[2].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Sample', linestyle='--', color=NGD_color)
     ax[2].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Exp', color=NGD_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['mro_sol'][:exp_K_max], label='Exp', color=NGD_color)
 
     ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='Sample', linestyle='--', color=NGD_color)
-    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVar', color=NGD_color)
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR', color=NGD_color)
     # ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['mro_sol'][:cvar_K_max], label='CVar')
 
     for axi in ax:

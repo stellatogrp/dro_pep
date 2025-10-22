@@ -1,4 +1,5 @@
 import cvxpy as cp
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy as sp
@@ -195,6 +196,16 @@ def lasso_samples(cfg):
 
     df_to_save = pd.DataFrame(df)
     df_to_save.to_csv(cfg.sample_fname, index=False)
+
+    plot_worst_case(df_to_save, 'obj_val', cfg)
+
+
+def plot_worst_case(df, col, cfg):
+    worst_cases = df[['K', col]].groupby(['K']).max()
+    plt.plot(range(1, cfg.K_max + 1), worst_cases)
+    plt.yscale('log')
+    plt.title(col)
+    plt.savefig('worstcases.pdf')
 
 
 def lasso_pep(cfg):

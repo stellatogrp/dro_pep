@@ -66,11 +66,11 @@ def compute_empirical_cvar(samples, k, alpha=0.1):
 
 # precond = 'precond_avg'
 
-GD_samples = pd.read_csv('data/samples/grad_desc_1_40/samples.csv')
-NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_40/samples.csv')
+GD_samples = pd.read_csv('data/samples/grad_desc_1_30/samples.csv')
+NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_30/samples.csv')
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_40/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_30/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_30/pep.csv')
 
 # GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_40/dro.csv')
 # GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_40/dro.csv')
@@ -90,9 +90,9 @@ def main_bounds():
     NGD_color = 'tab:green'
 
     GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 5]
-    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 3]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 5]
     NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 5]
-    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 2]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 5]
 
     GD_worst_k = []
     NGD_worst_k = []

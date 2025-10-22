@@ -160,6 +160,16 @@ def logreg_samples(cfg):
     log.info(f'mu:{cfg.delta}')
     log.info(f'L:{np.max(L_vals)}')
 
+    plot_worst_case(df_to_save, 'obj_val', cfg)
+
+
+def plot_worst_case(df, col, cfg):
+    worst_cases = df[['K', col]].groupby(['K']).max()
+    plt.plot(range(1, cfg.K_max + 1), worst_cases)
+    plt.yscale('log')
+    plt.title(col)
+    plt.savefig('worstcases.pdf')
+
 
 def logreg_pep(cfg):
     log.info(cfg)
@@ -172,7 +182,7 @@ def logreg_pep(cfg):
         exit(0)
 
     # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
-    objs = ['obj_val', 'grad_sq_norm']
+    objs = ['obj_val']
 
     mu = cfg.delta
     L = cfg.L

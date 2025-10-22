@@ -1,15 +1,15 @@
-m: 100
-'n': 200
+m: 200
+'n': 300
 eta: 1
-lambd: 0.01
-R: 8.56457
+lambd: 0.1
+R: 9.919344468
 K_min: 1
-K_max: 30
+K_max: 25
 seed:
   A: 0
   out_of_sample: 10
   in_sample: 20
-p_A_nonzero: 0.3
+p_A_nonzero: 0.4
 p_xsamp_nonzero: 0.25
 'N': 1000
 noise_eps: 0.001

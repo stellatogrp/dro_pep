@@ -1,24 +1,24 @@
-m: 100
-n: 200
+m: 200
+n: 300
 eta: 1
-lambd: 0.01
+lambd: 0.1
 
-R: 8.56457 # this is found experimentally from out of sample data
+R: 9.919344468 # this is found experimentally from out of sample data
 
 K_min: 1
-K_max: 30
+K_max: 25
 
 seed:
   A: 0
   out_of_sample: 10
   in_sample: 20
 
-p_A_nonzero: 0.3
+p_A_nonzero: 0.4
 p_xsamp_nonzero: 0.25
-N: 1000
+N: 100
 noise_eps: 0.001
 
-alg: optista  # ista or fista or optista
+alg: ista  # ista or fista or optista
 dro_obj: expectation  # expectation or cvar
 pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 

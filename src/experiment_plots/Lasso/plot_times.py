@@ -16,35 +16,35 @@ cvar_K_max = 25
 
 ISTA_samples = pd.read_csv('data/samples/ISTA_1_40/samples.csv')
 FISTA_samples = pd.read_csv('data/samples/FISTA_1_40/samples.csv')
-OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_40/samples.csv')
+# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_40/samples.csv')
 
 ISTA_pep = pd.read_csv('data/pep/ISTA_1_40/pep.csv')
 FISTA_pep = pd.read_csv('data/pep/FISTA_1_40/pep.csv')
-OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_40/pep.csv')
+# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_40/pep.csv')
 
 ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_25/dro.csv')
 ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_25/dro.csv')
 FISTA_exp_dro = pd.read_csv('data/dro/FISTA_exp_1_25/dro.csv')
 FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_25/dro.csv')
-OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_25/dro.csv')
-OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
+# OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_25/dro.csv')
+# OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
 
 
 def plot_times():
     ISTA_color = 'tab:blue'
     FISTA_color = 'tab:green'
-    OptISTA_color = 'tab:red'
+    # OptISTA_color = 'tab:red'
 
     ISTA_pep_times = ISTA_pep[ISTA_pep['obj'] == 'obj_val']['solvetime'][:pep_K_max]
     FISTA_pep_times = FISTA_pep[FISTA_pep['obj'] == 'obj_val']['solvetime'][:pep_K_max]
-    OptISTA_pep_times = OptISTA_pep[OptISTA_pep['obj'] == 'obj_val']['solvetime'][:pep_K_max]
+    # OptISTA_pep_times = OptISTA_pep[OptISTA_pep['obj'] == 'obj_val']['solvetime'][:pep_K_max]
 
     ISTA_exp_times = ISTA_exp_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
     ISTA_cvar_times = ISTA_cvar_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
     FISTA_exp_times = FISTA_exp_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
     FISTA_cvar_times = FISTA_cvar_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
-    OptISTA_exp_times = OptISTA_exp_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
-    OptISTA_cvar_times = OptISTA_cvar_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
+    # OptISTA_exp_times = OptISTA_exp_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
+    # OptISTA_cvar_times = OptISTA_cvar_dro.groupby(['K'])['solvetime'].mean().iloc[:exp_K_max]
 
     fig, ax = plt.subplots(1, 3)
 
@@ -77,15 +77,15 @@ def plot_times():
 
     ax[0].plot(range(1, exp_K_max + 1), ISTA_pep_times, label='ISTA', color=ISTA_color)
     ax[0].plot(range(1, exp_K_max + 1), FISTA_pep_times, label='FISTA', color=FISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), OptISTA_pep_times, label='OptISTA', color=OptISTA_color)
+    # ax[0].plot(range(1, exp_K_max + 1), OptISTA_pep_times, label='OptISTA', color=OptISTA_color)
 
     ax[2].plot(range(1, exp_K_max + 1), ISTA_exp_times, label='ISTA', color=ISTA_color)
     ax[2].plot(range(1, exp_K_max + 1), FISTA_exp_times, label='FISTA', color=FISTA_color)
-    ax[2].plot(range(1, exp_K_max + 1), OptISTA_exp_times, label='OptISTA', color=OptISTA_color)
+    # ax[2].plot(range(1, exp_K_max + 1), OptISTA_exp_times, label='OptISTA', color=OptISTA_color)
 
     ax[1].plot(range(1, exp_K_max + 1), ISTA_cvar_times, label='ISTA', color=ISTA_color)
     ax[1].plot(range(1, exp_K_max + 1), FISTA_cvar_times, label='FISTA', color=FISTA_color)
-    ax[1].plot(range(1, exp_K_max + 1), OptISTA_cvar_times, label='OptISTA', color=OptISTA_color)
+    # ax[1].plot(range(1, exp_K_max + 1), OptISTA_cvar_times, label='OptISTA', color=OptISTA_color)
 
     for axi in ax:
         box = axi.get_position()
@@ -96,11 +96,11 @@ def plot_times():
     handles, labels = ax[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncols=4)
 
-    plt.suptitle('Lasso Minimization, Solve times')
+    plt.suptitle('Lasso, Solve times')
 
     # plt.show()
 
-    plt.savefig('lasso_times.pdf')
+    plt.savefig('Lasso_times.pdf')
 
 
 if __name__ == '__main__':

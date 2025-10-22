@@ -144,7 +144,7 @@ hydra:
     - path: ''
       schema: structured
       provider: schema
-    output_dir: /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/dro_outputs/Lasso/2025-10-12/00-14-59_3
+    output_dir: /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/dro_outputs/Lasso/2025-10-20/01-35-37_3
     choices:
       hydra/env: default
       hydra/callbacks: null
