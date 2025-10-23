@@ -14,7 +14,7 @@ def sublinear_curve_fit(data, csv_fname=None, plot_fname=None, mincutoff=10):
     A = A[mincutoff-1:, :]
     b = b[mincutoff-1:]
 
-    # b_inv = np.abs(1/b)
+    b_inv = np.abs(1/b)
 
     x = cp.Variable(A.shape[1])
     obj = .5 * cp.sum_squares(cp.multiply(b_inv, A @ x - b))
@@ -30,7 +30,7 @@ def sublinear_curve_fit(data, csv_fname=None, plot_fname=None, mincutoff=10):
     gamma = -x.value[0]
     C = np.exp(x.value[1])
 
-    fitted_vals = C * np.pow(K, -gamma)
+    fitted_vals = C * np.power(K, -gamma)
     print(fitted_vals)
 
     fig, ax = plt.subplots()
@@ -76,7 +76,7 @@ def linear_curve_fit(data, csv_fname=None, plot_fname=None, mincutoff=10):
     gamma = np.exp(x.value[0])
     C = np.exp(x.value[1])
 
-    fitted_vals = C * np.pow(gamma, K)
+    fitted_vals = C * np.power(gamma, K)
     print(fitted_vals)
 
     fig, ax = plt.subplots()
@@ -85,6 +85,66 @@ def linear_curve_fit(data, csv_fname=None, plot_fname=None, mincutoff=10):
     ax.plot(K, phi, label='true vals')
     ax.plot(K, fitted_vals, label='fitted curve')
     ax.set_title(rf'$\rho = {gamma}, C = {C}$')
+    ax.grid(color='lightgray', alpha=0.3)
+    ax.legend()
+    # plt.show()
+    if csv_fname is not None:
+        data = [
+            {'rho': gamma, 'C': C},
+        ]
+        df = pd.DataFrame(data)
+        df.to_csv(csv_fname, index=False)
+    if plot_fname is not None:
+        plt.savefig(plot_fname)
+
+
+def curve_fit(data, csv_fname=None, plot_fname=None, mincutoff=10, rho_val=None, gamma_val=None, gamma_fix=False):
+    K = data['K'].to_numpy()
+    phi = data['dro_feas_sol'].to_numpy()
+    K_vals = K.reshape(-1, 1)
+    A = np.hstack([K_vals, np.log(K_vals), np.ones(K_vals.shape)])
+    b = np.log(phi)
+    A = A[mincutoff-1:, :]
+    b = b[mincutoff-1:]
+
+    b_inv = np.abs(1/b)
+
+    x = cp.Variable(A.shape[1]) # x = [ log(rho), -(gamma), log(C) ]
+    
+    obj = .5 * cp.sum_squares(cp.multiply(b_inv, A @ x - b))
+    constraints = []
+
+    constraints += [A @ x >= b]
+    constraints += [x[0] <= 0.0]
+    constraints += [-x[1] >= 0.0]
+    if rho_val is not None:
+        constraints += [x[0] <= np.log(rho_val)]
+    else:
+        constraints += [x[0] == 0.0]   # rho = 1
+    if gamma_val is not None:
+        constraints += [-x[1] >= gamma_val]
+        if gamma_fix:
+            constraints += [-x[1] <= gamma_val]
+    else:
+        constraints += [-x[1] == 0.0]   # gamma = 0
+    prob = cp.Problem(cp.Minimize(obj), constraints)
+
+    res = prob.solve()
+    print(x.value)
+
+    rho = np.exp(x.value[0])
+    gamma = -x.value[1]
+    C = np.exp(x.value[2])
+
+    fitted_vals = C * np.power(rho, K) * np.power(K, -gamma)
+    print(fitted_vals)
+
+    fig, ax = plt.subplots()
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.plot(K, phi, label='true vals')
+    ax.plot(K, fitted_vals, label='fitted curve')
+    ax.set_title(rf'$\rho = {rho}, \gamma = {gamma}, C = {C}$')
     ax.grid(color='lightgray', alpha=0.3)
     ax.legend()
     # plt.show()
@@ -116,6 +176,20 @@ def main_QP_nonstrong_exp():
         plot_fname='Quad_NonstrongCvx/ngd_exp_fit_plot.pdf',
     )
 
+    curve_fit(
+        QP_nonstrong_gd_exp_data,
+        csv_fname='Quad_NonstrongCvx/gd_exp_gen_fit_params.csv',
+        plot_fname='Quad_NonstrongCvx/gd_exp_gen_fit_plot.pdf',
+        gamma_val=0.0,
+    )
+
+    curve_fit(
+        QP_nonstrong_ngd_exp_data,
+        csv_fname='Quad_NonstrongCvx/ngd_exp_gen_fit_params.csv',
+        plot_fname='Quad_NonstrongCvx/ngd_exp_gen_fit_plot.pdf',
+        gamma_val=0.0,
+    )
+
 def main_QP_nonstrong_cvar():
     QP_nonstrong_gd_cvar = pd.read_csv(f'Quad_NonstrongCvx/dro/grad_desc_cvar_1_30/dro.csv')
     QP_nonstrong_gd_cvar_data = QP_nonstrong_gd_cvar[QP_nonstrong_gd_cvar['eps_idx'] == 3]
@@ -132,6 +206,20 @@ def main_QP_nonstrong_cvar():
         QP_nonstrong_ngd_cvar_data,
         csv_fname='Quad_NonstrongCvx/ngd_cvar_fit_params.csv',
         plot_fname='Quad_NonstrongCvx/ngd_cvar_fit_plot.pdf',
+    )
+
+    curve_fit(
+        QP_nonstrong_gd_cvar_data,
+        csv_fname='Quad_NonstrongCvx/gd_cvar_gen_fit_params.csv',
+        plot_fname='Quad_NonstrongCvx/gd_cvar_gen_fit_plot.pdf',
+        gamma_val=0.0,
+    )
+
+    curve_fit(
+        QP_nonstrong_ngd_cvar_data,
+        csv_fname='Quad_NonstrongCvx/ngd_cvar_gen_fit_params.csv',
+        plot_fname='Quad_NonstrongCvx/ngd_cvar_gen_fit_plot.pdf',
+        gamma_val=0.0,
     )
 
 def main_QP_strong_exp():
@@ -154,6 +242,25 @@ def main_QP_strong_exp():
         mincutoff=1,
     )
 
+    curve_fit(
+        QP_strong_gd_exp_data,
+        csv_fname='Quad_StrongCvx/gd_exp_gen_fit_params.csv',
+        plot_fname='Quad_StrongCvx/gd_exp_gen_fit_plot.pdf',
+        mincutoff=1,
+        gamma_val=1.5,
+        rho_val=1.0,
+    )
+
+    curve_fit(
+        QP_strong_ngd_exp_data,
+        csv_fname='Quad_StrongCvx/ngd_exp_gen_fit_params.csv',
+        plot_fname='Quad_StrongCvx/ngd_exp_gen_fit_plot.pdf',
+        mincutoff=1,
+        gamma_val=3.0,
+        gamma_fix=True,
+        rho_val=1.0,
+    )
+
 def main_QP_strong_cvar():
     QP_strong_gd_cvar = pd.read_csv(f'Quad_StrongCvx/dro/grad_desc_cvar_1_30/dro.csv')
     QP_strong_gd_cvar_data = QP_strong_gd_cvar[QP_strong_gd_cvar['eps_idx'] == 3]
@@ -164,7 +271,7 @@ def main_QP_strong_cvar():
         QP_strong_gd_cvar_data,
         csv_fname='Quad_StrongCvx/gd_cvar_fit_params.csv',
         plot_fname='Quad_StrongCvx/gd_cvar_fit_plot.pdf',
-        mincutoff=10,
+        mincutoff=1,
     )
 
     linear_curve_fit(
@@ -172,6 +279,25 @@ def main_QP_strong_cvar():
         csv_fname='Quad_StrongCvx/ngd_cvar_fit_params.csv',
         plot_fname='Quad_StrongCvx/ngd_cvar_fit_plot.pdf',
         mincutoff=10,
+    )
+
+    curve_fit(
+        QP_strong_gd_cvar_data,
+        csv_fname='Quad_StrongCvx/gd_cvar_gen_fit_params.csv',
+        plot_fname='Quad_StrongCvx/gd_cvar_gen_fit_plot.pdf',
+        mincutoff=1,
+        gamma_val=0.0,
+        rho_val=1.0,
+    )
+
+    curve_fit(
+        QP_strong_ngd_cvar_data,
+        csv_fname='Quad_StrongCvx/ngd_cvar_gen_fit_params.csv',
+        plot_fname='Quad_StrongCvx/ngd_cvar_gen_fit_plot.pdf',
+        mincutoff=1,
+        gamma_val=3.0,
+        gamma_fix=True,
+        rho_val=1.0,
     )
 
 def main_logreg_exp():
@@ -267,6 +393,14 @@ def main_strongcvx_ngd_test():
         plot_fname='Quad_StrongCvx/sample_fit_plot.pdf',
         mincutoff=1,
     )
+    curve_fit(
+        worst_cases,
+        csv_fname='Quad_StrongCvx/sample_gen_fit_params.csv',
+        plot_fname='Quad_StrongCvx/sample_gen_fit_plot.pdf',
+        mincutoff=1,
+        gamma_val=0.0,
+        rho_val=1.0,
+    )
 
 
 def main_lasso_test():
@@ -288,8 +422,8 @@ def main_lasso_test():
 
 
 if __name__ == '__main__':
-    # main_QP_nonstrong_exp()
-    # main_QP_nonstrong_cvar()
+    main_QP_nonstrong_exp()
+    main_QP_nonstrong_cvar()
 
     main_QP_strong_exp()
     main_QP_strong_cvar()
