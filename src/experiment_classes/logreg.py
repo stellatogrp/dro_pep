@@ -288,7 +288,19 @@ def logreg_dro(cfg):
     for k in range(cfg.K_min, cfg.K_max + 1):
         samples = []
         problem = logreg_pep_subproblem(cfg, cfg.delta, cfg.L, algo, k, cfg.dro_pep_obj, return_problem=True)
-        problem.solve(wrapper='cvxpy', solver='CLARABEL')
+        # problem.solve(wrapper='cvxpy', solver='CLARABEL')
+
+        mosek_params = {
+            # 'intpntCoTolDfeas': 1e-7,
+            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-7,
+            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-7,
+            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-7,
+        }
+        pepit_tau = problem.solve(
+            wrapper='cvxpy',
+            solver='MOSEK',
+            mosek_params=mosek_params,
+        )
         log.info(f'----pep problem solved at k={k}----')
 
         for i in range(N):

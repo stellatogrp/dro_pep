@@ -16,14 +16,17 @@ precond_type: average # 'average' or 'max' or 'min'
 
 seed:
   full_samples: 0
-  train: 101
+  train: 1010
 
 sample_N: 1000
 
 training:
   expectation_N: 100
   cvar_N: 100
+<<<<<<< Updated upstream
   lyap_N: 25
+=======
+>>>>>>> Stashed changes
 num_clusters:
   expectation: null
   cvar: null
@@ -33,7 +36,13 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
+<<<<<<< Updated upstream
   log_min: -2
   log_max: 0
   logspace_count: 7
+=======
+  log_min: 0
+  log_max: 1
+  logspace_count: 4
+>>>>>>> Stashed changes
 alpha: 0.1
