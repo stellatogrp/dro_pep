@@ -445,6 +445,7 @@ class ClarabelCanonicalizer(Canonicalizer):
             curr_lhs[0, lambd_idx] = -1
             # curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.eye(V)
             # curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledI
+
             curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.diag(F_precond_sq)
             curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledG_mult
 

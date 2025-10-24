@@ -83,6 +83,56 @@ def nesterov_accelerated_gradient(f, g, x0, xs, params):
     return x_stack, g_stack, f_stack
 
 
+def nesterov_fgm(f, g, x0, xs, params):
+    '''
+        Algorithm 14 from https://arxiv.org/pdf/2101.09545
+        Specific equivalent form implemented is Algorithm 28 (Section B.1.3)
+    '''
+    t = params['t']
+    # K = params['K']
+    # mu = params['mu']
+    q = params['q']
+    K_max = params['K_max']
+
+    x_stack = []
+    g_stack = []
+    f_stack = []
+
+    x = x0
+    y = x0
+    x_stack = [xs, x0]
+    g_stack = [g(xs), g(x0)]
+    f_stack = [f(xs), f(x0)]
+
+    A = [0, 1/(1-q)]
+
+    for k in range(K_max):
+        A_kplus2_numerator = 2 * A[k+1] + 1 + np.sqrt(1 + 4 * A[k+1] + 4 * q * A[k+1] ** 2)
+        A_kplus2 = A_kplus2_numerator / (2 * (1 - q))
+        A.append(A_kplus2)
+
+        beta_k_numerator = (A[k+2] - A[k+1]) * (A[k+1] * (1-q) - A[k] - 1)
+        beta_k_denominator = A[k+2] * (2 * q * A[k+1] + 1) - q * A[k+1] ** 2
+        beta_k = beta_k_numerator / beta_k_denominator
+
+        y_prev = y
+        y = x - t * g(x)
+        x = y + beta_k * (y - y_prev)
+
+        # x_prev = x
+        # x = y - t * g(y)
+        # y = x + beta_k * (x - x_prev)
+
+        x_stack.append(x)
+        g_stack.append(g(x))
+        f_stack.append(f(x))
+    x_stack = np.array(x_stack)
+    g_stack = np.array(g_stack)
+    f_stack = np.array(f_stack)
+
+    return x_stack, g_stack, f_stack
+
+
 def generate_trajectories(f, g, x0, xs, fs, algorithm, params):
     x_stack, g_stack, f_stack = algorithm(f, g, x0, xs, params)
     x_stack = np.array(x_stack).T

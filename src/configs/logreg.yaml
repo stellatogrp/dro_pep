@@ -1,15 +1,15 @@
 sample_frac: 0.25
 delta: 0.2
 R: 10
-eta: 0.2
+eta: 0.27
 
 L: 3.693 # FILL THIS IN ONCE KNOWN
 
 K_min: 1
 K_max: 30
 
-alg: grad_desc  # grad_desc or nesterov_grad_desc
-dro_obj: cvar  # expectation or cvar
+alg: grad_desc  # grad_desc or nesterov_grad_desc or nesterov_fgm
+dro_obj: expectation  # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
 precond_type: average # 'average' or 'max' or 'min'
@@ -33,7 +33,7 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -1
-  log_max: 1
+  log_min: -2
+  log_max: 0
   logspace_count: 7
 alpha: 0.1

@@ -63,13 +63,13 @@ def compute_empirical_cvar(samples, k, alpha=0.1):
     tail_loss = samples_k[samples_k['obj_val'] >= quantile]
     return tail_loss['obj_val'].mean()
 
-ISTA_samples = pd.read_csv('data/samples/ISTA_1_40/samples.csv')
-FISTA_samples = pd.read_csv('data/samples/FISTA_1_40/samples.csv')
-# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_40/samples.csv')
+ISTA_samples = pd.read_csv('data/samples/ISTA_1_25/samples.csv')
+FISTA_samples = pd.read_csv('data/samples/FISTA_1_25/samples.csv')
+# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_25/samples.csv')
 
-ISTA_pep = pd.read_csv('data/pep/ISTA_1_40/pep.csv')
-FISTA_pep = pd.read_csv('data/pep/FISTA_1_40/pep.csv')
-# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_40/pep.csv')
+ISTA_pep = pd.read_csv('data/pep/ISTA_1_25/pep.csv')
+FISTA_pep = pd.read_csv('data/pep/FISTA_1_25/pep.csv')
+# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_25/pep.csv')
 
 ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_25/dro.csv')
 ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_25/dro.csv')
@@ -81,7 +81,7 @@ FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_25/dro.csv')
 
 def main_bounds():
     ISTA_color = 'tab:blue'
-    FISTA_color = 'tab:green'
+    FISTA_color = 'tab:orange'
     # OptISTA_color = 'tab:red'
 
     ISTA_exp_dro_eps = ISTA_exp_dro[ISTA_exp_dro['eps_idx'] == 2]
@@ -142,10 +142,10 @@ def main_bounds():
     ax[2].set_title('Expectation')
     ax[1].set_title('CVaR')
 
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='ISTA', color=ISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Sample ISTA', linestyle='--', color=ISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='FISTA', color=FISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Sample FISTA', linestyle='--', color=FISTA_color)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='ISTA DRO Bound', color=ISTA_color)
+    ax[0].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='FISTA DRO Bound', color=FISTA_color)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='ISTA Sample', linestyle='--', color=ISTA_color)
+    ax[0].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='FISTA Sample', linestyle='--', color=FISTA_color)
     # ax[0].plot(range(1, exp_K_max + 1), OptISTA_pep[OptISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='OptISTA', color=OptISTA_color)
     # ax[0].plot(range(1, exp_K_max + 1), OptISTA_worst_cases[:exp_K_max], label='Sample OptISTA', linestyle='--', color=OptISTA_color)
 
@@ -174,8 +174,8 @@ def main_bounds():
 
     plt.suptitle('Lasso Minimization')
     # plt.tight_layout()
-    # plt.show()
-    plt.savefig(f'Lasso_all.pdf')
+    plt.show()
+    # plt.savefig(f'Lasso_all.pdf')
 
 
 if __name__ == '__main__':

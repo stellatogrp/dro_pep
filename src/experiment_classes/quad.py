@@ -5,7 +5,7 @@ import logging
 import time
 from tqdm import trange
 
-from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
+from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
@@ -90,12 +90,15 @@ def quad_samples(cfg):
     params = {
         't': cfg.eta / cfg.L,
         'K_max': cfg.K_max,
+        'q': cfg.mu / cfg.L, 
     }
 
     if cfg.alg == 'grad_desc':
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -134,6 +137,8 @@ def quad_pep(cfg):
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -169,7 +174,8 @@ def quad_pep_subproblem(cfg, algo, k, obj, return_problem=False):
 
     params = {
         't': cfg.eta / cfg.L,
-        'K_max': k, 
+        'K_max': k,
+        'q': cfg.mu / cfg.L, 
     }
     log.info(params)
 
@@ -209,6 +215,8 @@ def quad_dro(cfg):
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -267,6 +275,7 @@ def quad_dro(cfg):
             params = {
                 't': cfg.eta / cfg.L,
                 'K_max': k,
+                'q': cfg.mu / cfg.L, 
             }
 
             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
@@ -326,6 +335,8 @@ def quad_lyap(cfg):
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -339,6 +350,7 @@ def quad_lyap(cfg):
     params = {
         't': cfg.eta / cfg.L,
         'K_max': cfg.K_max,
+        'q': cfg.mu / cfg.L, 
     }
 
     samples = []
@@ -437,6 +449,7 @@ def compute_sample_rho(sample):
 #             params = {
 #                 't': cfg.eta / cfg.L,
 #                 'K_max': k,
+#                 'q': cfg.mu / cfg.L, 
 #             }
 
 #             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)

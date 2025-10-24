@@ -46,17 +46,10 @@ class Canonicalizer(object):
                 self.preconditioner = ( 1/min_sample[0], 1/np.sqrt(min_sample[1]) )
             else:
                 raise ValueError(f'{self.precond_type} is invalid precond_type')
-            
-            for i in range(self.A_obj.shape[0]):
-                if self.preconditioner[0][i] == np.inf or np.isnan(self.preconditioner[0][i]):
-                    self.preconditioner[0][i] = 1.0
-            for i in range(self.b_obj.shape[0]):
-                if self.preconditioner[1][i] == np.inf or np.isnan(self.preconditioner[1][i]):
-                    self.preconditioner[1][i] = 1.0
-                # self.preconditioner[0][0] = 1.0 # avoid divide-by-zero error from g(x_star) = 0
-                # self.preconditioner[1][0] = 1.0 # avoid divide-by-zero error from x_star = 0
 
-            self.preconditioner = (self.preconditioner[0] * self.A_obj.shape[0], self.preconditioner[1] * np.sqrt(self.b_obj.shape[0]))
+            new_precond_0 = np.nan_to_num(self.preconditioner[0], nan=1.0, posinf=1.0, neginf=1.0) * self.A_obj.shape[0]
+            new_precond_1 = np.nan_to_num(self.preconditioner[1], nan=1.0, posinf=1.0, neginf=1.0) * np.sqrt(self.b_obj.shape[0])
+            self.preconditioner = (new_precond_0, new_precond_1)
 
         self.precond_inv = (1 / self.preconditioner[0], 1/self.preconditioner[1])
 

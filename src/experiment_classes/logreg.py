@@ -6,7 +6,7 @@ import logging
 import time
 from tqdm import trange
 from sklearn.datasets import load_breast_cancer
-from .utils import gradient_descent, nesterov_accelerated_gradient, generate_trajectories, sample_x0_centered_disk
+from .utils import gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
@@ -115,12 +115,15 @@ def logreg_samples(cfg):
     params = {
         't': cfg.eta, # NOT cfg.eta / cfg.L
         'K_max': cfg.K_max,
+        'q': cfg.delta / cfg.L, 
     }
 
     if cfg.alg == 'grad_desc':
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -177,6 +180,8 @@ def logreg_pep(cfg):
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -212,6 +217,7 @@ def logreg_pep_subproblem(cfg, mu, L, algo, k, obj, return_problem=False):
     params = {
         't': cfg.eta, # NOT cfg.eta / cfg.L
         'K_max': k,
+        'q': cfg.delta / cfg.L, 
     }
 
     log.info(params)
@@ -250,6 +256,8 @@ def logreg_dro(cfg):
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -295,6 +303,7 @@ def logreg_dro(cfg):
             params = {
                 't': cfg.eta, # NOT cfg.eta / cfg.L
                 'K_max': k,
+                'q': cfg.delta / cfg.L, 
             }
 
             G, F = generate_trajectories(lr.f, lr.grad, x0, xs, fs, algo, params)
@@ -345,6 +354,8 @@ def logreg_lyap(cfg):
         algo = gradient_descent
     elif cfg.alg == 'nesterov_grad_desc':
         algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
     else:
         log.info('invalid alg in cfg')
         exit(0)
@@ -359,6 +370,7 @@ def logreg_lyap(cfg):
         # 't': cfg.eta / cfg.L,
         't': cfg.eta,
         'K_max': cfg.K_max,
+        'q': cfg.delta / cfg.L, 
     }
 
     samples = []
@@ -393,7 +405,7 @@ def logreg_lyap(cfg):
     one_minus_alphas = []
     rhos = []
     for alpha in alpha_vals:
-        # lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
+        # lyap_res = gd_lyap(cfg.delta, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
         lyap_res = gd_lyap_nobisect(cfg.delta, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
         log.info(lyap_res)
         one_minus_alphas.append(1 - alpha)
