@@ -10,8 +10,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 6),
 })
 
-exp_K_max = 10
-cvar_K_max = 10
+exp_K_max = 30
+cvar_K_max = 30
 
 num_eps_vals = 5
 
@@ -96,10 +96,10 @@ def main_bounds():
     GD_color = 'tab:blue'
     NGD_color = 'tab:orange'
 
-    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 6]
-    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 4]
-    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 6]
-    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 4]
+    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 5]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 3]
+    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 5]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 2]
 
     GD_exp_gamma = GD_exp_fit_params['gamma'].loc[0]
     GD_exp_C = GD_exp_fit_params['C'].loc[0]
@@ -203,8 +203,8 @@ def main_bounds():
 
     plt.suptitle('Nonstrongly Convex Quadratic Minimization, Distance to Optimality')
 
-    plt.show()
-    # plt.savefig(f'quad_nonstrongcvx.pdf')
+    # plt.show()
+    plt.savefig(f'quad_nonstrongcvx.pdf')
 
 
 if __name__ == '__main__':
