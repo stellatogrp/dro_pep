@@ -1,6 +1,6 @@
 hydra:
   run:
-    dir: /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/dro_outputs/Quad/${now:%Y-%m-%d}/${now:%H-%M-%S}_5
+    dir: ./dro_outputs/Quad/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
     dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
     subdir: ${hydra.job.num}
@@ -110,17 +110,14 @@ hydra:
   output_subdir: .hydra
   overrides:
     hydra:
-    - hydra.run.dir=/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/dro_outputs/Quad/${now:%Y-%m-%d}/${now:%H-%M-%S}_5
+    - hydra.run.dir=./dro_outputs/Quad/${now:%Y-%m-%d}/${now:%H-%M-%S}
     - hydra.job.chdir=True
     - hydra.mode=RUN
-    task:
-    - alg=nesterov_grad_desc
-    - dro_obj=expectation
-    - mu=1
+    task: []
   job:
     name: run_dro_experiment
     chdir: true
-    override_dirname: alg=nesterov_grad_desc,dro_obj=expectation,mu=1
+    override_dirname: ''
     id: ???
     num: ???
     config_name: quad.yaml
@@ -134,18 +131,18 @@ hydra:
   runtime:
     version: 1.3.2
     version_base: '1.2'
-    cwd: /home/vranjan/dro_pep/src
+    cwd: /Users/vranjan/Princeton Dropbox/Vinit Ranjan/ORFE/2024/dro_pep/src
     config_sources:
     - path: hydra.conf
       schema: pkg
       provider: hydra
-    - path: /home/vranjan/dro_pep/src/configs
+    - path: /Users/vranjan/Princeton Dropbox/Vinit Ranjan/ORFE/2024/dro_pep/src/configs
       schema: file
       provider: main
     - path: ''
       schema: structured
       provider: schema
-    output_dir: /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/dro_outputs/Quad/2025-10-11/11-09-38_5
+    output_dir: /Users/vranjan/Princeton Dropbox/Vinit Ranjan/ORFE/2024/dro_pep/src/dro_outputs/Quad/2025-10-24/14-48-01
     choices:
       hydra/env: default
       hydra/callbacks: null
