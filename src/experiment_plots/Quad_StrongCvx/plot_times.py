@@ -15,19 +15,19 @@ exp_K_max = 30
 cvar_K_max = 30
 
 GD_pep = pd.read_csv('data/pep/grad_desc_1_30/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_30/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_fgm_1_30/pep.csv')
 
 GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_30/dro.csv')
 GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_30/dro.csv')
-NGD_exp_dro = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_30/dro.csv')
-NGD_cvar_dro = pd.read_csv('data/dro/nesterov_grad_desc_cvar_1_30/dro.csv')
+NGD_exp_dro = pd.read_csv('data/dro/nesterov_fgm_exp_1_30/dro.csv')
+NGD_cvar_dro = pd.read_csv('data/dro/nesterov_fgm_cvar_1_30/dro.csv')
 
 PEP_OBJ = 'opt_dist_sq_norm'
 
 
 def plot_times():
     GD_color = 'tab:blue'
-    NGD_color = 'tab:green'
+    NGD_color = 'tab:orange'
 
     GD_pep_times = GD_pep[GD_pep['obj'] == PEP_OBJ]['solvetime'][:pep_K_max]
     NGD_pep_times = NGD_pep[NGD_pep['obj'] == PEP_OBJ]['solvetime'][:pep_K_max]
