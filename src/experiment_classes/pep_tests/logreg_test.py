@@ -18,6 +18,73 @@ def sigmoid(z):
 
 class LogReg(object):
 
+    def __init__(self, n=100, N=1000, p=0.3, delta=0.1, R=1, seed=10, A_std=3, eps_std=0.01):
+        np.random.seed(seed)
+        self.beta = np.random.uniform(low=-1, high=1, size=(n,))
+        self.beta_mask = np.random.binomial(1, p, size=(n,))
+        self.beta = np.multiply(self.beta, self.beta_mask)
+        # print(self.beta)
+
+        self.x0 = np.zeros(n)
+        self.x0[0] = R
+        self.R = R
+        self.dim = n
+        self.delta = delta
+
+        self.A = np.random.normal(size=(N, n), scale=A_std)
+        # print(self.A)
+        Abeta_noise = self.A @ self.beta + eps_std * np.random.normal(scale=eps_std, size=(N,))
+        # print(Abeta_noise)
+        self.b = np.where(Abeta_noise > 0, 1, 0)
+        # print(self.b)
+
+        self.solve_optimal_values()
+        self.compute_mu_L()
+
+    def solve_optimal_values(self):
+        X, y = self.A, self.b
+        m, n = X.shape
+        beta = cp.Variable(n)
+        log_likelihood = cp.sum(
+            cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
+        )
+        obj = - 1 / m * log_likelihood + 0.5 * self.delta * cp.sum_squares(beta)
+        problem = cp.Problem(cp.Minimize(obj))
+        problem.solve()
+
+        self.x_opt = beta.value
+        self.f_opt = problem.value
+
+    def compute_mu_L(self):
+        X = self.A
+        m = X.shape[0]
+
+        XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
+        lambd_max = np.max(XTX_eigvals)
+        L = lambd_max / (4 * m) + self.delta
+        mu = self.delta
+        
+        self.mu, self.L = mu, L
+
+    def f(self, z):
+        X, y = self.A, self.b
+        m = X.shape[0]
+        z = z + self.x_opt
+        log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
+        return - 1 / m * log_likeli + 0.5 * self.delta * z.T @ z - self.f_opt
+
+    def grad(self, z):
+        X, y = self.A, self.b
+        m = X.shape[0]
+        z = z + self.x_opt
+        return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
+
+    def sample_init_point(self):
+        return sample_x0_centered_disk(self.dim, self.R)
+
+
+class LogRegCredit(object):
+
     def __init__(self, sample_frac=0.5, delta=0.1, R=1):
         self.delta = delta
 
@@ -108,7 +175,11 @@ def main():
 
     lr = LogReg(delta=delta)
     # X, y = lr.sample_normalized()
-    X, y = lr.samp_X, lr.samp_y
+    # X, y = lr.samp_X, lr.samp_y
+    X, y = lr.A, lr.b
+    print(lr.mu, lr.L)
+
+    # exit(0)
 
     m, n = X.shape
     beta = cp.Variable(n)
@@ -139,7 +210,7 @@ def main():
     XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
     lambd_max = np.max(XTX_eigvals)
     L = lambd_max / (4 * m) + delta
-    print(L)
+    print(delta, L)
 
     print(problem.value)
     print(f(beta.value))
@@ -154,6 +225,8 @@ def main():
     print(beta_k)
     print(lr.f(beta_k))
     print(lr.grad(beta_k))
+
+    exit(0)
 
     default_of_credit_card_clients = fetch_ucirepo(id=350) 
   

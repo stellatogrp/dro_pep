@@ -1,14 +1,14 @@
 sample_frac: 0.25
-delta: 0.2
-R: 10
-eta: 0.27
+delta: 1e-2
+R: 1
+eta: 0.159
 
-L: 3.693 # FILL THIS IN ONCE KNOWN
+L: 6.3 # FILL THIS IN ONCE KNOWN
 
 K_min: 1
 K_max: 30
 
-alg: grad_desc  # grad_desc or nesterov_grad_desc or nesterov_fgm
+alg: nesterov_fgm  # grad_desc or nesterov_grad_desc or nesterov_fgm
 dro_obj: expectation  # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
@@ -23,10 +23,7 @@ sample_N: 1000
 training:
   expectation_N: 100
   cvar_N: 100
-<<<<<<< Updated upstream
-  lyap_N: 25
-=======
->>>>>>> Stashed changes
+  lyap_N: 100
 num_clusters:
   expectation: null
   cvar: null
@@ -36,13 +33,7 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-<<<<<<< Updated upstream
   log_min: -2
   log_max: 0
   logspace_count: 7
-=======
-  log_min: 0
-  log_max: 1
-  logspace_count: 4
->>>>>>> Stashed changes
 alpha: 0.1

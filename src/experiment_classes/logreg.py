@@ -5,12 +5,12 @@ import pandas as pd
 import logging
 import time
 from tqdm import trange
-from sklearn.datasets import load_breast_cancer
+from sklearn.datasets import load_breast_cancer, fetch_lfw_pairs
 from .utils import gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
-# from ucimlrepo import fetch_ucirepo
+from ucimlrepo import fetch_ucirepo
 from .lyap_classes.gd import gd_lyap, gd_lyap_nobisect
 
 log = logging.getLogger(__name__)
@@ -20,52 +20,116 @@ def sigmoid(z):
     return 1/(1 + np.exp(-z))
 
 
+# class LogReg(object):
+
+#     def __init__(self, sample_frac=0.01, delta=0.1, R=1):
+#         self.delta = delta
+
+#         full_X, full_y = load_breast_cancer(return_X_y=True)
+#         # full_X = X.to_numpy()
+#         # full_y = y.to_numpy().reshape(-1,)
+#         self.full_X = full_X
+#         self.full_y = full_y
+
+#         # bank_marketing = fetch_ucirepo(id=222) 
+#         # data (as pandas dataframes) 
+#         # X = bank_marketing.data.features 
+#         # y = bank_marketing.data.targets 
+
+#         self.samp_X, self.samp_y = self.sample_normalized(sample_frac=sample_frac)
+#         self.solve_optimal_values()
+#         self.compute_mu_L()
+
+#         self.x0 = np.zeros(self.samp_X.shape[1])
+#         self.x0[0] = R
+#         self.R = R
+#         self.dim = self.samp_X.shape[1]
+
+#     def sample(self, sample_frac=0.8):
+#         X = self.full_X
+#         y = self.full_y
+
+#         sample_size = int(0.8 * X.shape[0])
+#         idx = np.random.choice(X.shape[0], size=sample_size, replace=False)
+
+#         return X[idx], y[idx]
+
+#     def sample_normalized(self, sample_frac=0.8):
+#         X_samp, y_samp = self.sample(sample_frac=sample_frac)
+#         means = X_samp.mean(axis=0)
+#         std_devs = X_samp.std(axis=0)
+
+#         X_samp_normalized = (X_samp - means) / std_devs
+#         ones_column = np.ones((X_samp.shape[0], 1))
+#         X_samp_with_ones = np.hstack((X_samp_normalized, ones_column))
+#         return X_samp_with_ones, y_samp
+
+#     def solve_optimal_values(self):
+#         X, y = self.samp_X, self.samp_y
+#         m, n = X.shape
+#         beta = cp.Variable(n)
+#         log_likelihood = cp.sum(
+#             cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
+#         )
+#         obj = - 1 / m * log_likelihood + 0.5 * self.delta * cp.sum_squares(beta)
+#         problem = cp.Problem(cp.Minimize(obj))
+#         problem.solve()
+
+#         self.x_opt = beta.value
+#         self.f_opt = problem.value
+
+#     def compute_mu_L(self):
+#         X = self.samp_X
+#         m = X.shape[0]
+
+#         XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
+#         lambd_max = np.max(XTX_eigvals)
+#         L = lambd_max / (4 * m) + self.delta
+#         mu = self.delta
+        
+#         self.mu, self.L = mu, L
+
+#     def f(self, z):
+#         X, y = self.samp_X, self.samp_y
+#         m = X.shape[0]
+#         z = z + self.x_opt
+#         log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
+#         return - 1 / m * log_likeli + 0.5 * self.delta * z.T @ z - self.f_opt
+
+#     def grad(self, z):
+#         X, y = self.samp_X, self.samp_y
+#         m = X.shape[0]
+#         z = z + self.x_opt
+#         return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
+
+#     def sample_init_point(self):
+#         return sample_x0_centered_disk(self.dim, self.R)
+
 class LogReg(object):
 
-    def __init__(self, sample_frac=0.01, delta=0.1, R=1):
+    def __init__(self, n=50, N=1000, p=0.3, delta=1e-2, R=1, seed=10, A_std=4, eps_std=1):
+        np.random.seed(seed)
+        self.beta = np.random.uniform(low=-3, high=3, size=(n,))
+        self.beta_mask = np.random.binomial(1, p, size=(n,))
+        self.beta = np.multiply(self.beta, self.beta_mask)
+        # print(self.beta)
+
+        self.x0 = np.zeros(n)
+        self.x0[0] = R
+        self.R = R
+        self.dim = n
         self.delta = delta
 
-        full_X, full_y = load_breast_cancer(return_X_y=True)
+        self.A = np.random.normal(size=(N, n-1), scale=A_std)
+        self.A = np.hstack([self.A, np.ones((N, 1))])
+        Abeta_noise = self.A @ self.beta + eps_std * np.random.normal(scale=eps_std, size=(N,))
+        self.b = np.where(Abeta_noise > 0, 1, 0)
 
-        # default_of_credit_card_clients = fetch_ucirepo(id=350)
-        # X = default_of_credit_card_clients.data.features 
-        # y = default_of_credit_card_clients.data.targets 
-        # full_X = X.to_numpy()
-        # full_y = y.to_numpy().reshape(-1,)
-        
-        self.full_X = full_X
-        self.full_y = full_y
-
-        self.samp_X, self.samp_y = self.sample_normalized(sample_frac=sample_frac)
         self.solve_optimal_values()
         self.compute_mu_L()
 
-        self.x0 = np.zeros(self.samp_X.shape[1])
-        self.x0[0] = R
-        self.R = R
-        self.dim = self.samp_X.shape[1]
-
-    def sample(self, sample_frac=0.8):
-        X = self.full_X
-        y = self.full_y
-
-        sample_size = int(0.8 * X.shape[0])
-        idx = np.random.choice(X.shape[0], size=sample_size, replace=False)
-
-        return X[idx], y[idx]
-
-    def sample_normalized(self, sample_frac=0.8):
-        X_samp, y_samp = self.sample(sample_frac=sample_frac)
-        means = X_samp.mean(axis=0)
-        std_devs = X_samp.std(axis=0)
-
-        X_samp_normalized = (X_samp - means) / std_devs
-        ones_column = np.ones((X_samp.shape[0], 1))
-        X_samp_with_ones = np.hstack((X_samp_normalized, ones_column))
-        return X_samp_with_ones, y_samp
-
     def solve_optimal_values(self):
-        X, y = self.samp_X, self.samp_y
+        X, y = self.A, self.b
         m, n = X.shape
         beta = cp.Variable(n)
         log_likelihood = cp.sum(
@@ -79,7 +143,7 @@ class LogReg(object):
         self.f_opt = problem.value
 
     def compute_mu_L(self):
-        X = self.samp_X
+        X = self.A
         m = X.shape[0]
 
         XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
@@ -90,20 +154,21 @@ class LogReg(object):
         self.mu, self.L = mu, L
 
     def f(self, z):
-        X, y = self.samp_X, self.samp_y
+        X, y = self.A, self.b
         m = X.shape[0]
         z = z + self.x_opt
         log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
         return - 1 / m * log_likeli + 0.5 * self.delta * z.T @ z - self.f_opt
 
     def grad(self, z):
-        X, y = self.samp_X, self.samp_y
+        X, y = self.A, self.b
         m = X.shape[0]
         z = z + self.x_opt
         return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
 
     def sample_init_point(self):
         return sample_x0_centered_disk(self.dim, self.R)
+
 
 def logreg_samples(cfg):
     log.info(cfg)
@@ -131,12 +196,15 @@ def logreg_samples(cfg):
     L_vals = []
 
     for i in trange(cfg.sample_N):
-        lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        # lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        lr = LogReg(delta=cfg.delta, seed=i)
         # x0 = lr.x0
         x0 = lr.sample_init_point()
+
         # xs = lr.x_opt
         # fs = lr.f_opt
-        xs = np.zeros(lr.samp_X.shape[1])
+        # xs = np.zeros(lr.samp_X.shape[1])
+        xs = np.zeros(lr.A.shape[1])
         fs = 0
 
         L_vals.append(lr.L)
@@ -168,7 +236,11 @@ def logreg_samples(cfg):
 
 def plot_worst_case(df, col, cfg):
     worst_cases = df[['K', col]].groupby(['K']).max()
+    averages = df[['K', col]].groupby(['K']).mean()
+    quantiles = df[['K', col]].groupby(['K']).quantile(0.9)
     plt.plot(range(1, cfg.K_max + 1), worst_cases)
+    plt.plot(range(1, cfg.K_max + 1), quantiles)
+    plt.plot(range(1, cfg.K_max + 1), averages)
     plt.yscale('log')
     plt.title(col)
     plt.savefig('worstcases.pdf')
