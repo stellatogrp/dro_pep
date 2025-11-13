@@ -756,6 +756,7 @@ class ClarabelCanonicalizer(Canonicalizer):
             solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
             log.info('solver switched to mkl correctly')
         except Exception as e:
+            settings.direct_solve_method = 'qdldl'
             solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
             log.info('solver did not switch to mkl')
         solution = solver.solve()
