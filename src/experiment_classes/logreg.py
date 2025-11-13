@@ -352,7 +352,8 @@ def logreg_dro(cfg):
     np.random.seed(cfg.seed.train)
     logreg_funcs = []
     for i in trange(N):
-        lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        # lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
+        lr = LogReg(delta=cfg.delta, seed=i + 25000)
         logreg_funcs.append(lr)
     
     res = []
@@ -381,7 +382,8 @@ def logreg_dro(cfg):
             x0 = lr.sample_init_point()
             # xs = lr.x_opt
             # fs = lr.f_opt
-            xs = np.zeros(lr.samp_X.shape[1])
+            # xs = np.zeros(lr.samp_X.shape[1])
+            xs = np.zeros(lr.A.shape[1])
             fs = 0
 
             params = {
