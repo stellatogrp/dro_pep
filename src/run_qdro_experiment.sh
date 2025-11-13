@@ -6,7 +6,7 @@
 #SBATCH --mem-per-cpu=600G
 #SBATCH --time=00-23:59:59
 #SBATCH --constraint=intel # useful to make sure paradiso-mkl is available
-#SBATCH --array=2,3,6,7
+#SBATCH --array=0-7
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
