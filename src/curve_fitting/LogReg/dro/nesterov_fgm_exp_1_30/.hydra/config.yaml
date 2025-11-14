@@ -5,8 +5,8 @@ eta: 0.159
 L: 6.3
 K_min: 1
 K_max: 30
-alg: grad_desc
-dro_obj: cvar
+alg: nesterov_fgm
+dro_obj: expectation
 dro_pep_obj: obj_val
 precond_type: average
 seed:

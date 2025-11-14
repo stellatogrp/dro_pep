@@ -1,0 +1,2 @@
+- alg=nesterov_fgm
+- dro_obj=cvar

@@ -1,12 +1,12 @@
 sample_frac: 0.25
-delta: 0.01
-R: 1
-eta: 0.159
-L: 6.3
+delta: 0.2
+R: 10
+eta: 0.2
+L: 3.693
 K_min: 1
 K_max: 30
 alg: grad_desc
-dro_obj: cvar
+dro_obj: expectation
 dro_pep_obj: obj_val
 precond_type: average
 seed:
@@ -16,7 +16,6 @@ sample_N: 1000
 training:
   expectation_N: 100
   cvar_N: 100
-  lyap_N: 100
 num_clusters:
   expectation: null
   cvar: null
