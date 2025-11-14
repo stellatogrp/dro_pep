@@ -302,9 +302,9 @@ def main_QP_strong_cvar():
 
 def main_logreg_exp():
     LogReg_gd_exp = pd.read_csv(f'LogReg/dro/grad_desc_exp_1_30/dro.csv')
-    LogReg_gd_exp_data = LogReg_gd_exp[LogReg_gd_exp['eps_idx'] == 5]
+    LogReg_gd_exp_data = LogReg_gd_exp[LogReg_gd_exp['eps_idx'] == 2]
     LogReg_ngd_exp = pd.read_csv(f'LogReg/dro/nesterov_grad_desc_exp_1_30/dro.csv')
-    LogReg_ngd_exp_data = LogReg_ngd_exp[LogReg_ngd_exp['eps_idx'] == 5]
+    LogReg_ngd_exp_data = LogReg_ngd_exp[LogReg_ngd_exp['eps_idx'] == 0]
 
     linear_curve_fit(
         LogReg_gd_exp_data,
@@ -322,9 +322,9 @@ def main_logreg_exp():
 
 def main_logreg_cvar():
     LogReg_gd_cvar = pd.read_csv(f'LogReg/dro/grad_desc_cvar_1_30/dro.csv')
-    LogReg_gd_cvar_data = LogReg_gd_cvar[LogReg_gd_cvar['eps_idx'] == 5]
+    LogReg_gd_cvar_data = LogReg_gd_cvar[LogReg_gd_cvar['eps_idx'] == 0]
     LogReg_ngd_cvar = pd.read_csv(f'LogReg/dro/nesterov_grad_desc_cvar_1_30/dro.csv')
-    LogReg_ngd_cvar_data = LogReg_ngd_cvar[LogReg_ngd_cvar['eps_idx'] == 5]
+    LogReg_ngd_cvar_data = LogReg_ngd_cvar[LogReg_ngd_cvar['eps_idx'] == 0]
 
     linear_curve_fit(
         LogReg_gd_cvar_data,
