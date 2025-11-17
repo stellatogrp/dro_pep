@@ -1,0 +1,8 @@
+- alg=nesterov_grad_desc
+- dro_obj=expectation
+- dro_pep_obj=obj_val
+- mu=1
+- L=25
+- eta=1
+- eps.log_min=-1
+- eps.log_max=1
