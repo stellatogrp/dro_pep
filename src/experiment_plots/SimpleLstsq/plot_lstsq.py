@@ -14,11 +14,11 @@ plt.rcParams.update({
 
 def main():
     # colorblind-safe: #D81B60 (magenta) #FFC107 (yellow) #004D40 (dark green) #1E88E5 (blue)
-    pep_color = 'tab:gray' # 'tag:green'
+    avg_color = '#D81B60' # 'tag:green'
     # sm_color = 'tab:orange'
-    p90_color = 'k'  # 'tab:gray'
-    # avg_color = 'tab:blue'
-    avg_color = 'tab:green' # 'tab:blue'
+    p90_color = 'tab:blue'  # 'tab:gray'
+    pep_color = '#FFAA1C'
+    # avg_color = 'tab:green' # 'tab:blue'
 
     fig, ax = plt.subplots()
     sample_df = pd.read_csv('data/samples.csv', header=None)
@@ -56,7 +56,7 @@ def main():
     ax.grid(color='lightgray', alpha=0.3)
 
     # plt.show()
-    plt.savefig('box_pgd_new2.pdf')
+    plt.savefig('box_pgd.pdf')
 
 
 if __name__ == '__main__':

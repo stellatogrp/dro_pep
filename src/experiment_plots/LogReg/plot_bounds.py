@@ -7,7 +7,7 @@ plt.rcParams.update({
     "font.family": "serif",
     # "font.sans-serif": ["Helvetica Neue"],
     "font.size": 14,
-    "figure.figsize": (12, 6),
+    "figure.figsize": (12, 7),
 })
 
 exp_K_max = 30
@@ -173,10 +173,118 @@ def main_bounds():
 
     plt.suptitle('Logistic Regression, Objective Value')
 
-    plt.show()
-    # plt.savefig(f'logreg_obj_val.pdf')
+    # plt.show()
+    plt.savefig(f'logreg_obj_val.pdf')
 
+
+def main_bounds_alg():
+    """
+    Generates and saves a plot comparing GD and FGM algorithms
+    across worst-case, expectation, and CVaR metrics.
+    """
+
+    # --- Data Preparation ---
+    # Select specific epsilon index for DRO bounds
+    GD_exp_dro_eps = GD_exp_dro[GD_exp_dro['eps_idx'] == 2]
+    GD_cvar_dro_eps = GD_cvar_dro[GD_cvar_dro['eps_idx'] == 0]
+    NGD_exp_dro_eps = NGD_exp_dro[NGD_exp_dro['eps_idx'] == 0]
+    NGD_cvar_dro_eps = NGD_cvar_dro[NGD_cvar_dro['eps_idx'] == 0]
+
+    # Compute empirical (sample) expectation and CVaR values
+    GD_exp_k = []
+    NGD_exp_k = []
+    GD_cvar_k = []
+    NGD_cvar_k = []
+
+    for k in range(1, exp_K_max + 1):
+        GD_exp_k.append(compute_empirical_avg(GD_samples, k))
+        NGD_exp_k.append(compute_empirical_avg(NGD_samples, k))
+    
+    for k in range(1, cvar_K_max + 1):
+        GD_cvar_k.append(compute_empirical_cvar(GD_samples, k))
+        NGD_cvar_k.append(compute_empirical_cvar(NGD_samples, k))
+
+    # Compute empirical (sample) worst-case values
+    GD_worst_cases = GD_samples[['K', 'obj_val']].groupby(['K']).max()
+    NGD_worst_cases = NGD_samples[['K', 'obj_val']].groupby(['K']).max()
+
+    # Define colors for metrics
+    worst_case_color = '#FFAA1C'
+    exp_color = '#D81B60'
+    cvar_color = 'tab:blue'
+
+    # --- Plotting ---
+    # Create 2 subplots (1 row, 2 columns)
+    # fig, ax = plt.subplots(1, 2, figsize=(12, 6))
+    fig, ax = plt.subplots(1, 2)
+
+    # --- Setup General Plot-wide Properties ---
+    ax[0].set_ylabel(r'$f(x^K) - f^\star$')
+    ax[0].set_xlabel(r'$K$')
+    ax[1].set_xlabel(r'$K$')
+
+    # Apply settings to both axes
+    for axi in ax:
+        axi.set_yscale('log')
+        axi.grid(color='lightgray', alpha=0.3)
+        axi.set_xticks([10, 20, 30, 40])
+    
+    # Share Y and X axes
+    ax[1].sharey(ax[0])
+    ax[1].sharex(ax[0])
+
+    # --- Subplot 0: Gradient Descent (GD) ---
+    ax[0].set_title('Gradient Descent (GD)')
+
+    # Worst-case
+    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+    
+    # Expectation
+    ax[0].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Expectation (Bound)', color=exp_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
+    
+    # CVaR
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR (Bound)', color=cvar_color)
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
+
+
+    # --- Subplot 1: Fast Gradient Method (FGM) ---
+    ax[1].set_title('Fast Gradient Method (FGM)')
+
+    # Worst-case
+    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+
+    # Expectation
+    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Expectation (Bound)', color=exp_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
+
+    # CVaR
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR (Bound)', color=cvar_color)
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
+
+
+    # --- Legend and Final Touches ---
+    # Adjust subplot positions to make room for legend
+    for axi in ax:
+        box = axi.get_position()
+        axi.set_position([box.x0, box.y0 + 0.07, box.width, box.height - 0.07])
+
+    # Get handles and labels from the first plot (they are identical for both)
+    handles, labels = ax[0].get_legend_handles_labels()
+    
+    # Create a single figure-level legend at the bottom
+    fig.legend(handles, labels, loc='lower center', ncols=3)
+
+    plt.suptitle('Logistic Regression, Objective Value')
+
+    # Save the figure
+    # plt.show()
+    plt.savefig(f'logreg_obj_val.pdf')
+    print("Plot saved to logreg_obj_val.pdf")
 
 if __name__ == '__main__':
     # main()
-    main_bounds()
+    # main_bounds()
+    main_bounds_alg()

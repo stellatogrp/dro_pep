@@ -10,20 +10,17 @@ plt.rcParams.update({
     "figure.figsize": (10, 6),
 })
 
-exp_K_max = 30
-cvar_K_max = 30
-
 pep_K_max = 30
 exp_K_max = 30
 cvar_K_max = 30
 
 GD_pep = pd.read_csv('data/pep/grad_desc_1_30/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_30/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_fgm_1_30/pep.csv')
 
 GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_30/dro.csv')
 GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_30/dro.csv')
-NGD_exp_dro = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_30/dro.csv')
-NGD_cvar_dro = pd.read_csv('data/dro/nesterov_grad_desc_cvar_1_30/dro.csv')
+NGD_exp_dro = pd.read_csv('data/dro/nesterov_fgm_exp_1_30/dro.csv')
+NGD_cvar_dro = pd.read_csv('data/dro/nesterov_fgm_cvar_1_30/dro.csv')
 
 
 def plot_times():
@@ -89,7 +86,77 @@ def plot_times():
 
     # plt.show()
 
-    plt.savefig('logreg_times.pdf')
+    # plt.savefig('logreg_times.pdf')
+
+    k_values = np.arange(1, pep_K_max + 1)
+
+    # 2. Create DataFrame for GD
+    # We use .values to strip the original indices and align the data
+    df_gd = pd.DataFrame({
+        'K': k_values,
+        'worst-case (PEP)': GD_pep_times.values,
+        'cvar': GD_cvar_times.values,
+        'expectation': GD_exp_times.values,
+        'algorithm': 'GD'
+    })
+
+    # 3. Create DataFrame for FGM (NGD)
+    df_fgm = pd.DataFrame({
+        'K': k_values,
+        'worst-case (PEP)': NGD_pep_times.values,
+        'cvar': NGD_cvar_times.values,
+        'expectation': NGD_exp_times.values,
+        'algorithm': 'FGM'
+    })
+
+    # 4. Combine the DataFrames
+    df_combined = pd.concat([df_gd, df_fgm], ignore_index=True)
+
+    # 5. Filter for K in increments of 5
+    df_filtered = df_combined[df_combined['K'] % 5 == 0].copy()
+
+    # 6. Reorder columns to the desired format
+    final_columns = ['algorithm', 'K', 'worst-case (PEP)', 'cvar', 'expectation']
+    df_final = df_filtered[final_columns].copy() # Use .copy() to be explicit
+
+    # 7. Set algorithm to blank '' for all but the first row in each group
+    df_final.loc[df_final['algorithm'].duplicated(), 'algorithm'] = ''
+
+    # --- START: New formatting logic ---
+    
+    def custom_format_to_string(x):
+        """
+        Rounds to 2 decimal places, unless the result is 0.00,
+        in which case it rounds to the first significant digit.
+        Returns a string representation.
+        """
+        # Handle NaN, None, or other non-numeric types gracefully
+        if not isinstance(x, (int, float)) or pd.isna(x):
+            return "" 
+        
+        if x == 0:
+            return "0.00"
+        
+        # Round to 2 decimal places
+        x_rounded_2dp = round(x, 2)
+        
+        if x_rounded_2dp != 0.0:
+            # Standard case (e.g., 1.234 -> "1.23" or 0.007 -> "0.01")
+            return f"{x_rounded_2dp:.2f}"
+        else:
+            # Special case: x is very small (e.g., 0.0001)
+            n = -int(np.floor(np.log10(np.abs(x))))
+            x_rounded_1sigfig = round(x, n)
+            return f"{x_rounded_1sigfig:.{n}f}"
+    
+    # Apply the custom string formatting to the time columns
+    # Use .applymap() to apply the function to all elements in the selected columns
+    time_cols = ['worst-case (PEP)', 'cvar', 'expectation']
+    df_final[time_cols] = df_final[time_cols].map(custom_format_to_string)
+    
+    # --- END: New formatting logic ---
+    # 8. Save the final DataFrame to a CSV file
+    df_final.to_csv('times_logreg.csv', index=False, float_format='%.6f')
 
 
 if __name__ == '__main__':
