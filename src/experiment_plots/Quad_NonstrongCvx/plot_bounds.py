@@ -269,15 +269,14 @@ def main_bounds_alg():
     # Worst-case
     ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
     ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+
+    # CVaR
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR (Bound)', color=cvar_color)
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
     
     # Expectation
     ax[0].plot(range(1, exp_K_max + 1), GD_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Expectation (Bound)', color=exp_color)
     ax[0].plot(range(1, exp_K_max + 1), GD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
-    
-    # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR (Bound)', color=cvar_color)
-    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
-
 
     # --- Subplot 1: Fast Gradient Method (FGM) ---
     ax[1].set_title('Fast Gradient Method (FGM)')
