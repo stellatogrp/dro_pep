@@ -47,7 +47,7 @@ class CvxpyCanonicalizer(Canonicalizer):
             G_sample, F_sample = samples_to_use[i]
             constraints += [- self.c_vals.T @ y[i] - cp.trace(G_sample @ Gz[i]) - F_sample.T @ Fz[i] <= s[i]]
             # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz[i]), Fz[i]]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz[i])]))]
 
             LstarG = 0
             LstarF = 0
@@ -71,7 +71,7 @@ class CvxpyCanonicalizer(Canonicalizer):
 
         prob = cp.Problem(cp.Minimize(obj), constraints)
 
-        probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
+        # probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
         # A_cp = probdata['A']
         # print('A shape from cvxpy:', A_cp.shape)
 
