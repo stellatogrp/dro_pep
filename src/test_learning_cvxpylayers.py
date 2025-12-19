@@ -44,16 +44,18 @@ def sample_x0_centered_disk(n, R):
 class Quad(object):
 
     def __init__(self, dim, mu=0, L=10, R=1):
-        self.dim = dim
+        # self.dim = dim
         self.mu = mu
         self.L = L
         self.R = R
 
         # self.x0 = np.zeros(dim)
         # self.x0[0] = R
-        self.x0 = self.sample_init_point()
 
         self.Q = rejection_sample_MP(dim, mu, L)
+        self.dim = self.Q.shape[0]
+
+        self.x0 = self.sample_init_point()
 
         self.f_star = 0
         self.x_star = np.zeros(self.dim)
@@ -86,7 +88,7 @@ class JaxQuad(object):
 
 
 def gradient_descent(f, g, x0, xs, params):
-    t = params['t']
+    t = float(params['t'])
     # K = params['K']
     K_max = params['K_max']
 
@@ -204,37 +206,6 @@ def jax_generate_trajectories(f, g, x0, xs, algorithm, params):
     return G_half.T@G_half, f_stack
 
 
-def main():
-    dim = 5
-    mu = 0
-    L = 1
-    R = 1
-    N = 8
-    np.random.seed(0)
-    quad_funcs = []
-    jax_quad_funcs = []
-    for i in range(N):
-        q = Quad(dim, mu=mu, L=L, R=R)
-        # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        quad_funcs.append(q)
-        jax_quad_funcs.append(JaxQuad(q.Q, q.x0))
-    
-    j = jax_quad_funcs[0]
-    params = frozendict({
-        't': 1.,
-        'K_max': 2,
-    })
-
-    # print(jax_gd(j.f, j.g, j.z0, j.z_star, params))
-    # G, F = jax_generate_trajectories(j.f, j.g, j.z0, j.z_star, jax_gd, params)
-    # print(G.shape, F.shape)
-    Q_stack = jnp.array([q.Q for q in jax_quad_funcs])
-    z0_stack = jnp.array([q.z0 for q in jax_quad_funcs])
-    print(Q_stack.shape)
-    print(z0_stack.shape)
-    training_test(params['t'], params['K_max'], Q_stack, z0_stack)
-
-
 @partial(jax.jit, static_argnames=['K_max'])
 def problem_data_to_gd_trajectories(t, Q, z0, K_max):
     def f(x):
@@ -319,6 +290,7 @@ def create_exp_cp_layer(DR, eps, alpha, G_shape, F_shape):
     return CvxpyLayer(prob, parameters=[G_param, F_param], variables=[lambd, s])
 
 
+@jax.jit
 def dro_pep_obj_jax(eps, lambd_star, s_star):
     N = s_star.shape[0]
     return lambd_star * eps + 1 / N * jnp.sum(s_star)
@@ -332,6 +304,37 @@ def SCS_pipeline(t, Q_batch, z0_batch, K_max, eps, alpha, DR, large_sdp_layer):
     return loss
 
 
+def main():
+    dim = 200
+    mu = 1.
+    L = 10.
+    R = 1
+    N = 8
+    np.random.seed(0)
+    quad_funcs = []
+    jax_quad_funcs = []
+    for i in range(N):
+        q = Quad(dim, mu=mu, L=L, R=R)
+        # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+        quad_funcs.append(q)
+        jax_quad_funcs.append(JaxQuad(q.Q, q.x0))
+    
+    j = jax_quad_funcs[0]
+    params = frozendict({
+        't': 2. / (mu + L) if mu > 0 else 1. / L,
+        'K_max': 2,
+    })
+
+    # print(jax_gd(j.f, j.g, j.z0, j.z_star, params))
+    # G, F = jax_generate_trajectories(j.f, j.g, j.z0, j.z_star, jax_gd, params)
+    # print(G.shape, F.shape)
+    Q_stack = jnp.array([q.Q for q in jax_quad_funcs])
+    z0_stack = jnp.array([q.z0 for q in jax_quad_funcs])
+    print(Q_stack.shape)
+    print(z0_stack.shape)
+    training_test(params['t'], params['K_max'], Q_stack, z0_stack)
+
+
 def training_test(t, K_max, Q_stack, z0_stack):
     print(t, K_max)
     batch_GF_func = jax.vmap(problem_data_to_gd_trajectories, in_axes=(None, 0, 0, None))
@@ -339,8 +342,8 @@ def training_test(t, K_max, Q_stack, z0_stack):
 
     eps = 0.1
     alpha = 0.1
-    mu = 0
-    L = 1
+    mu = 1
+    L = 10
     R = 1
     k = K_max
     obj = 'obj_val'
@@ -349,9 +352,9 @@ def training_test(t, K_max, Q_stack, z0_stack):
     pep_problem = quad_pep_subproblem(gradient_descent, mu, L, R, t, k, obj, return_problem=True)
     mosek_params = {
             # 'intpntCoTolDfeas': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-3,
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-3,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-3,
+            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-2,
+            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-2,
+            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-2,
         }
     pepit_tau = pep_problem.solve(
         wrapper='cvxpy',
@@ -372,15 +375,115 @@ def training_test(t, K_max, Q_stack, z0_stack):
     large_sdp_layer = create_exp_cp_layer(DR, eps, alpha, G_batch.shape, F_batch.shape)
 
     loss = SCS_pipeline(t, Q_stack, z0_stack, K_max, eps, alpha, DR, large_sdp_layer)
-    print(loss)
+    # print(loss)
 
     grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
     dt, dQ, dz0 = grad_fn(t, Q_stack, z0_stack, K_max, eps, alpha, DR, large_sdp_layer)
 
     print(dt)
-    print(dQ)
-    print(z0_stack, dz0)
+    # print(dQ)
+    # print(z0_stack, dz0)
+    print(jnp.mean(dQ, axis=0).shape)
+    print(jnp.mean(dz0, axis=0).shape)
+
+
+def main_learn():
+    dim = 200
+    mu = 1
+    L = 10
+    R = 1
+    N = 8
+    np.random.seed(0)
+    K_max = 10
+    obj = 'obj_val'
+    dro_obj = 'expectation'
+    alpha = 0.1
+    eps = 0.1
+
+    batch_GF_func = jax.vmap(problem_data_to_gd_trajectories, in_axes=(None, 0, 0, None))
+    grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
+
+    def samples():
+        quad_funcs = []
+        jax_quad_funcs = []
+        for i in range(N):
+            q = Quad(dim, mu=mu, L=L, R=R)
+            # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
+            quad_funcs.append(q)
+            jax_quad_funcs.append(JaxQuad(q.Q, q.x0))
+        Q_stack = jnp.array([q.Q for q in jax_quad_funcs])
+        z0_stack = jnp.array([q.z0 for q in jax_quad_funcs])
+        return Q_stack, z0_stack
+    
+    def get_cp_layer(G_batch, F_batch, t_curr):
+        pep_problem = quad_pep_subproblem(gradient_descent, mu, L, R, t_curr, K_max, obj, return_problem=True)
+        mosek_params = {
+            # 'intpntCoTolDfeas': 1e-7,
+            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-2,
+            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-2,
+            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-2,
+        }
+        pepit_tau = pep_problem.solve(
+            wrapper='cvxpy',
+            solver='MOSEK',
+            mosek_params=mosek_params,
+            verbose=0,
+        )
+        samples = [(np.array(G_batch[i]), np.array(F_batch[i])) for i in range(G_batch.shape[0]) ]
+
+        DR = DROReformulator(
+            pep_problem,
+            samples,
+            dro_obj,
+            'cvxpy',
+            precond=True,
+            precond_type='average',
+        )
+        return DR, create_exp_cp_layer(DR, eps, alpha, G_batch.shape, F_batch.shape)
+    
+    @jax.jit
+    def proj_z0(v):
+        norm = jnp.linalg.norm(v)
+        scale = R / jnp.maximum(norm, R)
+        return v * scale
+
+    @jax.jit
+    def proj_Q(M):
+        evals, evecs = jnp.linalg.eigh(M)
+        evals_clipped = jnp.clip(evals, mu, L)
+        return (evecs * evals_clipped) @ evecs.T
+    
+    sgd_iters = 100
+    eta_t = 1e-3
+    eta_Q = 1e-3
+    eta_z0 = 1e-3
+
+    t = 2. / (mu + L) if mu > 0 else 1. / L
+    Q = rejection_sample_MP(dim, mu, L)
+    z0 = sample_x0_centered_disk(Q.shape[0], R)
+
+    all_t_vals = [t]
+    for iter_num in range(sgd_iters):
+        print(f'--iter_num={iter_num}--')
+        Q_batch, z0_batch = samples()
+        G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, K_max)
+        DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, t)
+        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, K_max, eps, alpha, DR, large_sdp_layer)
+        # print(dt, dQ, dz0)
+        dQ = jnp.mean(dQ, axis=0)
+        dz0 = jnp.mean(dz0, axis=0)
+
+        t = t - eta_t * dt
+        Q = proj_Q(Q + eta_Q * dQ)
+        z0 = proj_z0(z0 + eta_z0 * dz0)
+        all_t_vals.append(t)
+        np.savetxt('basic_test_results/output.csv', np.array(all_t_vals), delimiter=',')
+    print('done training')
+    print(t)
+    print(all_t_vals)
+    np.savetxt('basic_test_results/output.csv', np.array(all_t_vals), delimiter=',')
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+    main_learn()
