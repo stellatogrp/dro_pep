@@ -32,6 +32,7 @@ lyap_outputs/
 data/
 old_data/
 test/
+learn_dro_outputs/
 
 ## Bibliography auxiliary files (bibtex/biblatex/biber):
 *.bbl
