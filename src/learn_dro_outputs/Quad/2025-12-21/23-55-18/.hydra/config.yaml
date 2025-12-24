@@ -1,0 +1,14 @@
+mu: 1
+L: 10
+eta: 1
+dim: 500
+R: 1
+'N': 16
+K_vals:
+- 1
+- 2
+- 3
+alg: grad_desc
+dro_obj: expectation
+dro_pep_obj: obj_val
+precond_type: average
