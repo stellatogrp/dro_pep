@@ -172,41 +172,232 @@ def SCS_pipeline(t, Q_batch, z0_batch, zs_batch, K_max, eps, alpha, DR, large_sd
 
 
 def quad_run(cfg):
+    """
+    Run SGDA experiment for quadratic functions.
+    
+    Loops over K_max values, runs SGDA for each K, and saves per-K progress CSV.
+    Algorithm and SGDA type are selected via config (Slurm job parallelization).
+    """
     log.info(cfg)
     
+    # Extract config values
     d_val = cfg.dim
     mu_val = cfg.mu
     L_val = cfg.L
+    R_val = cfg.R
+    N_val = cfg.N
     
+    # Compute matrix width for Marchenko-Pastur
     r_val = (np.sqrt(L_val) - np.sqrt(mu_val))**2 / (np.sqrt(L_val) + np.sqrt(mu_val))**2
     M_val = int(np.round(r_val * d_val))
-    
     log.info(f"Precomputed matrix width M: {M_val}")
     
+    # Initialize t: 1/L if mu=0, else 2/(mu+L)
+    if mu_val == 0:
+        t_init = 1.0 / L_val
+    else:
+        t_init = 2.0 / (mu_val + L_val)
+    log.info(f"Initial step size t: {t_init}")
+    
+    # SGDA parameters from config
+    sgda_iters = cfg.sgda_iters
+    eta_t = cfg.eta_t
+    eta_Q = cfg.eta_Q
+    eta_z0 = cfg.eta_z0
+    eps = cfg.eps
+    alpha = cfg.alpha
+    
+    # Algorithm and SGDA type (for future extensibility)
+    alg = cfg.alg
+    sgda_type = cfg.sgda_type
+    log.info(f"Algorithm: {alg}, SGDA type: {sgda_type}")
+    
+    # Ensure output directory exists
+    output_dir = cfg.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Random key for sampling
     seed = 42
     key = jax.random.PRNGKey(seed)
-    key, batch_seed = jax.random.split(key, 2)
-    subkeys = jax.random.split(batch_seed, cfg.N)
     
-    log.info(f"Compiling and sampling {cfg.N} matrices...")
-    start = time.time()
+    # Loop over K_max values
+    for K in cfg.K_max:
+        log.info(f"=== Running SGDA for K={K} ===")
+        
+        # Create output directory for this K
+        K_output_dir = os.path.join(output_dir, f"K_{K}")
+        os.makedirs(K_output_dir, exist_ok=True)
+        csv_path = os.path.join(K_output_dir, "progress.csv")
+        
+        # Run SGDA for this K value (CSV saved inside the loop)
+        run_sgda_for_K(
+            cfg, K, key, M_val, t_init, 
+            sgda_iters, eta_t, eta_Q, eta_z0,
+            eps, alpha, alg, sgda_type,
+            mu_val, L_val, R_val, N_val, d_val,
+            csv_path
+        )
     
-    # Pass the precomputed M_val into the JIT function
-    Q_values = get_Q_samples(subkeys, d_val, mu_val, L_val, M_val)
+    log.info("=== SGDA experiment complete ===")
+
+
+def run_sgda_for_K(cfg, K_max, key, M_val, t_init, 
+                   sgda_iters, eta_t, eta_Q, eta_z0,
+                   eps, alpha, alg, sgda_type,
+                   mu_val, L_val, R_val, N_val, d_val,
+                   csv_path):
+    """
+    Run SGDA for a specific K_max value.
     
-    Q_values.block_until_ready()
-    end = time.time()
+    Saves progress to csv_path after each iteration (overwrites to preserve intermediate progress).
+    """
+    from algorithm import gradient_descent
     
-    log.info(f"Done. Generated shape: {Q_values.shape}")
-    log.info(f"Time: {end - start:.4f}s")
+    # Projection functions
+    @jax.jit
+    def proj_z0(v):
+        norm = jnp.linalg.norm(v)
+        scale = R_val / jnp.maximum(norm, R_val)
+        return v * scale
 
-    key, batch_seed = jax.random.split(key, 2)
-    subkeys = jax.random.split(batch_seed, cfg.N)
-
-    z0_values = get_z0_samples(subkeys, M_val, cfg.R)
-    log.info(f"z0 values shape: {z0_values.shape}")
-
-    zs_values = jnp.zeros(z0_values.shape)
-
+    @jax.jit
+    def proj_Q(M):
+        evals, evecs = jnp.linalg.eigh(M)
+        evals_clipped = jnp.clip(evals, mu_val, L_val)
+        return (evecs * evals_clipped) @ evecs.T
+    
+    # PEP subproblem setup function
+    def quad_pep_subproblem(algo, mu, L, R, t, k, obj, return_problem=False):
+        from PEPit import PEP
+        from PEPit.functions import SmoothStronglyConvexFunction
+        
+        problem = PEP()
+        func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
+        xs = func.stationary_point()
+        fs = func(xs)
+        x0 = problem.set_initial_point()
+        
+        params = {'t': float(t), 'K_max': k}
+        problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
+        x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
+        
+        if obj == 'obj_val':
+            problem.set_performance_metric(f_stack[-1] - fs)
+        elif obj == 'grad_sq_norm':
+            problem.set_performance_metric((g_stack[-1]) ** 2)
+        elif obj == 'opt_dist_sq_norm':
+            problem.set_performance_metric((x_stack[-1] - xs) ** 2)
+        
+        if return_problem:
+            return problem
+        
+        pepit_tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
+        return pepit_tau
+    
+    # Get CP layer for given batch
+    def get_cp_layer(G_batch, F_batch, t_curr):
+        pep_problem = quad_pep_subproblem(
+            gradient_descent, mu_val, L_val, R_val, t_curr, K_max, 
+            cfg.dro_pep_obj, return_problem=True
+        )
+        mosek_params = {
+            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': cfg.mosek_tol_dfeas,
+            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': cfg.mosek_tol_pfeas,
+            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': cfg.mosek_tol_rel_gap,
+        }
+        pep_problem.solve(
+            wrapper='cvxpy',
+            solver='MOSEK',
+            mosek_params=mosek_params,
+            verbose=0,
+        )
+        samples = [(np.array(G_batch[i]), np.array(F_batch[i])) for i in range(G_batch.shape[0])]
+        
+        DR = DROReformulator(
+            pep_problem,
+            samples,
+            cfg.dro_obj,
+            'cvxpy',
+            precond=True,
+            precond_type='average',
+        )
+        return DR, create_exp_cp_layer(DR, eps, alpha, G_batch.shape, F_batch.shape)
+    
+    # Sample functions
+    def sample_batch(key):
+        key, k1, k2 = jax.random.split(key, 3)
+        Q_subkeys = jax.random.split(k1, N_val)
+        z0_subkeys = jax.random.split(k2, N_val)
+        
+        Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
+        z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
+        zs_batch = jnp.zeros(z0_batch.shape)
+        
+        return key, Q_batch, z0_batch, zs_batch
+    
+    # Batched trajectory and gradient functions
     batch_GF_func = jax.vmap(problem_data_to_gd_trajectories, in_axes=(None, 0, 0, 0, None))
     grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
+    
+    # Initialize SGDA variables
+    t = t_init
+    key, Q_batch, z0_batch, zs_batch = sample_batch(key)
+    
+    # Initialize Q and z0 for ascent (sample one each)
+    key, k1, k2 = jax.random.split(key, 3)
+    Q_single_keys = jax.random.split(k1, 1)
+    z0_single_keys = jax.random.split(k2, 1)
+    Q = get_Q_samples(Q_single_keys, d_val, mu_val, L_val, M_val)[0]
+    z0 = get_z0_samples(z0_single_keys, M_val, R_val)[0]
+    
+    # Track t values for logging
+    all_t_vals = [float(t)]
+    
+    # SGDA iterations
+    for iter_num in range(sgda_iters):
+        log.info(f'K={K_max}, iter={iter_num}, t={t:.6f}')
+        
+        # Sample new batch
+        key, Q_batch, z0_batch, zs_batch = sample_batch(key)
+        
+        # Get CP layer for current t
+        G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, K_max)
+        DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, float(t))
+        
+        # Compute gradients
+        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, K_max, eps, alpha, DR, large_sdp_layer)
+        
+        # Average gradients over batch
+        dQ = jnp.mean(dQ, axis=0)
+        dz0 = jnp.mean(dz0, axis=0)
+        
+        # SGDA step: descent in t, ascent in Q and z0 with projections
+        if sgda_type == "vanilla_sgda":
+            t = float(t - eta_t * dt)  # Keep t as Python float
+            Q = proj_Q(Q + eta_Q * dQ)
+            z0 = proj_z0(z0 + eta_z0 * dz0)
+        elif sgda_type == "adamw":
+            raise NotImplementedError("adamw SGDA not yet implemented")
+        else:
+            raise ValueError(f"Unknown sgda_type: {sgda_type}")
+        
+        all_t_vals.append(float(t))
+        
+        # Save progress to CSV after each iteration (overwrite to preserve intermediate progress)
+        df = pd.DataFrame({
+            'iteration': list(range(len(all_t_vals))),
+            't': all_t_vals,
+        })
+        df.to_csv(csv_path, index=False)
+    
+    # Final save after loop completes
+    df = pd.DataFrame({
+        'iteration': list(range(len(all_t_vals))),
+        't': all_t_vals,
+    })
+    df.to_csv(csv_path, index=False)
+    log.info(f'K={K_max} complete. Final t={t:.6f}. Saved to {csv_path}')
+
+
+# Required import for os in quad_run
+import os

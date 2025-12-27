@@ -1,15 +1,35 @@
+# Problem parameters
 mu: 1
 L: 10
-eta: 1  # final step size = eta / L 
-dim: 500
-R: 10
+R: 1
+dim: 200
 
-N: 16
+# Batch size
+N: 8
 
-K_vals: [1, 2, 3]
+# Algorithm and SGDA type (selected by Slurm job index)
+alg: "vanilla_gd"           # stub: nesterov_gd
+sgda_type: "vanilla_sgda"   # stub: adamw
 
-alg: grad_desc  # grad_desc or nesterov_grad_desc or nesterov_fgm
-dro_obj: expectation # expectation or cvar
-dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
+# K_max loop inside quad_run (per-K CSV logging)
+K_max: [1, 3, 7, 15, 31]
 
-precond_type: average # 'average' or 'max' or 'min'
+# Optimization hyperparameters
+dro_pep_obj: "obj_val"
+dro_obj: "expectation"
+eps: 0.1
+alpha: 0.1
+
+# SGDA training parameters
+sgda_iters: 100
+eta_t: 1e-3     # learning rate for t (descent)
+eta_Q: 1e-3     # learning rate for Q (ascent)
+eta_z0: 1e-3    # learning rate for z0 (ascent)
+
+# MOSEK solver tolerances
+mosek_tol_dfeas: 1e-2
+mosek_tol_pfeas: 1e-2
+mosek_tol_rel_gap: 1e-2
+
+# Outputs
+output_dir: "learn_dro_outputs"
