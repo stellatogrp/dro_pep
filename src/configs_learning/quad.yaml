@@ -9,7 +9,7 @@ N: 8
 
 # Algorithm and SGDA type (selected by Slurm job index)
 alg: "vanilla_gd"           # stub: nesterov_gd
-sgda_type: "adam" #"vanilla_sgda"   # stub: adamw
+sgda_type: "sgda_wd" #"vanilla_sgda"   # stub: adamw
 
 # K_max loop inside quad_run (per-K CSV logging)
 K_max: [1, 3, 7, 15, 31]
@@ -25,6 +25,7 @@ sgda_iters: 100
 eta_t: 1e-3     # learning rate for t (descent)
 eta_Q: 1e-3     # learning rate for Q (ascent)
 eta_z0: 1e-3    # learning rate for z0 (ascent)
+weight_decay: 1e-2  # weight decay for sgda_wd
 
 # MOSEK solver tolerances
 mosek_tol_dfeas: 1e-2
