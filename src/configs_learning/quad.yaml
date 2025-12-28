@@ -9,7 +9,7 @@ N: 8
 
 # Algorithm and SGDA type (selected by Slurm job index)
 alg: "vanilla_gd"           # stub: nesterov_gd
-sgda_type: "adamw" #"vanilla_sgda"   # stub: adamw
+sgda_type: "adam" #"vanilla_sgda"   # stub: adamw
 
 # K_max loop inside quad_run (per-K CSV logging)
 K_max: [1, 3, 7, 15, 31]
