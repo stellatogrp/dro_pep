@@ -1,3 +1,4 @@
+import diffcp_patch  # Apply COO -> CSC fix for diffcp
 import cvxpy as cp
 import jax
 import jax.numpy as jnp
