@@ -5,15 +5,17 @@ R: 1
 dim: 200
 
 # Batch size
-N: 8
+N: 16
 
 # Algorithm and SGDA type (selected by Slurm job index)
 alg: "vanilla_gd"           # stub: nesterov_gd
-sgda_type: "sgda_wd" #"vanilla_sgda"   # stub: adamw
-stepsize_type: "scalar" # "scalar" or "vector"
+sgda_type: "adamw" #"vanilla_sgda"   # stub: adamw  # "sgda_wd"
+stepsize_type: "vector" # "scalar" or "vector"
+vector_init: "silver" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
-K_max: [1, 3, 7, 15, 31]
+# K_max: [3, 7, 15, 31]
+K_max: [4, 8]
 
 # Optimization hyperparameters
 dro_pep_obj: "obj_val"
@@ -22,7 +24,7 @@ eps: 0.1
 alpha: 0.1
 
 # SGDA training parameters
-sgda_iters: 100
+sgda_iters: 25
 eta_t: 1e-3     # learning rate for t (descent)
 eta_Q: 1e-3     # learning rate for Q (ascent)
 eta_z0: 1e-3    # learning rate for z0 (ascent)

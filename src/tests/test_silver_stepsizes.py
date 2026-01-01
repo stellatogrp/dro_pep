@@ -121,13 +121,13 @@ class TestStronglyConvexSilverStepsizes:
             assert all(s > 0 for s in result)
     
     def test_stepsizes_bounded(self):
-        """Step sizes should be bounded between mu and L parameters."""
+        """Step sizes should be bounded reasonably (scaled by 1/L)."""
         K = 8
         mu, L = 1, 10
         result = get_strongly_convex_silver_stepsizes(K, mu=mu, L=L)
         for s in result:
             assert s > 0
-            assert s < 2 * L  # Very loose upper bound
+            assert s < 2 / mu  # Upper bound for strongly convex (scaled by 1/L)
 
 
 if __name__ == "__main__":
