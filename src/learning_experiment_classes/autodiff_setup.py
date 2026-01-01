@@ -8,6 +8,8 @@ from functools import partial
 
 @partial(jax.jit, static_argnames=['K_max'])
 def problem_data_to_gd_trajectories(t, Q, z0, zs, K_max):
+    t_vec = jnp.broadcast_to(t, (K_max,))
+    
     def f(x):
         return .5 * x.T @ Q @ x
     
@@ -29,7 +31,8 @@ def problem_data_to_gd_trajectories(t, Q, z0, zs, K_max):
 
     def body_fun(i, val):
         z, z_stack, g_stack, f_stack = val
-        z = z - t * g(z)
+        t_i = t_vec[jnp.minimum(i-1, t_vec.shape[0]-1)]
+        z = z - t_i * g(z)
         z_stack = z_stack.at[:, i+1].set(z)
         g_stack = g_stack.at[:, i+1].set(g(z))
         f_stack = f_stack.at[i+1].set(f(z))

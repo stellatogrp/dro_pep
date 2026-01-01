@@ -18,6 +18,7 @@ from learning_experiment_classes.autodiff_setup import (
     create_exp_cp_layer,
     dro_pep_obj_jax,
 )
+from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
 jax.config.update("jax_enable_x64", True)
 
 log = logging.getLogger(__name__)
@@ -108,10 +109,10 @@ def quad_run(cfg):
     
     # Initialize t: 1/L if mu=0, else 2/(mu+L)
     if mu_val == 0:
-        t_init = 1.0 / L_val
+        t_init_scalar = 1.0 / L_val
     else:
-        t_init = 2.0 / (mu_val + L_val)
-    log.info(f"Initial step size t: {t_init}")
+        t_init_scalar = 2.0 / (mu_val + L_val)
+    log.info(f"Initial step size t: {t_init_scalar}")
     
     # SGDA parameters from config
     sgda_iters = cfg.sgda_iters
@@ -136,6 +137,15 @@ def quad_run(cfg):
     
     # Loop over K_max values
     for K in cfg.K_max:
+        # Determine step size initialization based on config
+        is_vector = cfg.stepsize_type == "vector"
+        if is_vector:
+            if cfg.vector_init == "fixed":
+                t_init = jnp.full(K, t_init_scalar)
+            else:
+                t_init = jnp.array(get_strongly_convex_silver_stepsizes(K, mu=mu_val, L=L_val))
+        else:
+            t_init = t_init_scalar
         log.info(f"=== Running SGDA for K={K} ===")
         
         # Create output directory for this K
@@ -191,7 +201,9 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         fs = func(xs)
         x0 = problem.set_initial_point()
         
-        params = {'t': float(t), 'K_max': k}
+        # params = {'t': float(t), 'K_max': k}
+        is_vec = jnp.ndim(t) > 0
+        params = {'t': t if is_vec else float(t), 'K_max': k}
         problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
         x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
         
@@ -265,7 +277,9 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     z0 = get_z0_samples(z0_single_keys, M_val, R_val)[0]
     
     # Track t values for logging
-    all_t_vals = [float(t)]
+    # all_t_vals = [float(t)]
+    is_vector_t = jnp.ndim(t) > 0
+    all_t_vals = [t.tolist() if is_vector_t else float(t)]
     
     # Initialize optimizer if needed (Adam or AdamW share same interface)
     optimizer = None
@@ -289,14 +303,16 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     
     # SGDA iterations
     for iter_num in range(sgda_iters):
-        log.info(f'K={K_max}, iter={iter_num}, t={t:.6f}')
+        t_log = f'{t:.5f}' if not is_vector_t else '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
+        log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
         # Sample new batch
         key, Q_batch, z0_batch, zs_batch = sample_batch(key)
         
-        # Get CP layer for current t
+        # Get CP layer for current t (convert JAX array to Python list for PEPit)
         G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, K_max)
-        DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, float(t))
+        t_for_pep = t.tolist() if is_vector_t else float(t)
+        DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
         
         # Compute gradients
         dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, K_max, eps, alpha, DR, large_sdp_layer)
@@ -307,7 +323,10 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         
         # SGDA step: descent in t, ascent in Q and z0 with projections
         if sgda_type == "vanilla_sgda":
-            t = float(t - eta_t * dt)  # Keep t as Python float
+            if is_vector_t:
+                t = t - eta_t * dt  # Keep as JAX array
+            else:
+                t = float(t - eta_t * dt)  # Keep t as Python float
             Q = proj_Q(Q + eta_Q * dQ)
             z0 = proj_z0(z0 + eta_z0 * dz0)
         elif sgda_type in ("adam", "adamw"):
@@ -325,7 +344,10 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
                 grads_y=[dQ, dz0],
                 proj_y_fn=proj_y_params
             )
-            t = float(x_new[0])
+            if is_vector_t:
+                t = x_new[0]  # Keep as JAX array
+            else:
+                t = float(x_new[0])
             Q = y_new[0]
             z0 = y_new[1]
         elif sgda_type == "sgda_wd":
@@ -333,28 +355,46 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             # x update: x_{k+1} = x_k - eta_x * (g_x + lambda * x_k)
             # y update: y_{k+1} = Proj(y_k + eta_y * (g_y - lambda * y_k))
             weight_decay = cfg.get('weight_decay', 1e-2)
-            t = float(t - eta_t * (dt + weight_decay * t))
+            if is_vector_t:
+                t = t - eta_t * (dt + weight_decay * t)  # Keep as JAX array
+            else:
+                t = float(t - eta_t * (dt + weight_decay * t))
             Q = proj_Q(Q + eta_Q * (dQ - weight_decay * Q))
             z0 = proj_z0(z0 + eta_z0 * (dz0 - weight_decay * z0))
         else:
             raise ValueError(f"Unknown sgda_type: {sgda_type}")
         
-        all_t_vals.append(float(t))
+        all_t_vals.append(t.tolist() if is_vector_t else float(t))
         
         # Save progress to CSV after each iteration (overwrite to preserve intermediate progress)
+        if is_vector_t:
+            # Vector case: columns are iteration, t0, t1, t2, ...
+            data = {'iteration': list(range(len(all_t_vals)))}
+            for k in range(K_max):
+                data[f't{k}'] = [row[k] for row in all_t_vals]
+            df = pd.DataFrame(data)
+        else:
+            # Scalar case: columns are iteration, t
+            df = pd.DataFrame({
+                'iteration': list(range(len(all_t_vals))),
+                't': all_t_vals,
+            })
+        df.to_csv(csv_path, index=False)
+    
+    # Final save after loop completes
+    if is_vector_t:
+        data = {'iteration': list(range(len(all_t_vals)))}
+        for k in range(K_max):
+            data[f't{k}'] = [row[k] for row in all_t_vals]
+        df = pd.DataFrame(data)
+        log.info(f'K={K_max} complete. Final t={t}. Saved to {csv_path}')
+    else:
         df = pd.DataFrame({
             'iteration': list(range(len(all_t_vals))),
             't': all_t_vals,
         })
-        df.to_csv(csv_path, index=False)
-    
-    # Final save after loop completes
-    df = pd.DataFrame({
-        'iteration': list(range(len(all_t_vals))),
-        't': all_t_vals,
-    })
+        log.info(f'K={K_max} complete. Final t={t:.6f}. Saved to {csv_path}')
     df.to_csv(csv_path, index=False)
-    log.info(f'K={K_max} complete. Final t={t:.6f}. Saved to {csv_path}')
 
 
 # Required import for os in quad_run

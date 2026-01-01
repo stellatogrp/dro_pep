@@ -113,4 +113,4 @@ def get_strongly_convex_silver_stepsizes(K, mu=0, L=1):
         silver_steps.append(psi(y_vals[idx]))
     silver_steps.append(psi(z_vals[int(idx_vals[-1])]))
 
-    return np.array(silver_steps)
+    return np.array(silver_steps) / L
