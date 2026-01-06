@@ -17,6 +17,7 @@ import sys
 log = logging.getLogger(__name__)
 
 from learning_experiment_classes.quad import quad_run
+from itertools import product
 
 
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='quad.yaml')
@@ -24,15 +25,30 @@ def quad_driver(cfg):
     quad_run(cfg)
 
 
-# Parameter combinations for Slurm array jobs
-# Each entry is a list of Hydra overrides for one job
-Learn_Quad_params = [
-    ['alg=vanilla_gd', 'sgda_type=vanilla_sgda'],
-    # Future stubs (uncomment when implemented):
-    # ['alg=nesterov_gd', 'sgda_type=vanilla_sgda'],
-    # ['alg=vanilla_gd', 'sgda_type=adamw'],
-    # ['alg=nesterov_gd', 'sgda_type=adamw'],
+def cartesian_product(options):
+    """
+    Create cartesian product of option lists.
+    
+    Args:
+        options: List of lists, where each inner list contains string options
+                 e.g. [['alg=vanilla_gd', 'alg=nesterov_gd'], ['sgda_type=vanilla_sgda', 'sgda_type=adamw']]
+    
+    Returns:
+        List of lists representing all combinations
+        e.g. [['alg=vanilla_gd', 'sgda_type=vanilla_sgda'], ['alg=vanilla_gd', 'sgda_type=adamw'], ...]
+    """
+    return [list(combo) for combo in product(*options)]
+
+
+# Define options for each parameter (each list contains all values for that parameter)
+Quad_options = [
+    ['alg=vanilla_gd', 'alg=nesterov_gd'],
+    ['sgda_type=vanilla_sgda', 'sgda_type=adamw'],
+    ['stepsize_type=scalar', 'stepsize_type=vector'],
 ]
+
+# Parameter combinations for Slurm array jobs (cartesian product of all options)
+Learn_Quad_params = cartesian_product(Quad_options)
 
 func_driver_map = {
     'Quad': quad_driver,
