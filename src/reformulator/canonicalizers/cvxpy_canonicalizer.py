@@ -148,8 +148,8 @@ class CvxpyCanonicalizer(Canonicalizer):
 
             # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz2[i]), Fz2[i]]))]
             # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz1[i]), Fz1[i]]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz1[i])]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz2[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz1[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz2[i])]))]
 
             y1A_adj = 0
             y2A_adj = 0

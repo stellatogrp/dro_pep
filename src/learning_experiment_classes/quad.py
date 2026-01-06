@@ -16,6 +16,7 @@ from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
 from learning_experiment_classes.autodiff_setup import (
     problem_data_to_gd_trajectories,
     create_exp_cp_layer,
+    create_cvar_cp_layer,
     dro_pep_obj_jax,
 )
 from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
@@ -78,9 +79,12 @@ def get_z0_samples(subkeys, d, R):
     return jax.vmap(sampler)(subkeys)
 
 
-def SCS_pipeline(t, Q_batch, z0_batch, zs_batch, K_max, eps, alpha, DR, large_sdp_layer):
-    batch_GF_func = jax.vmap(problem_data_to_gd_trajectories, in_axes=(None, 0, 0, 0, None))
-    G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, K_max)
+def SCS_pipeline(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, alpha, DR, large_sdp_layer):
+    batch_GF_func = jax.vmap(
+        lambda t, Q, z0, zs, fs: problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+        in_axes=(None, 0, 0, 0, 0)
+    )
+    G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, fs_batch)
     (lambd_star, s_star) = large_sdp_layer(G_batch, F_batch)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
     return loss
@@ -247,7 +251,11 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             precond=True,
             precond_type='average',
         )
-        return DR, create_exp_cp_layer(DR, eps, alpha, G_batch.shape, F_batch.shape)
+
+        if cfg.dro_obj == 'expectation':
+            return DR, create_exp_cp_layer(DR, eps, G_batch.shape, F_batch.shape)
+        elif cfg.dro_obj == 'cvar':
+            return DR, create_cvar_cp_layer(DR, eps, alpha, G_batch.shape, F_batch.shape)
     
     # Sample functions
     def sample_batch(key):
@@ -258,16 +266,20 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
         z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
         zs_batch = jnp.zeros(z0_batch.shape)
+        fs_batch = jnp.zeros(N_val)
         
-        return key, Q_batch, z0_batch, zs_batch
+        return key, Q_batch, z0_batch, zs_batch, fs_batch
     
     # Batched trajectory and gradient functions
-    batch_GF_func = jax.vmap(problem_data_to_gd_trajectories, in_axes=(None, 0, 0, 0, None))
+    batch_GF_func = jax.vmap(
+        lambda t, Q, z0, zs, fs: problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+        in_axes=(None, 0, 0, 0, 0)
+    )
     grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
     
     # Initialize SGDA variables
     t = t_init
-    key, Q_batch, z0_batch, zs_batch = sample_batch(key)
+    key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
     
     # Initialize Q and z0 for ascent (sample one each)
     key, k1, k2 = jax.random.split(key, 3)
@@ -290,7 +302,7 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             lr=eta_t,
             betas=(0.9, 0.999),
             eps=1e-8,
-            weight_decay=0.0
+            weight_decay=0.01,
         )
     elif sgda_type == "adam":
         optimizer = AdamMinMax(
@@ -298,7 +310,7 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             y_params=[Q, z0],
             lr=eta_t,
             betas=(0.9, 0.999),
-            eps=1e-8
+            eps=1e-8,
         )
     
     # SGDA iterations
@@ -307,15 +319,15 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
         # Sample new batch
-        key, Q_batch, z0_batch, zs_batch = sample_batch(key)
+        key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
         
         # Get CP layer for current t (convert JAX array to Python list for PEPit)
-        G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, K_max)
+        G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, fs_batch)
         t_for_pep = t.tolist() if is_vector_t else float(t)
         DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
         
         # Compute gradients
-        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, K_max, eps, alpha, DR, large_sdp_layer)
+        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, alpha, DR, large_sdp_layer)
         
         # Average gradients over batch
         dQ = jnp.mean(dQ, axis=0)
