@@ -5,7 +5,7 @@ R: 1
 dim: 200
 
 # Batch size
-N: 8
+N: 16
 
 # Algorithm and SGDA type (selected by Slurm job index)
 alg: "vanilla_gd"           # stub: nesterov_gd

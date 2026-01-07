@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import pandas as pd
 import logging
 import time
@@ -79,7 +80,7 @@ def get_z0_samples(subkeys, d, R):
     return jax.vmap(sampler)(subkeys)
 
 
-def SCS_pipeline(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, alpha, DR, large_sdp_layer):
+def SCS_pipeline(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer):
     batch_GF_func = jax.vmap(
         lambda t, Q, z0, zs, fs: problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_representation=True),
         in_axes=(None, 0, 0, 0, 0)
@@ -327,7 +328,7 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
         
         # Compute gradients
-        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, alpha, DR, large_sdp_layer)
+        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer)
         
         # Average gradients over batch
         dQ = jnp.mean(dQ, axis=0)
@@ -407,7 +408,3 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         })
         log.info(f'K={K_max} complete. Final t={t:.6f}. Saved to {csv_path}')
     df.to_csv(csv_path, index=False)
-
-
-# Required import for os in quad_run
-import os
