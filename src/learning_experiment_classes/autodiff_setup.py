@@ -2,8 +2,11 @@ import cvxpy as cp
 import jax
 import jax.numpy as jnp
 import numpy as np
+import logging
 from cvxpylayers.jax import CvxpyLayer
 from functools import partial
+
+log = logging.getLogger(__name__)
 
 
 @partial(jax.jit, static_argnames=['K_max', 'return_Gram_representation'])
@@ -166,3 +169,33 @@ def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
 def dro_pep_obj_jax(eps, lambd_star, s_star):
     N = s_star.shape[0]
     return lambd_star * eps + 1 / N * jnp.sum(s_star)
+
+
+# if cfg.pep_obj == 'obj_val':
+#         problem.set_performance_metric(f_stack[-1] - fs)
+#     elif obj == 'grad_sq_norm':
+#         problem.set_performance_metric((g_stack[-1]) ** 2)
+#     elif obj == 'opt_dist_sq_norm':
+#         problem.set_performance_metric((z_stack[-1] - z_stack[0]) ** 2)
+#     else:
+#         log.info('should be unreachable code')
+#         exit(0)
+
+
+@partial(jax.jit, static_argnames=['jax_traj_func', 'pep_obj', 'K_max', 'risk_type'])
+def problem_data_to_dro_pep_obj(t, Q, z0, zs, fs, K_max, jax_traj_func, pep_obj, risk_type):
+    '''
+        jax_traj_func needs to be a function like problem_data_to_gd_trajectories
+    '''
+    z_stack, g_stack, f_stack = jax_traj_func(
+        t, Q, z0, zs, fs, K_max, return_Gram_representation=False
+    )
+    if pep_obj == 'obj_val':
+        return f_stack[-1] - fs
+    elif pep_obj == 'grad_sq_norm':
+        return jnp.linalg.norm(g_stack[:, -1]) ** 2
+    elif pep_obj == 'opt_dist_sq_norm':
+        return jnp.linalg.norm(z_stack[:, -1] - zs) ** 2
+    else:
+        log.info('should be unreachable code')
+        exit(0)

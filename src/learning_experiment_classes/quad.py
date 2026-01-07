@@ -14,6 +14,7 @@ from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
 from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
+from learning_experiment_classes.algorithms_for_pep import gradient_descent
 from learning_experiment_classes.autodiff_setup import (
     problem_data_to_gd_trajectories,
     create_exp_cp_layer,
@@ -180,7 +181,13 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     
     Saves progress to csv_path after each iteration (overwrites to preserve intermediate progress).
     """
-    from algorithm import gradient_descent
+    
+    # Select algorithm based on alg parameter
+    if alg == 'vanilla_gd':
+        algo = gradient_descent
+    else:
+        log.error(f"Algorithm '{alg}' is not implemented.")
+        exit(0)
     
     # Projection functions
     @jax.jit
@@ -196,7 +203,7 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         return (evecs * evals_clipped) @ evecs.T
     
     # PEP subproblem setup function
-    def quad_pep_subproblem(algo, mu, L, R, t, k, obj, return_problem=False):
+    def quad_pep_subproblem(mu, L, R, t, k, obj, return_problem=False):
         from PEPit import PEP
         from PEPit.functions import SmoothStronglyConvexFunction
         
@@ -228,8 +235,8 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     # Get CP layer for given batch
     def get_cp_layer(G_batch, F_batch, t_curr):
         pep_problem = quad_pep_subproblem(
-            gradient_descent, mu_val, L_val, R_val, t_curr, K_max, 
-            cfg.dro_pep_obj, return_problem=True
+            mu_val, L_val, R_val, t_curr, K_max, 
+            cfg.pep_obj, return_problem=True
         )
         mosek_params = {
             'MSK_DPAR_INTPNT_CO_TOL_DFEAS': cfg.mosek_tol_dfeas,

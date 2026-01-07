@@ -8,7 +8,7 @@ dim: 200
 N: 16
 
 # Algorithm and SGDA type (selected by Slurm job index)
-alg: "vanilla_gd"           # stub: nesterov_gd
+alg: "vanilla_gd"           # stub: nesterov_gd or nesterov_fgm
 sgda_type: "adamw" #"vanilla_sgda"   # stub: adamw  # "sgda_wd"
 stepsize_type: "vector" # "scalar" or "vector"
 vector_init: "silver" # "fixed" or "silver"
@@ -18,8 +18,8 @@ vector_init: "silver" # "fixed" or "silver"
 K_max: [4, 8]
 
 # Optimization hyperparameters
-dro_pep_obj: "obj_val"
-dro_obj: "cvar"  # "expectation" or "cvar"
+pep_obj: "obj_val"
+dro_obj: "expectation"  # "expectation" or "cvar"
 eps: 0.1
 alpha: 0.1
 
