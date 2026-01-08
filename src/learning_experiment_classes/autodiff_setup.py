@@ -9,8 +9,24 @@ from functools import partial
 log = logging.getLogger(__name__)
 
 
+class CvxpyLayerWithDefaults:
+    """Wrapper for CvxpyLayer that properly merges default solver_args.
+    
+    Works around a bug in cvxpylayers where solver_args passed to __init__
+    are not merged with solver_args passed to __call__.
+    """
+    def __init__(self, *args, solver_args=None, **kwargs):
+        self._default_solver_args = solver_args or {}
+        self._layer = CvxpyLayer(*args, solver_args=solver_args, **kwargs)
+    
+    def __call__(self, *params, solver_args=None):
+        merged = {**self._default_solver_args, **(solver_args or {})}
+        return self._layer(*params, solver_args=merged)
+
+
 @partial(jax.jit, static_argnames=['K_max', 'return_Gram_representation'])
-def problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_representation=True):
+def problem_data_to_gd_trajectories(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True):
+    t = stepsizes[0]
     t_vec = jnp.broadcast_to(t, (K_max,))
     
     def f(x):
@@ -52,7 +68,56 @@ def problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_represe
         return z_stack, g_stack, f_stack
 
 
+@partial(jax.jit, static_argnames=['K_max', 'return_Gram_representation'])
+def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True):
+    t, beta = stepsizes[0], stepsizes[1]
+    t_vec = jnp.broadcast_to(t, (K_max,))
+    
+    def f(x):
+        return .5 * x.T @ Q @ x
+    
+    def g(x):
+        return Q @ x
+
+    dim = z0.shape[0]
+    z_stack = jnp.zeros((dim, K_max + 2))
+    g_stack = jnp.zeros((dim, K_max + 2))
+    f_stack = jnp.zeros(K_max + 2)
+
+    z_stack = z_stack.at[:, 0].set(zs)
+    z_stack = z_stack.at[:, 1].set(z0)
+    g_stack = g_stack.at[:, 0].set(g(zs))
+    g_stack = g_stack.at[:, 1].set(g(z0))
+    f_stack = f_stack.at[0].set(fs)
+    f_stack = f_stack.at[1].set(f(z0))
+
+    def body_fun(k, val):
+        z, y, z_stack, g_stack, f_stack = val
+        t_k = t_vec[jnp.minimum(k-1, t_vec.shape[0]-1)]
+        beta_k = beta[k-1]
+
+        y_prev = y
+        y = z - t_k * g(z)
+        z = y + beta_k * (y - y_prev)
+
+        z_stack = z_stack.at[:, k+1].set(z)
+        g_stack = g_stack.at[:, k+1].set(g(z))
+        f_stack = f_stack.at[k+1].set(f(z))
+        return (z, y, z_stack, g_stack, f_stack)
+    
+    init_val = (z0, z0, z_stack, g_stack, f_stack)
+    _, _, z_stack, g_stack, f_stack = \
+        jax.lax.fori_loop(1, K_max + 1, body_fun, init_val)
+
+    if return_Gram_representation:
+        G_half = jnp.hstack([z_stack[:,:2], g_stack[:,1:]])
+        return G_half.T@G_half, f_stack
+    else:
+        return z_stack, g_stack, f_stack
+
+
 def create_exp_cp_layer(DR, eps, G_shape, F_shape):
+
     G_param = cp.Parameter(G_shape)
     F_param = cp.Parameter(F_shape)
 
@@ -96,7 +161,14 @@ def create_exp_cp_layer(DR, eps, G_shape, F_shape):
         constraints += [LstarF - Fz[i] - b_obj == 0]
     prob = cp.Problem(cp.Minimize(obj), constraints)
 
-    return CvxpyLayer(prob, parameters=[G_param, F_param], variables=[lambd, s])
+    return CvxpyLayerWithDefaults(prob, parameters=[G_param, F_param], variables=[lambd, s],
+                                   solver_args={
+                                    #    'solve_method': 'Clarabel', 
+                                    #    'verbose': True,
+                                    #    'tol_feas': 1e-4,
+                                    #    'tol_gap_abs': 1e-4,
+                                    #    'tol_gap_rel': 1e-4,
+                                   })
 
 
 def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):

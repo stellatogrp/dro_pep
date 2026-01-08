@@ -14,14 +14,22 @@ from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
 from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
-from learning_experiment_classes.algorithms_for_pep import gradient_descent
+from learning_experiment_classes.algorithms_for_pep import (
+    gradient_descent,
+    nesterov_fgm,
+)
 from learning_experiment_classes.autodiff_setup import (
     problem_data_to_gd_trajectories,
+    problem_data_to_nesterov_fgm_trajectories,
     create_exp_cp_layer,
     create_cvar_cp_layer,
     dro_pep_obj_jax,
 )
 from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
+from learning_experiment_classes.acceleration_stepsizes import (
+    get_nesterov_fgm_beta_sequence,
+    jax_get_nesterov_fgm_beta_sequence,
+)
 jax.config.update("jax_enable_x64", True)
 
 log = logging.getLogger(__name__)
@@ -81,12 +89,12 @@ def get_z0_samples(subkeys, d, R):
     return jax.vmap(sampler)(subkeys)
 
 
-def SCS_pipeline(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer):
+def SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer, traj_fn):
     batch_GF_func = jax.vmap(
-        lambda t, Q, z0, zs, fs: problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_representation=True),
-        in_axes=(None, 0, 0, 0, 0)
+        lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+        in_axes=(0, 0, 0, 0)
     )
-    G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, fs_batch)
+    G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
     (lambd_star, s_star) = large_sdp_layer(G_batch, F_batch)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
     return loss
@@ -145,7 +153,17 @@ def quad_run(cfg):
     for K in cfg.K_max:
         # Determine step size initialization based on config
         is_vector = cfg.stepsize_type == "vector"
-        if is_vector:
+        
+        # Check for invalid combination: nesterov_fgm with silver stepsizes
+        if alg == 'nesterov_fgm' and cfg.vector_init == "silver":
+            log.error("Silver stepsizes are not compatible with nesterov_fgm. Use 'fixed' vector_init instead.")
+            raise ValueError("Silver stepsizes are not compatible with nesterov_fgm algorithm.")
+        
+        # Determine t_init based on algorithm
+        if alg == 'nesterov_fgm':
+            # Nesterov FGM uses t = 1/L (scalar or vector of same value)
+            t_init = jnp.full(K, 1 / L_val) if is_vector else 1 / L_val
+        elif is_vector:
             if cfg.vector_init == "fixed":
                 t_init = jnp.full(K, t_init_scalar)
             else:
@@ -171,6 +189,24 @@ def quad_run(cfg):
     log.info("=== SGDA experiment complete ===")
 
 
+def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta):
+    """Build a DataFrame from stepsizes history for CSV saving."""
+    data = {'iteration': list(range(len(all_stepsizes_vals)))}
+    
+    # Extract t values (first element of each stepsizes tuple)
+    if is_vector_t:
+        for k in range(K_max):
+            data[f't{k}'] = [float(ss[0][k]) for ss in all_stepsizes_vals]
+    else:
+        data['t'] = [float(ss[0]) for ss in all_stepsizes_vals]
+    
+    # Extract beta values if present (second element of each stepsizes tuple)
+    if has_beta:
+        for k in range(K_max):
+            data[f'beta{k}'] = [float(ss[1][k]) for ss in all_stepsizes_vals]
+    
+    return pd.DataFrame(data)
+
 def run_sgda_for_K(cfg, K_max, key, M_val, t_init, 
                    sgda_iters, eta_t, eta_Q, eta_z0,
                    eps, alpha, alg, sgda_type,
@@ -185,6 +221,10 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     # Select algorithm based on alg parameter
     if alg == 'vanilla_gd':
         algo = gradient_descent
+        traj_fn = problem_data_to_gd_trajectories
+    elif alg == 'nesterov_fgm':
+        algo = nesterov_fgm
+        traj_fn = problem_data_to_nesterov_fgm_trajectories
     else:
         log.error(f"Algorithm '{alg}' is not implemented.")
         exit(0)
@@ -213,9 +253,16 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         fs = func(xs)
         x0 = problem.set_initial_point()
         
-        # params = {'t': float(t), 'K_max': k}
-        is_vec = jnp.ndim(t) > 0
-        params = {'t': t if is_vec else float(t), 'K_max': k}
+        # Build stepsizes tuple based on algorithm
+        is_vec = jnp.ndim(t) > 0 if hasattr(t, 'ndim') else isinstance(t, (list, tuple))
+        if alg == 'vanilla_gd':
+            t_val = t if is_vec else float(t)
+            params = {'stepsizes': (t_val,), 'K_max': k}
+        elif alg == 'nesterov_fgm':
+            # For nesterov_fgm, t should be scalar, beta is computed
+            t_scalar = float(t[0]) if is_vec else float(t)
+            beta = get_nesterov_fgm_beta_sequence(mu, L, k)
+            params = {'stepsizes': (t_scalar, beta.tolist()), 'K_max': k}
         problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
         x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
         
@@ -278,15 +325,21 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         
         return key, Q_batch, z0_batch, zs_batch, fs_batch
     
-    # Batched trajectory and gradient functions
-    batch_GF_func = jax.vmap(
-        lambda t, Q, z0, zs, fs: problem_data_to_gd_trajectories(t, Q, z0, zs, fs, K_max, return_Gram_representation=True),
-        in_axes=(None, 0, 0, 0, 0)
-    )
+    # Batched trajectory and gradient functions (using stepsizes and traj_fn set above)
+    def make_batch_GF_func(stepsizes):
+        return jax.vmap(
+            lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+            in_axes=(0, 0, 0, 0)
+        )
     grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
     
-    # Initialize SGDA variables
-    t = t_init
+    # Initialize SGDA stepsizes based on algorithm
+    if alg == 'vanilla_gd':
+        stepsizes = (t_init,)
+    elif alg == 'nesterov_fgm':
+        beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
+        stepsizes = (t_init, beta_init)
+    
     key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
     
     # Initialize Q and z0 for ascent (sample one each)
@@ -296,16 +349,19 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     Q = get_Q_samples(Q_single_keys, d_val, mu_val, L_val, M_val)[0]
     z0 = get_z0_samples(z0_single_keys, M_val, R_val)[0]
     
-    # Track t values for logging
-    # all_t_vals = [float(t)]
+    # Track all stepsizes values for logging/CSV
+    t = stepsizes[0]  # For logging compatibility
     is_vector_t = jnp.ndim(t) > 0
-    all_t_vals = [t.tolist() if is_vector_t else float(t)]
+    has_beta = len(stepsizes) > 1
+    
+    # Store all stepsizes at each iteration
+    all_stepsizes_vals = [stepsizes]  # List of tuples
     
     # Initialize optimizer if needed (Adam or AdamW share same interface)
     optimizer = None
     if sgda_type == "adamw":
         optimizer = AdamWMinMax(
-            x_params=[jnp.array(t)],
+            x_params=[jnp.array(s) for s in stepsizes],
             y_params=[Q, z0],
             lr=eta_t,
             betas=(0.9, 0.999),
@@ -314,7 +370,7 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         )
     elif sgda_type == "adam":
         optimizer = AdamMinMax(
-            x_params=[jnp.array(t)],
+            x_params=[jnp.array(s) for s in stepsizes],
             y_params=[Q, z0],
             lr=eta_t,
             betas=(0.9, 0.999),
@@ -323,30 +379,39 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     
     # SGDA iterations
     for iter_num in range(sgda_iters):
+        t = stepsizes[0]  # For logging
         t_log = f'{t:.5f}' if not is_vector_t else '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
-        log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
+        if has_beta:
+            beta = stepsizes[1]
+            beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
+            log.info(f'K={K_max}, iter={iter_num}, t={t_log}, beta={beta_log}')
+        else:
+            log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
         # Sample new batch
         key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
         
-        # Get CP layer for current t (convert JAX array to Python list for PEPit)
-        G_batch, F_batch = batch_GF_func(t, Q_batch, z0_batch, zs_batch, fs_batch)
-        t_for_pep = t.tolist() if is_vector_t else float(t)
+        # Get CP layer for current stepsizes (convert JAX array to Python list for PEPit)
+        batch_GF_func = make_batch_GF_func(stepsizes)
+        G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
+        # For PEP subproblem: vanilla_gd uses t (scalar or vector), nesterov_fgm uses t[0] (scalar)
+        if alg == 'vanilla_gd':
+            t_for_pep = t.tolist() if is_vector_t else float(t)
+        elif alg == 'nesterov_fgm':
+            t_for_pep = float(t[0]) if is_vector_t else float(t)
         DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
         
-        # Compute gradients
-        dt, dQ, dz0 = grad_fn(t, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer)
+        # Compute gradients w.r.t stepsizes tuple, Q_batch, z0_batch
+        d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer, traj_fn)
         
         # Average gradients over batch
         dQ = jnp.mean(dQ, axis=0)
         dz0 = jnp.mean(dz0, axis=0)
         
-        # SGDA step: descent in t, ascent in Q and z0 with projections
+        # SGDA step: descent in stepsizes, ascent in Q and z0 with projections
         if sgda_type == "vanilla_sgda":
-            if is_vector_t:
-                t = t - eta_t * dt  # Keep as JAX array
-            else:
-                t = float(t - eta_t * dt)  # Keep t as Python float
+            # Update all stepsizes in tuple
+            stepsizes = tuple(s - eta_t * ds for s, ds in zip(stepsizes, d_stepsizes))
             Q = proj_Q(Q + eta_Q * dQ)
             z0 = proj_z0(z0 + eta_z0 * dz0)
         elif sgda_type in ("adam", "adamw"):
@@ -357,61 +422,38 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
                 return [Q_proj, z0_proj]
             
             # Use optimizer step (Adam or AdamW share same interface)
+            # Convert stepsizes tuple to list of arrays for optimizer
+            x_params = [jnp.array(s) for s in stepsizes]
+            grads_x = list(d_stepsizes)
             x_new, y_new = optimizer.step(
-                x_params=[jnp.array(t)],
+                x_params=x_params,
                 y_params=[Q, z0],
-                grads_x=[dt],
+                grads_x=grads_x,
                 grads_y=[dQ, dz0],
                 proj_y_fn=proj_y_params
             )
-            if is_vector_t:
-                t = x_new[0]  # Keep as JAX array
-            else:
-                t = float(x_new[0])
+            stepsizes = tuple(x_new)
             Q = y_new[0]
             z0 = y_new[1]
         elif sgda_type == "sgda_wd":
             # SGD with weight decay
-            # x update: x_{k+1} = x_k - eta_x * (g_x + lambda * x_k)
-            # y update: y_{k+1} = Proj(y_k + eta_y * (g_y - lambda * y_k))
             weight_decay = cfg.get('weight_decay', 1e-2)
-            if is_vector_t:
-                t = t - eta_t * (dt + weight_decay * t)  # Keep as JAX array
-            else:
-                t = float(t - eta_t * (dt + weight_decay * t))
+            stepsizes = tuple(s - eta_t * (ds + weight_decay * s) for s, ds in zip(stepsizes, d_stepsizes))
             Q = proj_Q(Q + eta_Q * (dQ - weight_decay * Q))
             z0 = proj_z0(z0 + eta_z0 * (dz0 - weight_decay * z0))
         else:
             raise ValueError(f"Unknown sgda_type: {sgda_type}")
         
-        all_t_vals.append(t.tolist() if is_vector_t else float(t))
+        t = stepsizes[0]  # For logging
+        all_stepsizes_vals.append(stepsizes)
         
         # Save progress to CSV after each iteration (overwrite to preserve intermediate progress)
-        if is_vector_t:
-            # Vector case: columns are iteration, t0, t1, t2, ...
-            data = {'iteration': list(range(len(all_t_vals)))}
-            for k in range(K_max):
-                data[f't{k}'] = [row[k] for row in all_t_vals]
-            df = pd.DataFrame(data)
-        else:
-            # Scalar case: columns are iteration, t
-            df = pd.DataFrame({
-                'iteration': list(range(len(all_t_vals))),
-                't': all_t_vals,
-            })
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
         df.to_csv(csv_path, index=False)
     
     # Final save after loop completes
-    if is_vector_t:
-        data = {'iteration': list(range(len(all_t_vals)))}
-        for k in range(K_max):
-            data[f't{k}'] = [row[k] for row in all_t_vals]
-        df = pd.DataFrame(data)
-        log.info(f'K={K_max} complete. Final t={t}. Saved to {csv_path}')
-    else:
-        df = pd.DataFrame({
-            'iteration': list(range(len(all_t_vals))),
-            't': all_t_vals,
-        })
-        log.info(f'K={K_max} complete. Final t={t:.6f}. Saved to {csv_path}')
+    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
+    t = stepsizes[0]
+    t_str = str(t) if is_vector_t else f'{float(t):.6f}'
+    log.info(f'K={K_max} complete. Final t={t_str}. Saved to {csv_path}')
     df.to_csv(csv_path, index=False)

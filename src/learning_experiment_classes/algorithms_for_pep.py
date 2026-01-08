@@ -1,8 +1,7 @@
 import numpy as np
 
 def gradient_descent(f, g, x0, xs, params) :
-    t = params['t']
-    # K = params['K']
+    t = params['stepsizes'][0]
     K_max = params['K_max']
 
     x_stack = []
@@ -31,8 +30,7 @@ def nesterov_fgm(f, g, x0, xs, params):
         Algorithm 14 from https://arxiv.org/pdf/2101.09545
         Specific equivalent form implemented is Algorithm 28 (Section B.1.3)
     '''
-    t = params['t']
-    beta = params['beta']
+    t, beta = params['stepsizes'][0], params['stepsizes'][1]
     K_max = params['K_max']
 
     x_stack = []

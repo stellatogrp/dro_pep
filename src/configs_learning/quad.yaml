@@ -8,10 +8,10 @@ dim: 200
 N: 16
 
 # Algorithm and SGDA type (selected by Slurm job index)
-alg: "vanilla_gd"           # stub: nesterov_gd or nesterov_fgm
+alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 sgda_type: "adamw" #"vanilla_sgda"   # stub: adamw  # "sgda_wd"
-stepsize_type: "vector" # "scalar" or "vector"
-vector_init: "silver" # "fixed" or "silver"
+stepsize_type: "scalar" # "scalar" or "vector"
+vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [3, 7, 15, 31]
