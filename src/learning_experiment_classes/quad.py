@@ -95,7 +95,12 @@ def SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, l
         in_axes=(0, 0, 0, 0)
     )
     G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
-    (lambd_star, s_star) = large_sdp_layer(G_batch, F_batch)
+    
+    # Unpack batch into list of 2D arrays: [G_0, ..., G_{N-1}, F_0, ..., F_{N-1}]
+    N = G_batch.shape[0]
+    params_list = [G_batch[i] for i in range(N)] + [F_batch[i] for i in range(N)]
+    
+    (lambd_star, s_star) = large_sdp_layer(*params_list)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
     return loss
 

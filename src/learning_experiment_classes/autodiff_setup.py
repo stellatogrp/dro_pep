@@ -117,9 +117,26 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
 
 
 def create_exp_cp_layer(DR, eps, G_shape, F_shape):
+    """Create expectation-based DRO cvxpylayer.
+    
+    Uses list of 2D parameters (one per sample) to avoid 3D tensor canonicalization issues.
+    
+    Args:
+        DR: DROReformulator object
+        eps: Wasserstein ball radius
+        G_shape: Shape of G batch (N, mat_dim, mat_dim)
+        F_shape: Shape of F batch (N, vec_dim)
+    
+    Returns:
+        CvxpyLayer that takes 2*N parameters: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
+    """
+    N = G_shape[0]
+    mat_shape = G_shape[1:]  # (mat_dim, mat_dim)
+    vec_shape = F_shape[1:]  # (vec_dim,)
 
-    G_param = cp.Parameter(G_shape)
-    F_param = cp.Parameter(F_shape)
+    # Create N separate 2D parameters for G and F
+    G_params = [cp.Parameter(mat_shape) for _ in range(N)]
+    F_params = [cp.Parameter(vec_shape) for _ in range(N)]
 
     A_vals = DR.canon.A_vals
     b_vals = DR.canon.b_vals
@@ -127,16 +144,15 @@ def create_exp_cp_layer(DR, eps, G_shape, F_shape):
     A_obj = DR.canon.A_obj
     b_obj = DR.canon.b_obj
 
-    N = G_shape[0]
     M = A_vals.shape[0]
-    mat_shape = A_obj.shape
-    vec_shape = b_obj.shape
+    obj_mat_shape = A_obj.shape
+    obj_vec_shape = b_obj.shape
 
     lambd = cp.Variable()
     s = cp.Variable(N)
     y = cp.Variable((N, M))
-    Gz = [cp.Variable(mat_shape, symmetric=True) for _ in range(N)]
-    Fz = [cp.Variable(vec_shape) for _ in range(N)]
+    Gz = [cp.Variable(obj_mat_shape, symmetric=True) for _ in range(N)]
+    Fz = [cp.Variable(obj_vec_shape) for _ in range(N)]
 
     obj = lambd * eps + 1 / N * cp.sum(s)
     constraints = [y >= 0]
@@ -145,7 +161,7 @@ def create_exp_cp_layer(DR, eps, G_shape, F_shape):
     F_preconditioner = DR.canon.precond_inv[1]
 
     for i in range(N):
-        G_sample, F_sample = G_param[i], F_param[i]
+        G_sample, F_sample = G_params[i], F_params[i]
         constraints += [- c_vals.T @ y[i] - cp.trace(G_sample @ Gz[i]) - F_sample.T @ Fz[i] <= s[i]]
         constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz[i])]))]
 
@@ -161,21 +177,35 @@ def create_exp_cp_layer(DR, eps, G_shape, F_shape):
         constraints += [LstarF - Fz[i] - b_obj == 0]
     prob = cp.Problem(cp.Minimize(obj), constraints)
 
-    return CvxpyLayerWithDefaults(prob, parameters=[G_param, F_param], variables=[lambd, s],
-                                   solver_args={
-                                    #    'solve_method': 'Clarabel', 
-                                    #    'verbose': True,
-                                    #    'tol_feas': 1e-4,
-                                    #    'tol_gap_abs': 1e-4,
-                                    #    'tol_gap_rel': 1e-4,
-                                   })
+    # Parameters list: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
+    all_params = G_params + F_params
+    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s])
 
 
 def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
+    """Create CVaR-based DRO cvxpylayer.
+    
+    Uses list of 2D parameters (one per sample) to avoid 3D tensor canonicalization issues.
+    
+    Args:
+        DR: DROReformulator object
+        eps: Wasserstein ball radius
+        alpha: CVaR confidence level
+        G_shape: Shape of G batch (N, mat_dim, mat_dim)
+        F_shape: Shape of F batch (N, vec_dim)
+    
+    Returns:
+        CvxpyLayer that takes 2*N parameters: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
+    """
     alpha_inv = 1 / alpha
 
-    G_param = cp.Parameter(G_shape)
-    F_param = cp.Parameter(F_shape)
+    N = G_shape[0]
+    mat_shape = G_shape[1:]  # (mat_dim, mat_dim)
+    vec_shape = F_shape[1:]  # (vec_dim,)
+
+    # Create N separate 2D parameters for G and F
+    G_params = [cp.Parameter(mat_shape) for _ in range(N)]
+    F_params = [cp.Parameter(vec_shape) for _ in range(N)]
 
     A_vals = DR.canon.A_vals
     b_vals = DR.canon.b_vals
@@ -183,10 +213,9 @@ def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
     A_obj = DR.canon.A_obj
     b_obj = DR.canon.b_obj
 
-    N = G_shape[0]
     M = A_vals.shape[0]
-    mat_shape = A_obj.shape
-    vec_shape = b_obj.shape
+    obj_mat_shape = A_obj.shape
+    obj_vec_shape = b_obj.shape
 
     lambd = cp.Variable()
     s = cp.Variable(N)
@@ -194,10 +223,10 @@ def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
     y2 = cp.Variable((N, M))
     t = cp.Variable()
 
-    Gz1 = [cp.Variable(mat_shape, symmetric=True) for _ in range(N)]
-    Fz1 = [cp.Variable(vec_shape) for _ in range(N)]
-    Gz2 = [cp.Variable(mat_shape, symmetric=True) for _ in range(N)]
-    Fz2 = [cp.Variable(vec_shape) for _ in range(N)]
+    Gz1 = [cp.Variable(obj_mat_shape, symmetric=True) for _ in range(N)]
+    Fz1 = [cp.Variable(obj_vec_shape) for _ in range(N)]
+    Gz2 = [cp.Variable(obj_mat_shape, symmetric=True) for _ in range(N)]
+    Fz2 = [cp.Variable(obj_vec_shape) for _ in range(N)]
 
     obj = lambd * eps + 1 / N * cp.sum(s)
     constraints = [y1 >= 0, y2 >= 0]
@@ -206,7 +235,7 @@ def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
     F_preconditioner = DR.canon.precond_inv[1]
 
     for i in range(N):
-        G_sample, F_sample = G_param[i], F_param[i]
+        G_sample, F_sample = G_params[i], F_params[i]
         constraints += [t - c_vals.T @ y1[i] - cp.trace(G_sample @ Gz1[i]) - F_sample.T @ Fz1[i] <= s[i]]
         constraints += [-(alpha_inv - 1) * t - c_vals.T @ y2[i] - cp.trace(G_sample @ Gz2[i]) - F_sample.T @ Fz2[i] <= s[i]]
 
@@ -234,7 +263,10 @@ def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
         constraints += [y2b_adj - Fz2[i] - alpha_inv * b_obj == 0]
 
     prob = cp.Problem(cp.Minimize(obj), constraints)
-    return CvxpyLayer(prob, parameters=[G_param, F_param], variables=[lambd, s])
+    
+    # Parameters list: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
+    all_params = G_params + F_params
+    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s])
 
 
 @jax.jit
