@@ -21,6 +21,7 @@ from learning_experiment_classes.algorithms_for_pep import (
 from learning_experiment_classes.autodiff_setup import (
     problem_data_to_gd_trajectories,
     problem_data_to_nesterov_fgm_trajectories,
+    problem_data_to_pep_obj,
     create_exp_cp_layer,
     create_cvar_cp_layer,
     dro_pep_obj_jax,
@@ -103,6 +104,48 @@ def SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, l
     (lambd_star, s_star) = large_sdp_layer(*params_list)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
     return loss
+
+
+def l2o_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, pep_obj, risk_type, alpha=0.1):
+    """Pipeline for learning-to-optimize without DRO SDP.
+    
+    Computes PEP objectives for each sample in the batch and returns a risk measure.
+    
+    Args:
+        stepsizes: Step size parameters (tuple)
+        Q_batch: Batch of Q matrices (N, dim, dim)
+        z0_batch: Batch of initial points (N, dim)
+        zs_batch: Batch of optimal points (N, dim)
+        fs_batch: Batch of optimal function values (N,)
+        K_max: Number of algorithm iterations
+        traj_fn: Trajectory function (e.g., problem_data_to_gd_trajectories)
+        pep_obj: PEP objective type ('obj_val', 'grad_sq_norm', 'opt_dist_sq_norm')
+        risk_type: Risk measure type ('expectation' or 'cvar')
+        alpha: CVaR confidence level (only used if risk_type='cvar')
+    
+    Returns:
+        Scalar loss value (mean or CVaR of PEP objectives)
+    """
+    # vmap over the batch to compute PEP objectives for each sample
+    batch_pep_obj_func = jax.vmap(
+        lambda Q, z0, zs, fs: problem_data_to_pep_obj(
+            stepsizes, Q, z0, zs, fs, K_max, traj_fn, pep_obj
+        ),
+        in_axes=(0, 0, 0, 0)
+    )
+    pep_objs = batch_pep_obj_func(Q_batch, z0_batch, zs_batch, fs_batch)
+    
+    if risk_type == 'expectation':
+        return jnp.mean(pep_objs)
+    elif risk_type == 'cvar':
+        # CVaR: expectation of the top alpha fraction of values
+        # Note: N and alpha should be static/known at trace time for JAX compatibility
+        N = pep_objs.shape[0]
+        k = max(int(np.ceil(alpha * N)), 1)  # Use numpy, not jax (static computation)
+        sorted_objs = jnp.sort(pep_objs)[::-1]  # Sort descending
+        return jnp.mean(sorted_objs[:k])
+    else:
+        raise ValueError(f"Unknown risk_type: {risk_type}")
 
 
 def quad_run(cfg):
@@ -264,10 +307,13 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             t_val = t if is_vec else float(t)
             params = {'stepsizes': (t_val,), 'K_max': k}
         elif alg == 'nesterov_fgm':
-            # For nesterov_fgm, t should be scalar, beta is computed
-            t_scalar = float(t[0]) if is_vec else float(t)
+            # For nesterov_fgm, t can be scalar or vector, beta is always vector
+            if is_vec:
+                t_val = [float(ti) for ti in t]  # Convert vector to list
+            else:
+                t_val = float(t)
             beta = get_nesterov_fgm_beta_sequence(mu, L, k)
-            params = {'stepsizes': (t_scalar, beta.tolist()), 'K_max': k}
+            params = {'stepsizes': (t_val, beta.tolist()), 'K_max': k}
         problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
         x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
         
@@ -336,7 +382,15 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
             in_axes=(0, 0, 0, 0)
         )
-    grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
+    
+    # Define grad_fn based on learning framework
+    learning_framework = cfg.learning_framework
+    if learning_framework == 'ldro-pep':
+        grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
+    elif learning_framework == 'l2o':
+        grad_fn = jax.grad(l2o_pipeline, argnums=(0, 1, 2))
+    else:
+        raise ValueError(f"Unknown learning_framework: {learning_framework}")
     
     # Initialize SGDA stepsizes based on algorithm
     if alg == 'vanilla_gd':
@@ -399,15 +453,18 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         # Get CP layer for current stepsizes (convert JAX array to Python list for PEPit)
         batch_GF_func = make_batch_GF_func(stepsizes)
         G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
-        # For PEP subproblem: vanilla_gd uses t (scalar or vector), nesterov_fgm uses t[0] (scalar)
+        # For PEP subproblem: both vanilla_gd and nesterov_fgm can use t (scalar or vector)
         if alg == 'vanilla_gd':
             t_for_pep = t.tolist() if is_vector_t else float(t)
         elif alg == 'nesterov_fgm':
-            t_for_pep = float(t[0]) if is_vector_t else float(t)
-        DR, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
+            t_for_pep = t.tolist() if is_vector_t else float(t)
         
         # Compute gradients w.r.t stepsizes tuple, Q_batch, z0_batch
-        d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer, traj_fn)
+        if learning_framework == 'ldro-pep':
+            _, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
+            d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer, traj_fn)
+        elif learning_framework == 'l2o':
+            d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha=alpha)
         
         # Average gradients over batch
         dQ = jnp.mean(dQ, axis=0)

@@ -286,13 +286,13 @@ def dro_pep_obj_jax(eps, lambd_star, s_star):
 #         exit(0)
 
 
-@partial(jax.jit, static_argnames=['jax_traj_func', 'pep_obj', 'K_max', 'risk_type'])
-def problem_data_to_dro_pep_obj(t, Q, z0, zs, fs, K_max, jax_traj_func, pep_obj, risk_type):
+@partial(jax.jit, static_argnames=['jax_traj_func', 'pep_obj', 'K_max'])
+def problem_data_to_pep_obj(stepsizes, Q, z0, zs, fs, K_max, jax_traj_func, pep_obj):
     '''
         jax_traj_func needs to be a function like problem_data_to_gd_trajectories
     '''
     z_stack, g_stack, f_stack = jax_traj_func(
-        t, Q, z0, zs, fs, K_max, return_Gram_representation=False
+        stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=False
     )
     if pep_obj == 'obj_val':
         return f_stack[-1] - fs

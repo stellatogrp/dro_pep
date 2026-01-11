@@ -4,13 +4,16 @@ L: 10
 R: 1
 dim: 200
 
+# type of learning framework
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o'
+
 # Batch size
 N: 16
 
 # Algorithm and SGDA type (selected by Slurm job index)
-alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+alg: "nesterov_fgm"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 sgda_type: "adamw" #"vanilla_sgda"   # stub: adamw  # "sgda_wd"
-stepsize_type: "scalar" # "scalar" or "vector"
+stepsize_type: "vector" # "scalar" or "vector"
 vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)

@@ -29,6 +29,9 @@ def nesterov_fgm(f, g, x0, xs, params):
     '''
         Algorithm 14 from https://arxiv.org/pdf/2101.09545
         Specific equivalent form implemented is Algorithm 28 (Section B.1.3)
+        
+        t can be scalar or vector of length K_max
+        beta is a vector of length K_max
     '''
     t, beta = params['stepsizes'][0], params['stepsizes'][1]
     K_max = params['K_max']
@@ -43,15 +46,16 @@ def nesterov_fgm(f, g, x0, xs, params):
     g_stack = [g(xs), g(x0)]
     f_stack = [f(xs), f(x0)]
 
+    # Handle scalar or vector t
+    is_scalar_t = np.isscalar(t) or (isinstance(t, np.ndarray) and t.ndim == 0)
+
     for k in range(K_max):
+        t_k = t if is_scalar_t else t[k]
+        beta_k = beta[k]
 
         y_prev = y
-        y = x - t * g(x)
-        x = y + beta[k] * (y - y_prev)
-
-        # x_prev = x
-        # x = y - t * g(y)
-        # y = x + beta_k * (x - x_prev)
+        y = x - t_k * g(x)
+        x = y + beta_k * (y - y_prev)
 
         x_stack.append(x)
         g_stack.append(g(x))
