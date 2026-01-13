@@ -10,20 +10,20 @@ import time
 from functools import partial
 
 # from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
-from PEPit import PEP
-from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
-from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
-from learning_experiment_classes.algorithms_for_pep import (
-    gradient_descent,
-    nesterov_fgm,
+from learning_experiment_classes.pep_construction import (
+    construct_gd_pep_data,
+    construct_fgm_pep_data,
+    pep_data_to_numpy,
 )
+from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
 from learning_experiment_classes.autodiff_setup import (
     problem_data_to_gd_trajectories,
     problem_data_to_nesterov_fgm_trajectories,
     problem_data_to_pep_obj,
-    create_exp_cp_layer,
-    create_cvar_cp_layer,
+    create_full_dro_exp_layer,
+    create_full_dro_cvar_layer,
+    compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
 from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
@@ -90,72 +90,112 @@ def get_z0_samples(subkeys, d, R):
     return jax.vmap(sampler)(subkeys)
 
 
-def quad_pep_subproblem(mu, L, R, t, k, obj, alg, algo, return_problem=False):
-    """Set up and optionally solve a PEP subproblem for quadratic optimization.
+def construct_pep_data_for_gd(mu, L, R, t, K_max, pep_obj):
+    """Construct PEP data tuple for gradient descent using JAX.
+    
+    This replaces the PEPit-based quad_pep_subproblem for gradient descent.
     
     Args:
         mu: Strong convexity parameter
         L: Lipschitz constant of gradient
         R: Initial radius bound
         t: Step size (scalar or vector)
-        k: Number of iterations (K_max)
-        obj: Objective type ('obj_val', 'grad_sq_norm', 'opt_dist_sq_norm')
-        alg: Algorithm name ('vanilla_gd' or 'nesterov_fgm')
-        algo: Algorithm function (gradient_descent or nesterov_fgm)
-        return_problem: If True, return PEP problem without solving
+        K_max: Number of iterations
+        pep_obj: Objective type ('obj_val', 'grad_sq_norm', 'opt_dist_sq_norm')
         
     Returns:
-        PEP problem if return_problem=True, else the solved objective value
+        pep_data: Tuple for use with DROReformulator
     """
-    problem = PEP()
-    func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
-    xs = func.stationary_point()
-    fs = func(xs)
-    x0 = problem.set_initial_point()
+    # Convert t to JAX array if needed
+    t_jax = jnp.asarray(t) if not isinstance(t, jnp.ndarray) else t
     
-    # Build stepsizes tuple based on algorithm
-    is_vec = jnp.ndim(t) > 0 if hasattr(t, 'ndim') else isinstance(t, (list, tuple))
-    if alg == 'vanilla_gd':
-        t_val = t if is_vec else float(t)
-        params = {'stepsizes': (t_val,), 'K_max': k}
-    elif alg == 'nesterov_fgm':
-        # For nesterov_fgm, t can be scalar or vector, beta is always vector
-        if is_vec:
-            t_val = [float(ti) for ti in t]  # Convert vector to list
-        else:
-            t_val = float(t)
-        beta = get_nesterov_fgm_beta_sequence(mu, L, k)
-        params = {'stepsizes': (t_val, beta.tolist()), 'K_max': k}
+    # Construct PEP data using the JAX function
+    pep_data_jax = construct_gd_pep_data(
+        t_jax, float(mu), float(L), float(R), K_max, pep_obj
+    )
     
-    problem.set_initial_condition((x0 - xs) ** 2 <= R ** 2)
-    x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
+    # Convert to numpy for use with canonicalizers
+    pep_data_np = pep_data_to_numpy(pep_data_jax)
     
-    if obj == 'obj_val':
-        problem.set_performance_metric(f_stack[-1] - fs)
-    elif obj == 'grad_sq_norm':
-        problem.set_performance_metric((g_stack[-1]) ** 2)
-    elif obj == 'opt_dist_sq_norm':
-        problem.set_performance_metric((x_stack[-1] - xs) ** 2)
-    
-    if return_problem:
-        return problem
-    
-    pepit_tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
-    return pepit_tau
+    return pep_data_np
 
 
+def pep_data_fn_gd(stepsizes, mu, L, R, K_max, pep_obj):
+    """PEP data construction function for gradient descent.
+    
+    Used as pep_data_fn argument to full_SCS_pipeline.
+    """
+    t = stepsizes[0]
+    return construct_gd_pep_data(t, mu, L, R, K_max, pep_obj)
 
-def SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer, traj_fn):
+
+def pep_data_fn_fgm(stepsizes, mu, L, R, K_max, pep_obj):
+    """PEP data construction function for Nesterov FGM.
+    
+    Used as pep_data_fn argument to full_SCS_pipeline.
+    """
+    t, beta = stepsizes[0], stepsizes[1]
+    return construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj)
+
+
+def full_SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, 
+                      mu, L, R, K_max, eps, pep_obj, large_sdp_layer, traj_fn, pep_data_fn):
+    """Full DRO pipeline with constraint matrices inside JAX trace.
+    
+    This function computes both:
+    1. Sample trajectories (G_batch, F_batch) from stepsizes
+    2. Constraint matrices (A_vals, b_vals, A_obj, b_obj) from stepsizes
+    
+    Both are passed to the cvxpylayer, enabling full gradient flow from 
+    stepsizes through both paths.
+    
+    Algorithm-agnostic: works for both GD and FGM by accepting appropriate
+    trajectory and PEP construction functions.
+    
+    Args:
+        stepsizes: Tuple of step size arrays (e.g., (t,) for GD, (t, beta) for FGM)
+        Q_batch: Batch of quadratic matrices (N, d, d)
+        z0_batch: Batch of initial points (N, d)
+        zs_batch: Batch of optimal points (N, d)
+        fs_batch: Batch of optimal function values (N,)
+        mu: Strong convexity parameter
+        L: Lipschitz constant
+        R: Initial radius bound
+        K_max: Number of algorithm iterations
+        eps: Wasserstein ball radius
+        pep_obj: PEP objective type
+        large_sdp_layer: CvxpyLayer created by create_full_dro_exp_layer
+        traj_fn: Trajectory function (problem_data_to_gd_trajectories or _fgm_trajectories)
+        pep_data_fn: PEP data construction function that takes stepsizes and returns pep_data
+    
+    Returns:
+        Scalar loss value
+    """
+    # 1. Compute sample Gram matrices (G, F) from trajectories
     batch_GF_func = jax.vmap(
         lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
         in_axes=(0, 0, 0, 0)
     )
     G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
     
-    # Unpack batch into list of 2D arrays: [G_0, ..., G_{N-1}, F_0, ..., F_{N-1}]
-    N = G_batch.shape[0]
-    params_list = [G_batch[i] for i in range(N)] + [F_batch[i] for i in range(N)]
+    # 2. Compute constraint matrices from stepsizes (JAX-traced, algorithm-specific)
+    pep_data = pep_data_fn(stepsizes, mu, L, R, K_max, pep_obj)
+    A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
     
+    # 3. Unpack into parameter list for cvxpylayer
+    # Order: [A_0, ..., A_{M-1}, b_0, ..., b_{M-1}, A_obj, b_obj, G_0, ..., G_{N-1}, F_0, ..., F_{N-1}]
+    N = G_batch.shape[0]
+    M = A_vals.shape[0]
+    
+    params_list = (
+        [A_vals[m] for m in range(M)] +           # A_params
+        [b_vals[m] for m in range(M)] +           # b_params
+        [A_obj, b_obj] +                           # A_obj_param, b_obj_param
+        [G_batch[i] for i in range(N)] +          # G_params
+        [F_batch[i] for i in range(N)]            # F_params
+    )
+    
+    # 4. Call cvxpylayer and compute loss
     (lambd_star, s_star) = large_sdp_layer(*params_list)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
     return loss
@@ -222,16 +262,14 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     """
     log.info(f"=== Running lpep GD for K={K_max} ===")
     
-    # Select algorithm
+    # Select trajectory function based on algorithm
     if alg == 'vanilla_gd':
-        algo = gradient_descent
         traj_fn = problem_data_to_gd_trajectories
     elif alg == 'nesterov_fgm':
-        algo = nesterov_fgm
         traj_fn = problem_data_to_nesterov_fgm_trajectories
     else:
         log.error(f"Algorithm '{alg}' is not implemented.")
-        exit(0)
+        raise ValueError(f"Unknown algorithm: {alg}")
     
     # Placeholder for lpep-specific CP layer creation
     def get_pep_cp_layer(t_curr):
@@ -432,16 +470,14 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     Saves progress to csv_path after each iteration (overwrites to preserve intermediate progress).
     """
     
-    # Select algorithm based on alg parameter
+    # Select trajectory function based on algorithm
     if alg == 'vanilla_gd':
-        algo = gradient_descent
         traj_fn = problem_data_to_gd_trajectories
     elif alg == 'nesterov_fgm':
-        algo = nesterov_fgm
         traj_fn = problem_data_to_nesterov_fgm_trajectories
     else:
         log.error(f"Algorithm '{alg}' is not implemented.")
-        exit(0)
+        raise ValueError(f"Unknown algorithm: {alg}")
     
     # Projection functions
     @jax.jit
@@ -455,43 +491,6 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         evals, evecs = jnp.linalg.eigh(M)
         evals_clipped = jnp.clip(evals, mu_val, L_val)
         return (evecs * evals_clipped) @ evecs.T
-    
-    # Wrapper for module-level quad_pep_subproblem (passes alg and algo from closure)
-    def local_quad_pep_subproblem(mu, L, R, t, k, obj, return_problem=False):
-        return quad_pep_subproblem(mu, L, R, t, k, obj, alg, algo, return_problem)
-    
-    # Get CP layer for given batch
-    def get_cp_layer(G_batch, F_batch, t_curr):
-        pep_problem = local_quad_pep_subproblem(
-            mu_val, L_val, R_val, t_curr, K_max, 
-            cfg.pep_obj, return_problem=True
-        )
-        mosek_params = {
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': cfg.mosek_tol_dfeas,
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': cfg.mosek_tol_pfeas,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': cfg.mosek_tol_rel_gap,
-        }
-        pep_problem.solve(
-            wrapper='cvxpy',
-            solver='MOSEK',
-            mosek_params=mosek_params,
-            verbose=0,
-        )
-        samples = [(np.array(G_batch[i]), np.array(F_batch[i])) for i in range(G_batch.shape[0])]
-        
-        DR = DROReformulator(
-            pep_problem,
-            samples,
-            cfg.dro_obj,
-            'cvxpy',
-            precond=True,
-            precond_type='average',
-        )
-
-        if cfg.dro_obj == 'expectation':
-            return DR, create_exp_cp_layer(DR, eps, G_batch.shape, F_batch.shape)
-        elif cfg.dro_obj == 'cvar':
-            return DR, create_cvar_cp_layer(DR, eps, alpha, G_batch.shape, F_batch.shape)
     
     # Sample functions
     def sample_batch(key):
@@ -515,10 +514,82 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     
     # Define grad_fn based on learning framework
     learning_framework = cfg.learning_framework
+    
     if learning_framework == 'ldro-pep':
-        grad_fn = jax.grad(SCS_pipeline, argnums=(0, 1, 2))
+        # For ldro-pep, we need to create the full_dro_layer once with correct dimensions
+        # Dimensions: M constraints, N samples, dimG x dimG matrices, dimF vectors
+        # dimG = K_max + 2, dimF = K_max + 1 (from pep_construction.py)
+        dimG = K_max + 2
+        dimF = K_max + 1
+        mat_shape = (dimG, dimG)
+        vec_shape = (dimF,)
+        
+        # M = number of interpolation constraints = (K_max+2) * (K_max+1) + 1 (initial condition)
+        # From smooth_strongly_convex_interp: (n_points+1) * n_points where n_points = K_max+1
+        n_points = K_max + 1
+        M_interp = (n_points + 1) * n_points  # Interpolation constraints
+        M = M_interp + 1  # Plus initial condition
+        
+        # Get c_vals (fixed, don't depend on t)
+        # Initial c_vals are all zeros for interpolation + one -R^2 for initial condition
+        c_vals_init = np.zeros(M)
+        c_vals_init[-1] = -R_val ** 2
+        
+        # Set up algorithm-specific functions
+        if alg == 'vanilla_gd':
+            pep_data_fn = pep_data_fn_gd
+            stepsizes_for_precond = (t_init,)
+        elif alg == 'nesterov_fgm':
+            pep_data_fn = pep_data_fn_fgm
+            beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
+            stepsizes_for_precond = (t_init, beta_init)
+        else:
+            raise ValueError(f"Unknown algorithm: {alg}")
+        
+        # Compute preconditioner from first sample batch
+        # Sample a batch and compute trajectories to get G, F statistics
+        key, k1, k2 = jax.random.split(key, 3)
+        Q_precond_keys = jax.random.split(k1, N_val)
+        z0_precond_keys = jax.random.split(k2, N_val)
+        Q_precond_batch = get_Q_samples(Q_precond_keys, d_val, mu_val, L_val, M_val)
+        z0_precond_batch = get_z0_samples(z0_precond_keys, M_val, R_val)
+        zs_precond_batch = jnp.zeros(z0_precond_batch.shape)
+        fs_precond_batch = jnp.zeros(N_val)
+        
+        # Compute G, F for preconditioner calculation using correct stepsizes
+        batch_GF_func = jax.vmap(
+            lambda Q, z0, zs, fs: traj_fn(stepsizes_for_precond, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+            in_axes=(0, 0, 0, 0)
+        )
+        G_precond_batch, F_precond_batch = batch_GF_func(Q_precond_batch, z0_precond_batch, zs_precond_batch, fs_precond_batch)
+        
+        # Compute preconditioner based on sample statistics
+        precond_type = cfg.get('precond_type', 'average')
+        precond_inv = compute_preconditioner_from_samples(
+            np.array(G_precond_batch), np.array(F_precond_batch), precond_type=precond_type
+        )
+        log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
+        
+        # Create the full DRO layer based on dro_obj type
+        if cfg.dro_obj == 'expectation':
+            full_dro_layer = create_full_dro_exp_layer(
+                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                c_vals_init, precond_inv, eps
+            )
+        elif cfg.dro_obj == 'cvar':
+            full_dro_layer = create_full_dro_cvar_layer(
+                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                c_vals_init, precond_inv, eps, alpha
+            )
+        else:
+            raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
+        
+        # Gradient function uses full_SCS_pipeline with all args traced
+        grad_fn = jax.grad(full_SCS_pipeline, argnums=(0, 1, 2))
     elif learning_framework == 'l2o':
         grad_fn = jax.grad(l2o_pipeline, argnums=(0, 1, 2))
+        full_dro_layer = None  # Not used for l2o
+        pep_data_fn = None  # Not used for l2o
     else:
         raise ValueError(f"Unknown learning_framework: {learning_framework}")
     
@@ -591,8 +662,11 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         
         # Compute gradients w.r.t stepsizes tuple, Q_batch, z0_batch
         if learning_framework == 'ldro-pep':
-            _, large_sdp_layer = get_cp_layer(G_batch, F_batch, t_for_pep)
-            d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, eps, large_sdp_layer, traj_fn)
+            # Use full_SCS_pipeline which traces gradients through both G,F and A_vals,b_vals
+            d_stepsizes, dQ, dz0 = grad_fn(
+                stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
+            )
         elif learning_framework == 'l2o':
             d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha=alpha)
         

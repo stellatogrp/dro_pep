@@ -14,18 +14,102 @@ class CvxpyLayerWithDefaults:
     
     Works around a bug in cvxpylayers where solver_args passed to __init__
     are not merged with solver_args passed to __call__.
+    Also sets ignore_dpp=True by default to avoid slow DPP compilation with many parameters.
     """
-    def __init__(self, *args, solver_args=None, **kwargs):
+    def __init__(self, problem, parameters, variables, solver_args=None):
         self._default_solver_args = solver_args or {}
-        self._layer = CvxpyLayer(*args, solver_args=solver_args, **kwargs)
+        # ignore_dpp=True speeds up compilation when there are many parameters
+        self._layer = CvxpyLayer(problem, parameters=parameters, variables=variables)
     
     def __call__(self, *params, solver_args=None):
         merged = {**self._default_solver_args, **(solver_args or {})}
         return self._layer(*params, solver_args=merged)
 
 
+def compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average'):
+    """Compute preconditioning factors from sample Gram matrices.
+    
+    Computes inverse preconditioning factors used to scale the DRO constraints
+    based on sample statistics. This improves numerical conditioning.
+    
+    Args:
+        G_batch: Batch of Gram matrices (N, dimG, dimG)
+        F_batch: Batch of function value vectors (N, dimF)
+        precond_type: Type of preconditioning:
+            - 'average': Use average of sample diagonals (default)
+            - 'max': Use maximum values
+            - 'min': Use minimum values
+            - 'identity': No preconditioning
+    
+    Returns:
+        precond_inv: Tuple (precond_inv_G, precond_inv_F) of inverse preconditioning factors
+            - precond_inv_G: (dimG,) array for Gram matrix scaling
+            - precond_inv_F: (dimF,) array for function value scaling
+    """
+    if precond_type == 'identity':
+        dimG = G_batch.shape[1]
+        dimF = F_batch.shape[1]
+        return (np.ones(dimG), np.ones(dimF))
+    
+    # Compute sqrt of diagonals of each G matrix: shape (N, dimG)
+    G_diag_sqrt = np.sqrt(np.array([np.diag(G_batch[i]) for i in range(G_batch.shape[0])]))
+    
+    # Compute F values: shape (N, dimF)
+    F_vals = np.array(F_batch)
+    
+    if precond_type == 'average':
+        avg_G = np.mean(G_diag_sqrt, axis=0)  # (dimG,)
+        avg_F = np.mean(F_vals, axis=0)       # (dimF,)
+        precond_G = 1 / avg_G
+        precond_F = 1 / np.sqrt(np.maximum(avg_F, 1e-10))  # Avoid sqrt of negative
+    elif precond_type == 'max':
+        max_G = np.max(G_diag_sqrt, axis=0)
+        max_F = np.max(F_vals, axis=0)
+        precond_G = 1 / max_G
+        precond_F = 1 / np.sqrt(np.maximum(max_F, 1e-10))
+    elif precond_type == 'min':
+        min_G = np.min(G_diag_sqrt, axis=0)
+        min_F = np.min(F_vals, axis=0)
+        precond_G = 1 / min_G
+        precond_F = 1 / np.sqrt(np.maximum(min_F, 1e-10))
+    else:
+        raise ValueError(f'{precond_type} is invalid precond_type')
+    
+    # Handle NaN/inf values and apply scaling (from original implementation)
+    dimG = G_batch.shape[1]
+    dimF = F_batch.shape[1]
+    precond_G = np.nan_to_num(precond_G, nan=1.0, posinf=1.0, neginf=1.0) * dimG
+    precond_F = np.nan_to_num(precond_F, nan=1.0, posinf=1.0, neginf=1.0) * np.sqrt(dimF)
+    
+    # Return inverse preconditioner
+    precond_inv_G = 1 / precond_G
+    precond_inv_F = 1 / precond_F
+    
+    return (precond_inv_G, precond_inv_F)
+
+
 @partial(jax.jit, static_argnames=['K_max', 'return_Gram_representation'])
 def problem_data_to_gd_trajectories(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True):
+    """
+    Compute GD trajectories and return Gram representation for DRO-PEP.
+    
+    The Gram representation matches the structure in pep_construction.py:
+    - G_half columns: [z0-zs, g0, g1, ..., gK]  (dimG = K_max + 2 columns)
+    - F: [f0-fs, f1-fs, ..., fK-fs]  (dimF = K_max + 1 entries)
+    
+    Args:
+        stepsizes: Tuple (t,) where t is scalar or vector of length K_max
+        Q: Quadratic matrix
+        z0: Initial point
+        zs: Optimal point
+        fs: Optimal function value (scalar)
+        K_max: Number of GD iterations
+        return_Gram_representation: If True, return (G, F) tuple
+    
+    Returns:
+        If return_Gram_representation=True: (G, F) where G is Gram matrix, F is function values
+        Else: (z_stack, g_stack, f_stack) raw trajectories
+    """
     t = stepsizes[0]
     t_vec = jnp.broadcast_to(t, (K_max,))
     
@@ -36,40 +120,93 @@ def problem_data_to_gd_trajectories(stepsizes, Q, z0, zs, fs, K_max, return_Gram
         return Q @ x
 
     dim = z0.shape[0]
-    # zs = jnp.zeros(dim)
-    z_stack = jnp.zeros((dim, K_max + 2))
-    g_stack = jnp.zeros((dim, K_max + 2))
-    f_stack = jnp.zeros(K_max + 2)
-
-    z_stack = z_stack.at[:, 0].set(zs)
-    z_stack = z_stack.at[:, 1].set(z0)
-    g_stack = g_stack.at[:, 0].set(g(zs))
-    g_stack = g_stack.at[:, 1].set(g(z0))
-    f_stack = f_stack.at[0].set(fs)
-    f_stack = f_stack.at[1].set(f(z0))
-
-    def body_fun(i, val):
-        z, z_stack, g_stack, f_stack = val
-        t_i = t_vec[jnp.minimum(i-1, t_vec.shape[0]-1)]
-        z = z - t_i * g(z)
-        z_stack = z_stack.at[:, i+1].set(z)
-        g_stack = g_stack.at[:, i+1].set(g(z))
-        f_stack = f_stack.at[i+1].set(f(z))
-        return (z, z_stack, g_stack, f_stack)
-
-    init_val = (z0, z_stack, g_stack, f_stack)
-    _, z_stack, g_stack, f_stack = \
-        jax.lax.fori_loop(1, K_max + 1, body_fun, init_val)
-
+    
+    # Dimensions matching pep_construction.py
+    # dimG = K_max + 2: [z0-zs, g0, g1, ..., gK]
+    # dimF = K_max + 1: [f0-fs, f1-fs, ..., fK-fs]
+    dimG = K_max + 2
+    dimF = K_max + 1
+    
+    # Store positions and gradients
+    # z_iter[k] = z_k for k = 0, 1, ..., K_max
+    z_iter = jnp.zeros((dim, K_max + 1))
+    g_iter = jnp.zeros((dim, K_max + 1))
+    f_iter = jnp.zeros(K_max + 1)
+    
+    # Initial point
+    z_iter = z_iter.at[:, 0].set(z0)
+    g_iter = g_iter.at[:, 0].set(g(z0))
+    f_iter = f_iter.at[0].set(f(z0))
+    
+    # GD iterations: z_{k+1} = z_k - t_k * g(z_k)
+    def body_fun(k, val):
+        z_iter, g_iter, f_iter, z_curr = val
+        t_k = t_vec[k]
+        z_new = z_curr - t_k * g(z_curr)
+        z_iter = z_iter.at[:, k + 1].set(z_new)
+        g_iter = g_iter.at[:, k + 1].set(g(z_new))
+        f_iter = f_iter.at[k + 1].set(f(z_new))
+        return (z_iter, g_iter, f_iter, z_new)
+    
+    init_val = (z_iter, g_iter, f_iter, z0)
+    z_iter, g_iter, f_iter, _ = jax.lax.fori_loop(0, K_max, body_fun, init_val)
+    
     if return_Gram_representation:
-        G_half = jnp.hstack([z_stack[:,:2], g_stack[:,1:]])
-        return G_half.T@G_half, f_stack
+        # Build G_half to match pep_construction.py structure:
+        # G_half columns = [z0-zs, g0, g1, ..., gK]
+        # This gives dimG = K_max + 2 columns
+        z0_minus_zs = z0 - zs  # First column: z0 - zs
+        
+        # G_half: shape (dim, dimG) = (dim, K_max + 2)
+        # Column 0: z0 - zs
+        # Columns 1 to K_max+1: g0, g1, ..., gK
+        G_half = jnp.zeros((dim, dimG))
+        G_half = G_half.at[:, 0].set(z0_minus_zs)
+        G_half = G_half.at[:, 1:].set(g_iter)  # g_iter has K_max+1 columns (g0, ..., gK)
+        
+        # Gram matrix G = G_half.T @ G_half
+        G = G_half.T @ G_half
+        
+        # Function values F = [f0-fs, f1-fs, ..., fK-fs]
+        F = f_iter - fs
+        
+        return G, F
     else:
-        return z_stack, g_stack, f_stack
+        return z_iter, g_iter, f_iter
 
 
 @partial(jax.jit, static_argnames=['K_max', 'return_Gram_representation'])
 def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True):
+    """
+    Compute Nesterov FGM trajectories and return Gram representation for DRO-PEP.
+    
+    Uses the algorithm ordering:
+        x_prev = x
+        x = y - t_k * g(y)  
+        y = x + beta_k * (x - x_prev)
+    
+    where x values are the actual iterates (subgradients evaluated at y).
+    Interpolation conditions apply only to x values since y is linear in x.
+    
+    The Gram representation matches the structure in construct_fgm_pep_data:
+    - G_half columns: [x0-xs, g0, g1, ..., gK]  (dimG = K_max + 2 columns)
+    - F: [f0-fs, f1-fs, ..., fK-fs]  (dimF = K_max + 1 entries)
+    
+    Note: g_k = g(y_{k-1}) is the gradient at the momentum point before step k.
+    
+    Args:
+        stepsizes: Tuple (t, beta) where t is scalar or vector, beta is vector
+        Q: Quadratic matrix
+        z0: Initial point (x0 = y0 = z0)
+        zs: Optimal point
+        fs: Optimal function value (scalar)
+        K_max: Number of FGM iterations
+        return_Gram_representation: If True, return (G, F) tuple
+    
+    Returns:
+        If return_Gram_representation=True: (G, F) where G is Gram matrix, F is function values
+        Else: (x_stack, g_stack, f_stack) raw trajectories
+    """
     t, beta = stepsizes[0], stepsizes[1]
     t_vec = jnp.broadcast_to(t, (K_max,))
     
@@ -80,192 +217,255 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
         return Q @ x
 
     dim = z0.shape[0]
-    z_stack = jnp.zeros((dim, K_max + 2))
-    g_stack = jnp.zeros((dim, K_max + 2))
-    f_stack = jnp.zeros(K_max + 2)
-
-    z_stack = z_stack.at[:, 0].set(zs)
-    z_stack = z_stack.at[:, 1].set(z0)
-    g_stack = g_stack.at[:, 0].set(g(zs))
-    g_stack = g_stack.at[:, 1].set(g(z0))
-    f_stack = f_stack.at[0].set(fs)
-    f_stack = f_stack.at[1].set(f(z0))
-
+    
+    # Dimensions matching GD structure
+    # dimG = K_max + 2: [x0-xs, g0, g1, ..., gK]
+    # dimF = K_max + 1: [f0-fs, f1-fs, ..., fK-fs]
+    dimG = K_max + 2
+    dimF = K_max + 1
+    
+    # Store x iterates and gradients
+    # x_iter[:, k] = x_k for k = 0, 1, ..., K_max
+    x_iter = jnp.zeros((dim, K_max + 1))
+    g_iter = jnp.zeros((dim, K_max + 1))  # g_k = g(y_{k-1}) for k >= 1
+    f_iter = jnp.zeros(K_max + 1)
+    
+    # Initial: x0 = y0 = z0
+    x0 = z0
+    y0 = z0
+    
+    x_iter = x_iter.at[:, 0].set(x0)
+    g_iter = g_iter.at[:, 0].set(g(y0))  # g0 = g(y0) = g(x0)
+    f_iter = f_iter.at[0].set(f(x0))
+    
+    # FGM iterations with new ordering:
+    # x_prev = x
+    # x = y - t_k * g(y)
+    # y = x + beta_k * (x - x_prev)
     def body_fun(k, val):
-        z, y, z_stack, g_stack, f_stack = val
-        t_k = t_vec[jnp.minimum(k-1, t_vec.shape[0]-1)]
-        beta_k = beta[k-1]
-
-        y_prev = y
-        y = z - t_k * g(z)
-        z = y + beta_k * (y - y_prev)
-
-        z_stack = z_stack.at[:, k+1].set(z)
-        g_stack = g_stack.at[:, k+1].set(g(z))
-        f_stack = f_stack.at[k+1].set(f(z))
-        return (z, y, z_stack, g_stack, f_stack)
+        x_iter, g_iter, f_iter, x, y = val
+        t_k = t_vec[k]
+        beta_k = beta[k]
+        
+        # Store gradient at momentum point y before update
+        g_y = g(y)
+        
+        # Update x (main iterate)
+        x_prev = x
+        x = y - t_k * g_y
+        
+        # Update y (momentum point)
+        y = x + beta_k * (x - x_prev)
+        
+        # Store results: x_{k+1}, g_{k+1} = g(y_k) (gradient used in next step)
+        x_iter = x_iter.at[:, k + 1].set(x)
+        g_iter = g_iter.at[:, k + 1].set(g_y)  # Gradient at y before this step
+        f_iter = f_iter.at[k + 1].set(f(x))
+        
+        return (x_iter, g_iter, f_iter, x, y)
     
-    init_val = (z0, z0, z_stack, g_stack, f_stack)
-    _, _, z_stack, g_stack, f_stack = \
-        jax.lax.fori_loop(1, K_max + 1, body_fun, init_val)
-
+    init_val = (x_iter, g_iter, f_iter, x0, y0)
+    x_iter, g_iter, f_iter, _, _ = jax.lax.fori_loop(0, K_max, body_fun, init_val)
+    
     if return_Gram_representation:
-        G_half = jnp.hstack([z_stack[:,:2], g_stack[:,1:]])
-        return G_half.T@G_half, f_stack
+        # Build G_half to match structure:
+        # G_half columns = [x0-xs, g0, g1, ..., gK]
+        # This gives dimG = K_max + 2 columns
+        x0_minus_xs = x0 - zs  # First column: x0 - xs
+        
+        # G_half: shape (dim, dimG) = (dim, K_max + 2)
+        # Column 0: x0 - xs
+        # Columns 1 to K_max+1: g0, g1, ..., gK
+        G_half = jnp.zeros((dim, dimG))
+        G_half = G_half.at[:, 0].set(x0_minus_xs)
+        G_half = G_half.at[:, 1:].set(g_iter)  # g_iter has K_max+1 columns (g0, ..., gK)
+        
+        # Gram matrix G = G_half.T @ G_half
+        G = G_half.T @ G_half
+        
+        # Function values F = [f0-fs, f1-fs, ..., fK-fs]
+        F = f_iter - fs
+        
+        return G, F
     else:
-        return z_stack, g_stack, f_stack
+        return x_iter, g_iter, f_iter
 
 
-def create_exp_cp_layer(DR, eps, G_shape, F_shape):
-    """Create expectation-based DRO cvxpylayer.
+def create_full_dro_exp_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec_shape, 
+                               c_vals, precond_inv, eps):
+    """Create expectation-based DRO cvxpylayer with constraint matrices as Parameters.
     
-    Uses list of 2D parameters (one per sample) to avoid 3D tensor canonicalization issues.
+    This enables full gradient flow through step sizes by making A_vals, b_vals, 
+    A_obj, b_obj into cvxpy Parameters (not constants).
     
     Args:
-        DR: DROReformulator object
+        M: Number of interpolation constraints
+        N: Number of samples
+        mat_shape: Shape of each A_m matrix (dimG, dimG)
+        vec_shape: Shape of each b_m vector (dimF,)
+        obj_mat_shape: Shape of A_obj (dimG, dimG)
+        obj_vec_shape: Shape of b_obj (dimF,)
+        c_vals: Constraint constants (fixed numpy array)
+        precond_inv: Tuple (precond_inv_G, precond_inv_F) for preconditioning
         eps: Wasserstein ball radius
-        G_shape: Shape of G batch (N, mat_dim, mat_dim)
-        F_shape: Shape of F batch (N, vec_dim)
     
     Returns:
-        CvxpyLayer that takes 2*N parameters: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
+        CvxpyLayer that takes parameters in order:
+        [A_0, ..., A_{M-1}, b_0, ..., b_{M-1}, A_obj, b_obj, G_0, ..., G_{N-1}, F_0, ..., F_{N-1}]
     """
-    N = G_shape[0]
-    mat_shape = G_shape[1:]  # (mat_dim, mat_dim)
-    vec_shape = F_shape[1:]  # (vec_dim,)
-
-    # Create N separate 2D parameters for G and F
-    G_params = [cp.Parameter(mat_shape) for _ in range(N)]
-    F_params = [cp.Parameter(vec_shape) for _ in range(N)]
-
-    A_vals = DR.canon.A_vals
-    b_vals = DR.canon.b_vals
-    c_vals = DR.canon.c_vals
-    A_obj = DR.canon.A_obj
-    b_obj = DR.canon.b_obj
-
-    M = A_vals.shape[0]
-    obj_mat_shape = A_obj.shape
-    obj_vec_shape = b_obj.shape
-
+    # Create parameters for constraint matrices (computed from t via JAX)
+    A_params = [cp.Parameter(mat_shape) for _ in range(M)]  # M constraint matrices
+    b_params = [cp.Parameter(vec_shape) for _ in range(M)]  # M constraint vectors
+    A_obj_param = cp.Parameter(obj_mat_shape)               # Objective matrix
+    b_obj_param = cp.Parameter(obj_vec_shape)               # Objective vector
+    
+    # Create parameters for sample Gram matrices (also computed via JAX)
+    G_params = [cp.Parameter(obj_mat_shape) for _ in range(N)]  # N sample G matrices
+    F_params = [cp.Parameter(obj_vec_shape) for _ in range(N)]  # N sample F vectors
+    
+    # Variables
     lambd = cp.Variable()
     s = cp.Variable(N)
     y = cp.Variable((N, M))
     Gz = [cp.Variable(obj_mat_shape, symmetric=True) for _ in range(N)]
     Fz = [cp.Variable(obj_vec_shape) for _ in range(N)]
-
+    
+    # Objective: minimize lambda * eps + (1/N) * sum(s)
     obj = lambd * eps + 1 / N * cp.sum(s)
+    
+    # Constraints
     constraints = [y >= 0]
-
-    G_preconditioner = np.diag(DR.canon.precond_inv[0])
-    F_preconditioner = DR.canon.precond_inv[1]
-
+    
+    # Preconditioning
+    G_preconditioner = np.diag(precond_inv[0])
+    F_preconditioner = precond_inv[1]
+    
     for i in range(N):
         G_sample, F_sample = G_params[i], F_params[i]
+        
+        # Epigraph constraint
         constraints += [- c_vals.T @ y[i] - cp.trace(G_sample @ Gz[i]) - F_sample.T @ Fz[i] <= s[i]]
-        constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz[i])]))]
-
+        
+        # SOC constraint for Wasserstein ball
+        constraints += [cp.SOC(lambd, cp.hstack([
+            cp.vec(G_preconditioner @ Gz[i] @ G_preconditioner, order='F'),
+            cp.multiply(F_preconditioner**2, Fz[i])
+        ]))]
+        
+        # L* constraint: sum_m (y[i,m] * A_m) - Gz[i] - A_obj >> 0
         LstarG = 0
         LstarF = 0
         for m in range(M):
-            Am = A_vals[m]
-            bm = b_vals[m]
-            LstarG = LstarG + y[i, m] * Am
-            LstarF = LstarF + y[i, m] * bm
+            LstarG = LstarG + y[i, m] * A_params[m]
+            LstarF = LstarF + y[i, m] * b_params[m]
+        
+        constraints += [LstarG - Gz[i] - A_obj_param >> 0]
+        constraints += [LstarF - Fz[i] - b_obj_param == 0]
     
-        constraints += [LstarG - Gz[i] - A_obj >> 0]
-        constraints += [LstarF - Fz[i] - b_obj == 0]
     prob = cp.Problem(cp.Minimize(obj), constraints)
-
-    # Parameters list: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
-    all_params = G_params + F_params
+    
+    # Parameters ordered: A_params, b_params, A_obj, b_obj, G_params, F_params
+    all_params = A_params + b_params + [A_obj_param, b_obj_param] + G_params + F_params
+    
     return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s])
 
 
-def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
-    """Create CVaR-based DRO cvxpylayer.
+def create_full_dro_cvar_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec_shape,
+                                c_vals, precond_inv, eps, alpha):
+    """Create CVaR-based DRO cvxpylayer with constraint matrices as Parameters.
     
-    Uses list of 2D parameters (one per sample) to avoid 3D tensor canonicalization issues.
+    This enables full gradient flow through step sizes by making A_vals, b_vals, 
+    A_obj, b_obj into cvxpy Parameters (not constants).
     
     Args:
-        DR: DROReformulator object
+        M: Number of interpolation constraints
+        N: Number of samples
+        mat_shape: Shape of each A_m matrix (dimG, dimG)
+        vec_shape: Shape of each b_m vector (dimF,)
+        obj_mat_shape: Shape of A_obj (dimG, dimG)
+        obj_vec_shape: Shape of b_obj (dimF,)
+        c_vals: Constraint constants (fixed numpy array)
+        precond_inv: Tuple (precond_inv_G, precond_inv_F) for preconditioning
         eps: Wasserstein ball radius
         alpha: CVaR confidence level
-        G_shape: Shape of G batch (N, mat_dim, mat_dim)
-        F_shape: Shape of F batch (N, vec_dim)
     
     Returns:
-        CvxpyLayer that takes 2*N parameters: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
+        CvxpyLayer that takes parameters in order:
+        [A_0, ..., A_{M-1}, b_0, ..., b_{M-1}, A_obj, b_obj, G_0, ..., G_{N-1}, F_0, ..., F_{N-1}]
     """
     alpha_inv = 1 / alpha
-
-    N = G_shape[0]
-    mat_shape = G_shape[1:]  # (mat_dim, mat_dim)
-    vec_shape = F_shape[1:]  # (vec_dim,)
-
-    # Create N separate 2D parameters for G and F
-    G_params = [cp.Parameter(mat_shape) for _ in range(N)]
-    F_params = [cp.Parameter(vec_shape) for _ in range(N)]
-
-    A_vals = DR.canon.A_vals
-    b_vals = DR.canon.b_vals
-    c_vals = DR.canon.c_vals
-    A_obj = DR.canon.A_obj
-    b_obj = DR.canon.b_obj
-
-    M = A_vals.shape[0]
-    obj_mat_shape = A_obj.shape
-    obj_vec_shape = b_obj.shape
-
+    
+    # Create parameters for constraint matrices (computed from t via JAX)
+    A_params = [cp.Parameter(mat_shape) for _ in range(M)]
+    b_params = [cp.Parameter(vec_shape) for _ in range(M)]
+    A_obj_param = cp.Parameter(obj_mat_shape)
+    b_obj_param = cp.Parameter(obj_vec_shape)
+    
+    # Create parameters for sample Gram matrices
+    G_params = [cp.Parameter(obj_mat_shape) for _ in range(N)]
+    F_params = [cp.Parameter(obj_vec_shape) for _ in range(N)]
+    
+    # Variables
     lambd = cp.Variable()
     s = cp.Variable(N)
+    t_var = cp.Variable()
     y1 = cp.Variable((N, M))
     y2 = cp.Variable((N, M))
-    t = cp.Variable()
-
+    
     Gz1 = [cp.Variable(obj_mat_shape, symmetric=True) for _ in range(N)]
     Fz1 = [cp.Variable(obj_vec_shape) for _ in range(N)]
     Gz2 = [cp.Variable(obj_mat_shape, symmetric=True) for _ in range(N)]
     Fz2 = [cp.Variable(obj_vec_shape) for _ in range(N)]
-
+    
+    # Objective
     obj = lambd * eps + 1 / N * cp.sum(s)
+    
+    # Constraints
     constraints = [y1 >= 0, y2 >= 0]
-
-    G_preconditioner = np.diag(DR.canon.precond_inv[0])
-    F_preconditioner = DR.canon.precond_inv[1]
-
+    
+    # Preconditioning
+    G_preconditioner = np.diag(precond_inv[0])
+    F_preconditioner = precond_inv[1]
+    
     for i in range(N):
         G_sample, F_sample = G_params[i], F_params[i]
-        constraints += [t - c_vals.T @ y1[i] - cp.trace(G_sample @ Gz1[i]) - F_sample.T @ Fz1[i] <= s[i]]
-        constraints += [-(alpha_inv - 1) * t - c_vals.T @ y2[i] - cp.trace(G_sample @ Gz2[i]) - F_sample.T @ Fz2[i] <= s[i]]
-
-        constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz1[i])]))]
-        constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz2[i])]))]
-
+        
+        # CVaR epigraph constraints
+        constraints += [t_var - c_vals.T @ y1[i] - cp.trace(G_sample @ Gz1[i]) - F_sample.T @ Fz1[i] <= s[i]]
+        constraints += [-(alpha_inv - 1) * t_var - c_vals.T @ y2[i] - cp.trace(G_sample @ Gz2[i]) - F_sample.T @ Fz2[i] <= s[i]]
+        
+        # SOC constraints
+        constraints += [cp.SOC(lambd, cp.hstack([
+            cp.vec(G_preconditioner @ Gz1[i] @ G_preconditioner, order='F'),
+            cp.multiply(F_preconditioner**2, Fz1[i])
+        ]))]
+        constraints += [cp.SOC(lambd, cp.hstack([
+            cp.vec(G_preconditioner @ Gz2[i] @ G_preconditioner, order='F'),
+            cp.multiply(F_preconditioner**2, Fz2[i])
+        ]))]
+        
+        # L* constraints with parameterized A_vals, b_vals
         y1A_adj = 0
         y2A_adj = 0
         y1b_adj = 0
         y2b_adj = 0
-
+        
         for m in range(M):
-            Am = A_vals[m]
-            bm = b_vals[m]
-
-            y1A_adj = y1A_adj + y1[i, m] * Am
-            y2A_adj = y2A_adj + y2[i, m] * Am
-
-            y1b_adj = y1b_adj + y1[i, m] * bm
-            y2b_adj = y2b_adj + y2[i, m] * bm
-
+            y1A_adj = y1A_adj + y1[i, m] * A_params[m]
+            y2A_adj = y2A_adj + y2[i, m] * A_params[m]
+            y1b_adj = y1b_adj + y1[i, m] * b_params[m]
+            y2b_adj = y2b_adj + y2[i, m] * b_params[m]
+        
         constraints += [y1A_adj - Gz1[i] >> 0]
         constraints += [y1b_adj - Fz1[i] == 0]
-        constraints += [y2A_adj - Gz2[i] - alpha_inv * A_obj >> 0]
-        constraints += [y2b_adj - Fz2[i] - alpha_inv * b_obj == 0]
-
+        constraints += [y2A_adj - Gz2[i] - alpha_inv * A_obj_param >> 0]
+        constraints += [y2b_adj - Fz2[i] - alpha_inv * b_obj_param == 0]
+    
     prob = cp.Problem(cp.Minimize(obj), constraints)
     
-    # Parameters list: [G_0, G_1, ..., G_{N-1}, F_0, F_1, ..., F_{N-1}]
-    all_params = G_params + F_params
+    # Parameters ordered: A_params, b_params, A_obj, b_obj, G_params, F_params
+    all_params = A_params + b_params + [A_obj_param, b_obj_param] + G_params + F_params
+    
     return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s])
 
 
@@ -273,35 +473,6 @@ def create_cvar_cp_layer(DR, eps, alpha, G_shape, F_shape):
 def dro_pep_obj_jax(eps, lambd_star, s_star):
     N = s_star.shape[0]
     return lambd_star * eps + 1 / N * jnp.sum(s_star)
-
-
-def create_lpep_cp_layer(DR):
-    A_vals = DR.canon.A_vals
-    b_vals = DR.canon.b_vals
-    c_vals = DR.canon.c_vals
-    A_obj = DR.canon.A_obj
-    b_obj = DR.canon.b_obj
-
-    M = A_vals.shape[0]
-    obj_mat_shape = A_obj.shape
-    obj_vec_shape = b_obj.shape
-
-    lambd = cp.Variable()
-    y = cp.Variable(M)
-
-    obj = -c_vals.T @ y
-    constraints = [y >= 0]
-
-    LstarG = 0
-    LstarF = 0
-    for m in range(M):
-        Am = A_vals[m]
-        bm = b_vals[m]
-        LstarG = LstarG + y[m] * Am
-        LstarF = LstarF + y[m] * bm
-
-    constraints += [LstarG - A_obj >> 0]
-    constraints += [LstarF - b_obj == 0]
 
 
 # if cfg.pep_obj == 'obj_val':
