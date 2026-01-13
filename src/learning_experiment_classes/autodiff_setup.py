@@ -275,6 +275,35 @@ def dro_pep_obj_jax(eps, lambd_star, s_star):
     return lambd_star * eps + 1 / N * jnp.sum(s_star)
 
 
+def create_lpep_cp_layer(DR):
+    A_vals = DR.canon.A_vals
+    b_vals = DR.canon.b_vals
+    c_vals = DR.canon.c_vals
+    A_obj = DR.canon.A_obj
+    b_obj = DR.canon.b_obj
+
+    M = A_vals.shape[0]
+    obj_mat_shape = A_obj.shape
+    obj_vec_shape = b_obj.shape
+
+    lambd = cp.Variable()
+    y = cp.Variable(M)
+
+    obj = -c_vals.T @ y
+    constraints = [y >= 0]
+
+    LstarG = 0
+    LstarF = 0
+    for m in range(M):
+        Am = A_vals[m]
+        bm = b_vals[m]
+        LstarG = LstarG + y[m] * Am
+        LstarF = LstarF + y[m] * bm
+
+    constraints += [LstarG - A_obj >> 0]
+    constraints += [LstarF - b_obj == 0]
+
+
 # if cfg.pep_obj == 'obj_val':
 #         problem.set_performance_metric(f_stack[-1] - fs)
 #     elif obj == 'grad_sq_norm':
