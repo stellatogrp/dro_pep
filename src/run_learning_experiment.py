@@ -9,6 +9,7 @@ Usage:
     Local:   python run_learning_experiment.py Quad local
     Cluster: python run_learning_experiment.py Quad cluster
 """
+from site import execsitecustomize
 import hydra
 import logging
 import os
@@ -40,15 +41,73 @@ def cartesian_product(options):
     return [list(combo) for combo in product(*options)]
 
 
+def conditional_product(common_options, conditional_groups):
+    """
+    Create cartesian product with conditional dependencies.
+    
+    Args:
+        common_options: List of lists - options included in ALL combinations
+            e.g. [['stepsize_type=scalar', 'stepsize_type=vector']]
+        
+        conditional_groups: List of dicts, where each dict represents a group
+            of parameters that must vary together. Each dict maps a "base" option
+            to dependent options that only apply when that base is selected.
+            e.g. [
+                {
+                    'mu=0': ['K_max=3', 'K_max=7', 'K_max=15', 'K_max=31'],
+                    'mu=1': ['K_max=4', 'K_max=8', 'K_max=16', 'K_max=32'],
+                }
+            ]
+    
+    Returns:
+        List of lists representing all valid combinations
+    """
+    # First, expand each conditional group into (base, dependent) pairs
+    conditional_pairs = []
+    for group in conditional_groups:
+        pairs = []
+        for base, dependents in group.items():
+            for dep in dependents:
+                pairs.append([base, dep])  # Each pair becomes one "option" in the product
+        conditional_pairs.append(pairs)
+    
+    # Now cartesian product: common_options × flattened conditional pairs
+    all_options = common_options + conditional_pairs
+    
+    results = []
+    for combo in product(*all_options):
+        # Flatten: some elements are strings (from common), some are lists (from conditional)
+        flat = []
+        for item in combo:
+            if isinstance(item, list):
+                flat.extend(item)
+            else:
+                flat.append(item)
+        results.append(flat)
+    
+    return results
+
+
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
-    ['alg=vanilla_gd', 'alg=nesterov_gd'],
-    ['sgda_type=vanilla_sgda', 'sgda_type=adamw'],
-    ['stepsize_type=scalar', 'stepsize_type=vector'],
+    ['alg=vanilla_gd', 'alg=nesterov_fgm'],
 ]
 
-# Parameter combinations for Slurm array jobs (cartesian product of all options)
-Learn_Quad_params = cartesian_product(Quad_options)
+# Parameter combinations for Slurm array jobs
+# Uses conditional_product to tie mu and K_max values together
+Learn_Quad_params = conditional_product(
+    common_options=Quad_options,
+    conditional_groups=[
+        {
+            'mu=0': ['K_max=[3,7,15,31]'],
+            'mu=1': ['K_max=[4,8,16,32]'],
+        },
+        {
+            'stepsize_type=scalar': ['vector_init=fixed'],
+            'stepsize_type=vector': ['vector_init=fixed', 'vector_init=silver'],
+        },
+    ]
+)
 
 func_driver_map = {
     'Quad': quad_driver,
@@ -60,6 +119,7 @@ base_dir_map = {
 
 
 def main():
+    print('len of Learn_Quad_params:', len(Learn_Quad_params))
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')

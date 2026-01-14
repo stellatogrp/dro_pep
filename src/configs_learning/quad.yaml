@@ -23,7 +23,7 @@ vector_init: "fixed" # "fixed" or "silver"
 K_max: [8]
 
 # Optimization hyperparameters
-pep_obj: "obj_val"
+pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
 dro_obj: "cvar"  # "expectation" or "cvar"
 sdp_backend: "clarabel"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
 eps: 0.1
