@@ -23,6 +23,7 @@ K_max: [4, 8]
 # Optimization hyperparameters
 pep_obj: "obj_val"
 dro_obj: "expectation"  # "expectation" or "cvar"
+sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
 eps: 0.1
 alpha: 0.1
 
