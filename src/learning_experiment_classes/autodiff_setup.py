@@ -185,14 +185,12 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
         x = y - t_k * g(y)  
         y = x + beta_k * (x - x_prev)
     
-    where x values are the actual iterates (subgradients evaluated at y).
-    Interpolation conditions apply only to x values since y is linear in x.
+    Uses repY representation where gradients are evaluated at y points.
+    x_K is added as an extra point for the objective.
     
     The Gram representation matches the structure in construct_fgm_pep_data:
-    - G_half columns: [x0-xs, g0, g1, ..., gK]  (dimG = K_max + 2 columns)
-    - F: [f0-fs, f1-fs, ..., fK-fs]  (dimF = K_max + 1 entries)
-    
-    Note: g_k = g(y_{k-1}) is the gradient at the momentum point before step k.
+    - G_half columns: [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]  (dimG = K_max + 3 columns)
+    - F: [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]  (dimF = K_max + 2 entries)
     
     Args:
         stepsizes: Tuple (t, beta) where t is scalar or vector, beta is vector
@@ -205,7 +203,7 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
     
     Returns:
         If return_Gram_representation=True: (G, F) where G is Gram matrix, F is function values
-        Else: (x_stack, g_stack, f_stack) raw trajectories
+        Else: (y_iter, g_iter, f_iter, x_K) raw trajectories
     """
     t, beta = stepsizes[0], stepsizes[1]
     t_vec = jnp.broadcast_to(t, (K_max,))
@@ -218,36 +216,36 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
 
     dim = z0.shape[0]
     
-    # Dimensions matching GD structure
-    # dimG = K_max + 2: [x0-xs, g0, g1, ..., gK]
-    # dimF = K_max + 1: [f0-fs, f1-fs, ..., fK-fs]
+    # Dimensions matching new PEP structure (same as GD!)
+    # dimG = K_max + 2: [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]
+    #   = 1 position column + K y-gradient columns + 1 x_K gradient = K+2
+    # dimF = K_max + 1: [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]
+    #   = K y-function values + 1 x_K function value = K+1
     dimG = K_max + 2
     dimF = K_max + 1
     
-    # Store x iterates and gradients
-    # x_iter[:, k] = x_k for k = 0, 1, ..., K_max
-    x_iter = jnp.zeros((dim, K_max + 1))
-    g_iter = jnp.zeros((dim, K_max + 1))  # g_k = g(y_{k-1}) for k >= 1
-    f_iter = jnp.zeros(K_max + 1)
+    # Store y iterates (y0, y1, ..., y_{K-1}) and their gradients
+    y_iter = jnp.zeros((dim, K_max))  # y_0 to y_{K-1}
+    g_iter = jnp.zeros((dim, K_max))  # g(y_0) to g(y_{K-1})
+    f_y_iter = jnp.zeros(K_max)       # f(y_0) to f(y_{K-1})
     
-    # Initial: x0 = y0 = z0
-    x0 = z0
+    # Initial: y0 = x0 = z0
     y0 = z0
+    x0 = z0
     
-    x_iter = x_iter.at[:, 0].set(x0)
-    g_iter = g_iter.at[:, 0].set(g(y0))  # g0 = g(y0) = g(x0)
-    f_iter = f_iter.at[0].set(f(x0))
+    y_iter = y_iter.at[:, 0].set(y0)
+    g_iter = g_iter.at[:, 0].set(g(y0))  # g(y0)
+    f_y_iter = f_y_iter.at[0].set(f(y0))
     
-    # FGM iterations with new ordering:
-    # x_prev = x
-    # x = y - t_k * g(y)
-    # y = x + beta_k * (x - x_prev)
+    # FGM iterations:
+    # x = y - t * g(y)
+    # y_new = x + beta * (x - x_prev)
     def body_fun(k, val):
-        x_iter, g_iter, f_iter, x, y = val
+        y_iter, g_iter, f_y_iter, x, y = val
         t_k = t_vec[k]
         beta_k = beta[k]
         
-        # Store gradient at momentum point y before update
+        # Compute gradient at current y
         g_y = g(y)
         
         # Update x (main iterate)
@@ -257,38 +255,66 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
         # Update y (momentum point)
         y = x + beta_k * (x - x_prev)
         
-        # Store results: x_{k+1}, g_{k+1} = g(y_k) (gradient used in next step)
-        x_iter = x_iter.at[:, k + 1].set(x)
-        g_iter = g_iter.at[:, k + 1].set(g_y)  # Gradient at y before this step
-        f_iter = f_iter.at[k + 1].set(f(x))
+        # Store y_{k+1} and g(y_{k+1}) for k = 0, ..., K-2
+        # Note: y_iter[:, k+1] = y_{k+1}, but we only have K-1 more slots after y_0
+        # After iteration k, we have computed y_{k+1}
+        # For k=0..K-2, store y_{k+1} at position k+1
+        # For k=K-1, we compute x_K but y_K is not needed
         
-        return (x_iter, g_iter, f_iter, x, y)
+        # Use jax.lax.cond to avoid storing past the end
+        def store_y(val):
+            y_iter, g_iter, f_y_iter = val
+            y_iter = y_iter.at[:, k + 1].set(y)
+            g_iter = g_iter.at[:, k + 1].set(g(y))
+            f_y_iter = f_y_iter.at[k + 1].set(f(y))
+            return y_iter, g_iter, f_y_iter
+        
+        def no_store(val):
+            return val
+        
+        y_iter, g_iter, f_y_iter = jax.lax.cond(
+            k < K_max - 1,
+            store_y,
+            no_store,
+            (y_iter, g_iter, f_y_iter)
+        )
+        
+        return (y_iter, g_iter, f_y_iter, x, y)
     
-    init_val = (x_iter, g_iter, f_iter, x0, y0)
-    x_iter, g_iter, f_iter, _, _ = jax.lax.fori_loop(0, K_max, body_fun, init_val)
+    init_val = (y_iter, g_iter, f_y_iter, x0, y0)
+    y_iter, g_iter, f_y_iter, x_K, y_final = jax.lax.fori_loop(0, K_max, body_fun, init_val)
+    
+    # Compute x_K gradient and function value
+    g_xK = g(x_K)
+    f_xK = f(x_K)
     
     if return_Gram_representation:
         # Build G_half to match structure:
-        # G_half columns = [x0-xs, g0, g1, ..., gK]
-        # This gives dimG = K_max + 2 columns
-        x0_minus_xs = x0 - zs  # First column: x0 - xs
+        # G_half columns = [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]
+        # This gives dimG = K_max + 3 columns
+        y0_minus_ys = y0 - zs  # First column: y0 - ys
         
-        # G_half: shape (dim, dimG) = (dim, K_max + 2)
-        # Column 0: x0 - xs
-        # Columns 1 to K_max+1: g0, g1, ..., gK
+        # G_half: shape (dim, dimG) = (dim, K_max + 3)
+        # Column 0: y0 - ys
+        # Columns 1 to K: g(y_0), g(y_1), ..., g(y_{K-1})
+        # Column K+1: g(x_K)
         G_half = jnp.zeros((dim, dimG))
-        G_half = G_half.at[:, 0].set(x0_minus_xs)
-        G_half = G_half.at[:, 1:].set(g_iter)  # g_iter has K_max+1 columns (g0, ..., gK)
+        G_half = G_half.at[:, 0].set(y0_minus_ys)
+        G_half = G_half.at[:, 1:K_max+1].set(g_iter)  # g_iter has K columns (g(y_0), ..., g(y_{K-1}))
+        G_half = G_half.at[:, K_max+1].set(g_xK)      # g(x_K) as last column
         
         # Gram matrix G = G_half.T @ G_half
         G = G_half.T @ G_half
         
-        # Function values F = [f0-fs, f1-fs, ..., fK-fs]
-        F = f_iter - fs
+        # Function values F = [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]
+        # f_y_iter has K entries, then append f_xK
+        F = jnp.concatenate([f_y_iter - fs, jnp.array([f_xK - fs])])
         
         return G, F
     else:
-        return x_iter, g_iter, f_iter
+        return y_iter, g_iter, f_y_iter, x_K
+
+
 
 
 def create_full_dro_exp_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec_shape, 

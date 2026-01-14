@@ -517,16 +517,17 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     
     if learning_framework == 'ldro-pep':
         # For ldro-pep, we need to create the full_dro_layer once with correct dimensions
-        # Dimensions: M constraints, N samples, dimG x dimG matrices, dimF vectors
-        # dimG = K_max + 2, dimF = K_max + 1 (from pep_construction.py)
+        # Dimensions are the same for both GD and FGM:
+        # - dimG = K_max + 2 (position column + K+1 gradient columns)
+        # - dimF = K_max + 1 (K+1 function value entries)
         dimG = K_max + 2
         dimF = K_max + 1
+        n_points = K_max + 1  # Algorithm points (excluding optimal point)
+        
         mat_shape = (dimG, dimG)
         vec_shape = (dimF,)
         
-        # M = number of interpolation constraints = (K_max+2) * (K_max+1) + 1 (initial condition)
-        # From smooth_strongly_convex_interp: (n_points+1) * n_points where n_points = K_max+1
-        n_points = K_max + 1
+        # M = number of interpolation constraints = (n_points+1) * n_points + 1 (initial condition)
         M_interp = (n_points + 1) * n_points  # Interpolation constraints
         M = M_interp + 1  # Plus initial condition
         

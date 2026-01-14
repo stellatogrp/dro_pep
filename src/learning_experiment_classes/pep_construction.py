@@ -212,7 +212,13 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
         x = y - t_k * g(y)
         y = x + beta_k * (x - x_prev)
     
-    where x values are the actual iterates. Interpolation conditions apply to x values only.
+    Uses repY representation where interpolation conditions are written for y iterates:
+    - repY[k] = y_k (where gradients are evaluated)
+    - repG[k] = g(y_k) (gradient at the same point)
+    - repF[k] = f(y_k)
+    
+    x_K is added as an extra point for the objective, computed as:
+        x_K = y_{K-1} - t_{K-1} * g(y_{K-1})
     
     Args:
         t: Step sizes - scalar (same for all iterations) or vector of length K_max
@@ -223,113 +229,168 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
         K_max: Number of FGM iterations
         pep_obj: Performance metric type:
             'obj_val': f(xK) - f(xs)
-            'grad_sq_norm': ||gK||^2
+            'grad_sq_norm': ||g(xK)||^2
             'opt_dist_sq_norm': ||xK - xs||^2
     
     Returns:
         pep_data: Tuple (A_obj, b_obj, A_vals, b_vals, c_vals,
                         PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
         
-    Representation structure (same as GD):
-        - dimG = K_max + 2: columns for [x0-xs, g0, g1, ..., gK]
-        - dimF = K_max + 1: entries for [f0-fs, f1-fs, ..., fK-fs]
-        - Points: x0, x1, ..., xK, xs (optimal point last, index K_max+1)
-        
-    Note: g_k in the representation is the gradient g(y_{k-1}) used in iteration k.
+    Representation structure:
+        - dimG = K_max + 2: columns for [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]
+          (1 column for y0-ys, K columns for y gradients, but the last gradient is for x_K)
+          Wait - actually we only have K y-gradients and 1 x_K gradient = K+1 gradients + 1 position = K+2
+        - dimF = K_max + 1: entries for [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]
+          (K entries for y function values + 1 for x_K = K+1)
+        - Points: y0, y1, ..., y_{K-1}, x_K, ys (n_points = K_max + 1, plus ys)
     """
     # Broadcast t to vector if scalar
     t_vec = jnp.broadcast_to(t, (K_max,))
     
-    # Dimensions for Gram representation (same as GD)
-    dimG = K_max + 2  # [x0-xs, g0, g1, ..., gK]
-    dimF = K_max + 1  # [f0-fs, f1-fs, ..., fK-fs]
+    # Dimensions for Gram representation
+    # We have K y-points (y0 to y_{K-1}) and x_K, but they share gradient basis:
+    # [y0-ys, g(y0), g(y1), ..., g(y_{K-1})] = 1 + K columns
+    # But we also need g(x_K) as a new basis vector (gradient at x_K, not at a y point)
+    # Wait - let's think about what gradients we actually evaluate:
+    # - g(y_0), g(y_1), ..., g(y_{K-1}) for the y points
+    # - g(x_K) for the x_K point
+    # That's K + 1 gradient basis vectors + 1 position basis = K + 2 total
+    # 
+    # But actually, in the iteration: at step k, we use g(y_k) to compute x_{k+1}
+    # For K iterations (k=0..K-1), we have gradients g(y_0)..g(y_{K-1}) = K gradients
+    # Plus g(x_K) = K+1 gradients total
+    # Plus y0-ys position = K+2 total
+    # 
+    # However, for dimF: we have f(y_0)..f(y_{K-1}) = K values + f(x_K) = K+1 total
+    dimG = K_max + 2  # [y0-ys, g(y0), ..., g(y_{K-1})]  (K gradients + 1 position = K+1... wait)
+    # Let me recount carefully:
+    # Index 0: y0-ys
+    # Index 1: g(y_0)
+    # ...
+    # Index K: g(y_{K-1})
+    # That's K+1 indices (0 to K), so dimG should be K+1 if we DON'T include g(x_K)
+    # But we DO want g(x_K) for the objective ||g(x_K)||^2
+    # So: Index K+1: g(x_K) -> dimG = K+2
+    #
+    # For F:
+    # Index 0: f(y_0) - fs
+    # ...
+    # Index K-1: f(y_{K-1}) - fs  
+    # Index K: f(x_K) - fs
+    # That's K+1 indices, so dimF = K+1
+    dimG = K_max + 2  # [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)] ... but that's 1 + K + 1 = K+2? No:
+    # y0-ys: 1 column
+    # g(y_0) to g(y_{K-1}): K columns
+    # g(x_K): 1 column
+    # Total: 1 + K + 1 = K + 2 ✓
+    dimF = K_max + 1  # [f(y0)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs] = K + 1 entries
     
     # Identity matrices for symbolic representation
     eyeG = jnp.eye(dimG)
     eyeF = jnp.eye(dimF)
     
-    # Number of points: K_max + 2 (x0, x1, ..., xK, xs)
-    n_points = K_max + 1  # Algorithm points (excluding xs)
+    # Number of algorithm points (y0, ..., y_{K-1}, x_K) = K + 1
+    # Total points including ys: K + 2
+    n_points = K_max + 1  # Algorithm points (excluding ys)
     
     # Initialize arrays for representations
-    repX = jnp.zeros((n_points + 1, dimG))  # +1 for xs
+    # repY[0..K-1] = y_0..y_{K-1}, repY[K] = x_K, repY[K+1] = ys
+    repY = jnp.zeros((n_points + 1, dimG))  # +1 for ys
     repG = jnp.zeros((n_points + 1, dimG))
     repF = jnp.zeros((n_points + 1, dimF))
     
     # Basis vectors:
-    # x0 - xs is at index 0
-    # g0, g1, ..., gK are at indices 1, 2, ..., K_max+1
+    # y0 - ys is at index 0 in eyeG
+    # g(y0), g(y1), ..., g(y_{K-1}) are at indices 1, 2, ..., K
+    # There's no room for g(x_K) - we need to handle this differently!
+    # Actually with dimG = K+2, index K+1 is for g(x_K)... but that's only K+2 columns
+    # Index 0: y0-ys
+    # Index 1..K: g(y_0)..g(y_{K-1}) 
+    # Index K+1: g(x_K)
+    # This requires dimG = K+2 ✓
     
-    # Initial point x0 = y0
-    x0 = eyeG[0, :]  # x0 - xs (relative position)
-    g0 = eyeG[1, :]  # g0 = g(y0) = g(x0)
-    f0 = eyeF[0, :]  # f0 - fs
+    # Initial: y0 = x0, so y0 - ys is the first basis vector
+    y0 = eyeG[0, :]  # y0 - ys (relative position)
+    g_y0 = eyeG[1, :]  # g(y0)
+    f_y0 = eyeF[0, :]  # f(y0) - fs
     
-    repX = repX.at[0].set(x0)
-    repG = repG.at[0].set(g0)
-    repF = repF.at[0].set(f0)
+    repY = repY.at[0].set(y0)
+    repG = repG.at[0].set(g_y0)
+    repF = repF.at[0].set(f_y0)
     
-    # FGM iterations with symbolic updates
-    # x_prev = x
-    # x = y - t_k * g(y)  -> g(y) is the k-th gradient basis vector
-    # y = x + beta_k * (x - x_prev)
+    # FGM iterations to build y sequence symbolically
+    # Algorithm: x = y - t * g(y), then y_new = x + beta * (x - x_prev)
+    # We track y_k and x_k symbolically
     def fgm_step(k, carry):
-        repX, x_prev, y_prev = carry
+        repY, x_prev, y_prev = carry
         t_k = t_vec[k]
         beta_k = beta[k]
-        g_k = eyeG[k + 1, :]  # g_k = g(y_{k-1}) at index k+1 in eyeG
+        g_yk = eyeG[k + 1, :]  # g(y_k) is at index k+1 in eyeG
         
-        # Update x (main iterate): x = y - t_k * g(y)
-        x_new = y_prev - t_k * g_k
+        # Update x: x_{k+1} = y_k - t_k * g(y_k)
+        x_new = y_prev - t_k * g_yk
         
-        # Store x_{k+1}
-        repX = repX.at[k + 1].set(x_new)
-        
-        # Update y (momentum): y = x + beta_k * (x - x_prev)
+        # Update y: y_{k+1} = x_{k+1} + beta_k * (x_{k+1} - x_k)
         y_new = x_new + beta_k * (x_new - x_prev)
         
-        return (repX, x_new, y_new)
+        # Store y_{k+1} (for k=0..K-2, we store y_1..y_{K-1})
+        # Note: repY[0] = y_0, so repY[k+1] = y_{k+1}
+        repY = repY.at[k + 1].set(y_new)
+        
+        return (repY, x_new, y_new)
     
-    # Initial y0 = x0
-    y0 = x0
-    repX, x_final, y_final = jax.lax.fori_loop(0, K_max, fgm_step, (repX, x0, y0))
+    # Initial x0 = y0
+    x0 = y0
+    repY, x_final, y_final = jax.lax.fori_loop(0, K_max, fgm_step, (repY, x0, y0))
     
-    # Set gradient representations (each g_k is a basis vector)
-    def set_gradients(k, repG):
-        g_k = eyeG[k + 1, :]  # g_k at index k+1
-        repG = repG.at[k].set(g_k)
+    # x_K is x_final from the last iteration, stored at index K_max (position n_points - 1 = K)
+    # Actually after K iterations, x_final = x_K
+    repY = repY.at[K_max].set(x_final)
+    
+    # Set gradient representations for y points (y0, ..., y_{K-1})
+    # repG[k] = g(y_k) for k = 0, ..., K-1
+    def set_y_gradients(k, repG):
+        g_yk = eyeG[k + 1, :]  # g(y_k) at index k+1
+        repG = repG.at[k].set(g_yk)
         return repG
     
-    repG = jax.lax.fori_loop(0, n_points, set_gradients, repG)
+    repG = jax.lax.fori_loop(0, K_max, set_y_gradients, repG)
     
-    # Set function value representations (each f_k is a basis vector)
+    # g(x_K) is a new basis vector at index K_max + 1
+    g_xK = eyeG[K_max + 1, :]
+    repG = repG.at[K_max].set(g_xK)
+    
+    # Set function value representations
+    # repF[k] = f(y_k) - fs for k = 0, ..., K-1
+    # repF[K] = f(x_K) - fs
     def set_fvals(k, repF):
-        f_k = eyeF[k, :]  # f_k at index k
+        f_k = eyeF[k, :]  # f(y_k) at index k for k < K, or f(x_K) at index K
         repF = repF.at[k].set(f_k)
         return repF
     
     repF = jax.lax.fori_loop(0, n_points, set_fvals, repF)
     
-    # Optimal point xs: all zeros in relative representation
-    xs = jnp.zeros(dimG)  # xs - xs = 0
-    gs = jnp.zeros(dimG)  # gs = 0
-    fs = jnp.zeros(dimF)  # fs - fs = 0
+    # Optimal point ys: all zeros in relative representation
+    ys = jnp.zeros(dimG)  # ys - ys = 0
+    gs = jnp.zeros(dimG)  # g(ys) = 0
+    fs = jnp.zeros(dimF)  # f(ys) - fs = 0
     
-    repX = repX.at[n_points].set(xs)
+    repY = repY.at[n_points].set(ys)
     repG = repG.at[n_points].set(gs)
     repF = repF.at[n_points].set(fs)
     
-    # Compute interpolation conditions (same as GD)
+    # Compute interpolation conditions using repY, repG, repF
+    # These are now valid (y_k, g(y_k), f(y_k)) triplets
     A_vals, b_vals = smooth_strongly_convex_interp(
-        repX, repG, repF, mu, L, n_points
+        repY, repG, repF, mu, L, n_points
     )
     
     # c_vals: constant terms (all zeros for standard interp)
     num_constraints = A_vals.shape[0]
     c_vals = jnp.zeros(num_constraints)
     
-    # Initial condition: ||x0 - xs||^2 <= R^2
-    A_init = jnp.outer(repX[0], repX[0])
+    # Initial condition: ||x0 - xs||^2 = ||y0 - ys||^2 <= R^2
+    A_init = jnp.outer(repY[0], repY[0])
     b_init = jnp.zeros(dimF)
     c_init = -R ** 2
     
@@ -338,19 +399,22 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     b_vals = jnp.concatenate([b_vals, b_init[None, :]], axis=0)
     c_vals = jnp.concatenate([c_vals, jnp.array([c_init])], axis=0)
     
-    # Objective: performance metric at final iterate xK
-    xK = repX[K_max]
-    gK = repG[K_max]
-    fK = repF[K_max]
+    # Objective: performance metric at final iterate x_K
+    rep_xK = repY[K_max]  # x_K representation
+    g_xK_rep = repG[K_max]  # g(x_K) representation
+    f_xK = repF[K_max]  # f(x_K) - fs representation
     
     if pep_obj == 'obj_val':
+        # Minimize f(xK) - f(xs) = fK
         A_obj = jnp.zeros((dimG, dimG))
-        b_obj = fK
+        b_obj = f_xK
     elif pep_obj == 'grad_sq_norm':
-        A_obj = jnp.outer(gK, gK)
+        # Minimize ||g(xK)||^2 = <g(xK), g(xK)>
+        A_obj = jnp.outer(g_xK_rep, g_xK_rep)
         b_obj = jnp.zeros(dimF)
     elif pep_obj == 'opt_dist_sq_norm':
-        A_obj = jnp.outer(xK, xK)
+        # Minimize ||xK - xs||^2 = <xK, xK> (since xs = 0 in relative coords)
+        A_obj = jnp.outer(rep_xK, rep_xK)
         b_obj = jnp.zeros(dimF)
     else:
         raise ValueError(f"Unknown pep_obj: {pep_obj}")
@@ -365,3 +429,4 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
                 PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
     
     return pep_data
+
