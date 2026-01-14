@@ -165,3 +165,65 @@ class TestStepsizeProjection:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestAdamWMin:
+    """Tests for AdamWMin minimization-only optimizer."""
+    
+    def test_step_returns_single_value(self):
+        """Verify step() returns only x_new (not a tuple)."""
+        from learning_experiment_classes.adam_optimizers import AdamWMin
+        
+        x_params = [jnp.array([1.0, 2.0, 3.0])]
+        optimizer = AdamWMin(x_params, lr=0.1)
+        
+        grads_x = [jnp.array([0.1, 0.1, 0.1])]
+        x_new = optimizer.step(x_params, grads_x)
+        
+        assert isinstance(x_new, list), "step() should return a list"
+        assert len(x_new) == 1, "Should have same number of params"
+    
+    def test_proj_x_fn_applied(self):
+        """Verify proj_x_fn is applied for nonnegativity."""
+        from learning_experiment_classes.adam_optimizers import AdamWMin
+        
+        x_params = [jnp.array([0.1, 0.1])]
+        optimizer = AdamWMin(x_params, lr=1.0)
+        
+        # Large gradient that would push x negative
+        grads_x = [jnp.array([1.0, 1.0])]
+        
+        def proj_x(x_list):
+            return [jax.nn.relu(x) for x in x_list]
+        
+        x_new = optimizer.step(x_params, grads_x, proj_x_fn=proj_x)
+        
+        # All values should be nonnegative due to projection
+        assert jnp.all(x_new[0] >= 0), f"x should be nonnegative, got {x_new[0]}"
+    
+    def test_descent_direction(self):
+        """Verify optimizer does descent (values decrease with positive gradient)."""
+        from learning_experiment_classes.adam_optimizers import AdamWMin
+        
+        x_params = [jnp.array([5.0, 5.0])]
+        optimizer = AdamWMin(x_params, lr=0.1, weight_decay=0.0)
+        
+        grads_x = [jnp.array([1.0, 1.0])]  # Positive gradient
+        x_new = optimizer.step(x_params, grads_x)
+        
+        # Values should decrease (descent)
+        assert jnp.all(x_new[0] < x_params[0]), "Descent should decrease values"
+    
+    def test_weight_decay_applied(self):
+        """Verify weight decay shrinks parameters."""
+        from learning_experiment_classes.adam_optimizers import AdamWMin
+        
+        x_params = [jnp.array([10.0, 10.0])]
+        optimizer = AdamWMin(x_params, lr=0.1, weight_decay=0.1)
+        
+        # Zero gradient - only weight decay should affect params
+        grads_x = [jnp.array([0.0, 0.0])]
+        x_new = optimizer.step(x_params, grads_x)
+        
+        # Weight decay should shrink parameters
+        assert jnp.all(x_new[0] < x_params[0]), "Weight decay should shrink params"

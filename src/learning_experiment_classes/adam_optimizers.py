@@ -230,3 +230,98 @@ class AdamMinMax:
             y_new = y_unconstrained
         
         return x_new, y_new
+
+
+class AdamWMin:
+    """
+    AdamW optimizer for minimization only.
+    
+    Performs gradient descent on x_params only (no y_params for ascent).
+    Used for SGD on stepsizes when Q/z0 are resampled each iteration.
+    
+    Stores optimizer state (first and second moments) internally.
+    """
+    
+    def __init__(self, x_params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2):
+        """
+        Args:
+            x_params: Initial parameters for minimization (list of JAX arrays)
+            lr: Learning rate
+            betas: Coefficients for computing running averages of gradient and its square
+            eps: Term added to denominator for numerical stability
+            weight_decay: Weight decay coefficient (L2 penalty)
+        """
+        self.lr = lr
+        self.betas = betas
+        self.eps = eps
+        self.wd = weight_decay
+        self.t = 0
+        
+        # Initialize state (First and Second moments) as JAX arrays
+        self.state_x = [{'m': jnp.zeros_like(p), 'v': jnp.zeros_like(p)} for p in x_params]
+
+    def _apply_adamw(self, params, grads, states):
+        """
+        Internal AdamW step for minimization.
+        
+        Returns new_params list and updates states in-place.
+        """
+        beta1, beta2 = self.betas
+        new_params = []
+        
+        # Bias correction factors based on current time step t
+        bias_correction1 = 1.0 - beta1 ** self.t
+        bias_correction2 = 1.0 - beta2 ** self.t
+
+        for i, (p, g, s) in enumerate(zip(params, grads, states)):
+            # 1. Update biased first moment estimate
+            m_new = beta1 * s['m'] + (1 - beta1) * g
+            
+            # 2. Update biased second raw moment estimate
+            v_new = beta2 * s['v'] + (1 - beta2) * (g ** 2)
+            
+            # Update state (in-place via dict mutation)
+            states[i]['m'] = m_new
+            states[i]['v'] = v_new
+            
+            # 3. Compute bias-corrected moments
+            m_hat = m_new / bias_correction1
+            v_hat = v_new / bias_correction2
+            
+            # 4. Compute the adaptive step
+            step = m_hat / (jnp.sqrt(v_hat) + self.eps)
+            
+            # 5. Apply Weight Decay (Decoupled)
+            p_decayed = p - (self.lr * self.wd * p)
+            
+            # 6. Apply Update (Gradient Descent)
+            p_new = p_decayed - (self.lr * step)
+                
+            new_params.append(p_new)
+            
+        return new_params
+
+    def step(self, x_params, grads_x, proj_x_fn=None):
+        """
+        Performs one step of minimization.
+        
+        Args:
+            x_params: Current x parameters (list of JAX arrays)
+            grads_x: Gradients for x (list of JAX arrays) - descent
+            proj_x_fn: Optional projection function for x params (e.g., for nonnegativity)
+            
+        Returns:
+            x_new: Updated x parameters (projected if proj_x_fn provided)
+        """
+        self.t += 1
+        
+        # Update X (Minimization / Descent)
+        x_unconstrained = self._apply_adamw(x_params, grads_x, self.state_x)
+        
+        # Project X if projection function provided
+        if proj_x_fn is not None:
+            x_new = proj_x_fn(x_unconstrained)
+        else:
+            x_new = x_unconstrained
+        
+        return x_new

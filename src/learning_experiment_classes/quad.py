@@ -16,7 +16,7 @@ from learning_experiment_classes.pep_construction import (
     construct_fgm_pep_data,
     pep_data_to_numpy,
 )
-from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
+from learning_experiment_classes.adam_optimizers import AdamWMin
 from learning_experiment_classes.autodiff_setup import (
     problem_data_to_gd_trajectories,
     problem_data_to_nesterov_fgm_trajectories,
@@ -431,18 +431,16 @@ def quad_run(cfg):
         t_init_scalar = 2.0 / (mu_val + L_val)
     log.info(f"Initial step size t: {t_init_scalar}")
     
-    # SGDA parameters from config
-    sgda_iters = cfg.sgda_iters
+    # SGD parameters from config
+    sgd_iters = cfg.sgd_iters
     eta_t = cfg.eta_t
-    eta_Q = cfg.eta_Q
-    eta_z0 = cfg.eta_z0
     eps = cfg.eps
     alpha = cfg.alpha
     
-    # Algorithm and SGDA type (for future extensibility)
+    # Algorithm and optimizer type (for future extensibility)
     alg = cfg.alg
-    sgda_type = cfg.sgda_type
-    log.info(f"Algorithm: {alg}, SGDA type: {sgda_type}")
+    optimizer_type = cfg.optimizer_type
+    log.info(f"Algorithm: {alg}, Optimizer type: {optimizer_type}")
     
     # Ensure output directory exists
     output_dir = cfg.output_dir
@@ -473,23 +471,23 @@ def quad_run(cfg):
                 t_init = jnp.array(get_strongly_convex_silver_stepsizes(K, mu=mu_val, L=L_val))
         else:
             t_init = t_init_scalar
-        log.info(f"=== Running SGDA for K={K} ===")
+        log.info(f"=== Running SGD for K={K} ===")
         
         # Create output directory for this K
         K_output_dir = os.path.join(output_dir, f"K_{K}")
         os.makedirs(K_output_dir, exist_ok=True)
         csv_path = os.path.join(K_output_dir, "progress.csv")
         
-        # Run SGDA for this K value (CSV saved inside the loop)
-        run_sgda_for_K(
+        # Run SGD for this K value (CSV saved inside the loop)
+        run_sgd_for_K(
             cfg, K, key, M_val, t_init, 
-            sgda_iters, eta_t, eta_Q, eta_z0,
-            eps, alpha, alg, sgda_type,
+            sgd_iters, eta_t,
+            eps, alpha, alg, optimizer_type,
             mu_val, L_val, R_val, N_val, d_val,
             csv_path
         )
     
-    log.info("=== SGDA experiment complete ===")
+    log.info("=== SGD experiment complete ===")
 
 
 def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta):
@@ -510,14 +508,15 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta):
     
     return pd.DataFrame(data)
 
-def run_sgda_for_K(cfg, K_max, key, M_val, t_init, 
-                   sgda_iters, eta_t, eta_Q, eta_z0,
-                   eps, alpha, alg, sgda_type,
+def run_sgd_for_K(cfg, K_max, key, M_val, t_init, 
+                   sgd_iters, eta_t,
+                   eps, alpha, alg, optimizer_type,
                    mu_val, L_val, R_val, N_val, d_val,
                    csv_path):
     """
-    Run SGDA for a specific K_max value.
+    Run SGD for a specific K_max value.
     
+    Minimizes over stepsizes only. Q and z0 are resampled each iteration.
     Saves progress to csv_path after each iteration (overwrites to preserve intermediate progress).
     """
     
@@ -529,19 +528,6 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     else:
         log.error(f"Algorithm '{alg}' is not implemented.")
         raise ValueError(f"Unknown algorithm: {alg}")
-    
-    # Projection functions
-    @jax.jit
-    def proj_z0(v):
-        norm = jnp.linalg.norm(v)
-        scale = R_val / jnp.maximum(norm, R_val)
-        return v * scale
-
-    @jax.jit
-    def proj_Q(M):
-        evals, evecs = jnp.linalg.eigh(M)
-        evals_clipped = jnp.clip(evals, mu_val, L_val)
-        return (evecs * evals_clipped) @ evecs.T
     
     # Projection function for stepsizes (ensure nonnegativity)
     def proj_stepsizes(stepsizes):
@@ -636,8 +622,8 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             # Convert precond_inv to JAX arrays for Clarabel pipeline
             precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
             
-            # Single gradient function for both expectation and cvar (unified pipeline)
-            grad_fn = jax.grad(full_clarabel_pipeline, argnums=(0, 1, 2))
+            # Gradient function for stepsizes only
+            grad_fn = jax.grad(full_clarabel_pipeline, argnums=0)
             full_dro_layer = None  # Not used for Clarabel
         else:
             # Use SCS (original cvxpylayer approach)
@@ -657,30 +643,21 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
             else:
                 raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
             
-            # Gradient function uses full_SCS_pipeline with all args traced
-            grad_fn = jax.grad(full_SCS_pipeline, argnums=(0, 1, 2))
+            # Gradient function for stepsizes only
+            grad_fn = jax.grad(full_SCS_pipeline, argnums=0)
     elif learning_framework == 'l2o':
-        grad_fn = jax.grad(l2o_pipeline, argnums=(0, 1, 2))
+        grad_fn = jax.grad(l2o_pipeline, argnums=0)
         full_dro_layer = None  # Not used for l2o
         pep_data_fn = None  # Not used for l2o
     else:
         raise ValueError(f"Unknown learning_framework: {learning_framework}")
     
-    # Initialize SGDA stepsizes based on algorithm
+    # Initialize stepsizes based on algorithm
     if alg == 'vanilla_gd':
         stepsizes = (t_init,)
     elif alg == 'nesterov_fgm':
         beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
         stepsizes = (t_init, beta_init)
-    
-    key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
-    
-    # Initialize Q and z0 for ascent (sample one each)
-    key, k1, k2 = jax.random.split(key, 3)
-    Q_single_keys = jax.random.split(k1, 1)
-    z0_single_keys = jax.random.split(k2, 1)
-    Q = get_Q_samples(Q_single_keys, d_val, mu_val, L_val, M_val)[0]
-    z0 = get_z0_samples(z0_single_keys, M_val, R_val)[0]
     
     # Track all stepsizes values for logging/CSV
     t = stepsizes[0]  # For logging compatibility
@@ -690,28 +667,19 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
     # Store all stepsizes at each iteration
     all_stepsizes_vals = [stepsizes]  # List of tuples
     
-    # Initialize optimizer if needed (Adam or AdamW share same interface)
+    # Initialize optimizer if needed
     optimizer = None
-    if sgda_type == "adamw":
-        optimizer = AdamWMinMax(
+    if optimizer_type == "adamw":
+        optimizer = AdamWMin(
             x_params=[jnp.array(s) for s in stepsizes],
-            y_params=[Q, z0],
             lr=eta_t,
             betas=(0.9, 0.999),
             eps=1e-8,
             weight_decay=0.01,
         )
-    elif sgda_type == "adam":
-        optimizer = AdamMinMax(
-            x_params=[jnp.array(s) for s in stepsizes],
-            y_params=[Q, z0],
-            lr=eta_t,
-            betas=(0.9, 0.999),
-            eps=1e-8,
-        )
     
-    # SGDA iterations
-    for iter_num in range(sgda_iters):
+    # SGD iterations
+    for iter_num in range(sgd_iters):
         t = stepsizes[0]  # For logging
         t_log = f'{t:.5f}' if not is_vector_t else '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
         if has_beta:
@@ -721,75 +689,44 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         else:
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
-        # Sample new batch
+        # Sample new batch (Q and z0 are resampled each iteration)
         key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
         
-        # Get CP layer for current stepsizes (convert JAX array to Python list for PEPit)
-        batch_GF_func = make_batch_GF_func(stepsizes)
-        G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
-        # For PEP subproblem: both vanilla_gd and nesterov_fgm can use t (scalar or vector)
-        if alg == 'vanilla_gd':
-            t_for_pep = t.tolist() if is_vector_t else float(t)
-        elif alg == 'nesterov_fgm':
-            t_for_pep = t.tolist() if is_vector_t else float(t)
-        
-        # Compute gradients w.r.t stepsizes tuple, Q_batch, z0_batch
+        # Compute gradients w.r.t stepsizes only
         if learning_framework == 'ldro-pep':
             if sdp_backend == 'clarabel':
-                # Unified full_clarabel_pipeline with alpha and dro_obj
-                d_stepsizes, dQ, dz0 = grad_fn(
+                d_stepsizes = grad_fn(
                     stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
                     mu_val, L_val, R_val, K_max, eps, alpha, cfg.dro_obj, cfg.pep_obj, precond_inv_jax, traj_fn, pep_data_fn
                 )
             else:
-                # Use full_SCS_pipeline with full_dro_layer
-                d_stepsizes, dQ, dz0 = grad_fn(
+                d_stepsizes = grad_fn(
                     stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
                     mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
                 )
         elif learning_framework == 'l2o':
-            d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha=alpha)
-        
-        # Average gradients over batch
-        dQ = jnp.mean(dQ, axis=0)
-        dz0 = jnp.mean(dz0, axis=0)
-        
-        # SGDA step: descent in stepsizes, ascent in Q and z0 with projections
-        if sgda_type == "vanilla_sgda":
+            d_stepsizes = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
+    
+        # SGD step: descent in stepsizes with projection
+        if optimizer_type == "vanilla_sgd":
             # Update all stepsizes in tuple and project to be nonnegative
             stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
-            Q = proj_Q(Q + eta_Q * dQ)
-            z0 = proj_z0(z0 + eta_z0 * dz0)
-        elif sgda_type in ("adam", "adamw"):
-            # Projection function for y params [Q, z0]
-            def proj_y_params(y_params):
-                Q_proj = proj_Q(y_params[0])
-                z0_proj = proj_z0(y_params[1])
-                return [Q_proj, z0_proj]
-            
-            # Use optimizer step (Adam or AdamW share same interface)
-            # Convert stepsizes tuple to list of arrays for optimizer
+        elif optimizer_type == "adamw":
+            # Use AdamWMin optimizer step
             x_params = [jnp.array(s) for s in stepsizes]
             grads_x = list(d_stepsizes)
-            x_new, y_new = optimizer.step(
+            x_new = optimizer.step(
                 x_params=x_params,
-                y_params=[Q, z0],
                 grads_x=grads_x,
-                grads_y=[dQ, dz0],
                 proj_x_fn=proj_stepsizes,
-                proj_y_fn=proj_y_params
             )
             stepsizes = tuple(x_new)
-            Q = y_new[0]
-            z0 = y_new[1]
-        elif sgda_type == "sgda_wd":
+        elif optimizer_type == "sgd_wd":
             # SGD with weight decay, project stepsizes to be nonnegative
             weight_decay = cfg.get('weight_decay', 1e-2)
             stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
-            Q = proj_Q(Q + eta_Q * (dQ - weight_decay * Q))
-            z0 = proj_z0(z0 + eta_z0 * (dz0 - weight_decay * z0))
         else:
-            raise ValueError(f"Unknown sgda_type: {sgda_type}")
+            raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
         
         t = stepsizes[0]  # For logging
         all_stepsizes_vals.append(stepsizes)

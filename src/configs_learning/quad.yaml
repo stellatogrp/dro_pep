@@ -12,10 +12,10 @@ N: 16
 
 seed: 50
 
-# Algorithm and SGDA type (selected by Slurm job index)
+# Algorithm and optimizer type (selected by Slurm job index)
 alg: "nesterov_fgm"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
-sgda_type: "adamw" #"vanilla_sgda"   # stub: adamw  # "sgda_wd"
-stepsize_type: "vector" # "scalar" or "vector"
+optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
+stepsize_type: "scalar" # "scalar" or "vector"
 vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
@@ -29,12 +29,10 @@ sdp_backend: "clarabel"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
 eps: 0.1
 alpha: 0.1
 
-# SGDA training parameters
-sgda_iters: 25
-eta_t: 1e-3     # learning rate for t (descent)
-eta_Q: 1e-3     # learning rate for Q (ascent)
-eta_z0: 1e-3    # learning rate for z0 (ascent)
-weight_decay: 1e-2  # weight decay for sgda_wd
+# SGD training parameters
+sgd_iters: 25
+eta_t: 1e-3     # learning rate for stepsizes (descent)
+weight_decay: 1e-2  # weight decay for sgd_wd
 
 # MOSEK solver tolerances
 mosek_tol_dfeas: 1e-2
