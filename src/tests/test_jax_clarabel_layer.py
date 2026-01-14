@@ -213,7 +213,7 @@ class TestCanonicalization:
     
     def test_canonicalization_dimensions(self, pep_data_and_samples):
         """Test that canonicalization produces correct dimensions."""
-        from learning_experiment_classes.jax_clarabel_layer import (
+        from learning_experiment_classes.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         
@@ -248,7 +248,7 @@ class TestCanonicalization:
     
     def test_canonicalization_solves(self, pep_data_and_samples):
         """Test that canonicalized problem can be solved by Clarabel (or at least runs)."""
-        from learning_experiment_classes.jax_clarabel_layer import (
+        from learning_experiment_classes.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         import clarabel
@@ -356,7 +356,7 @@ class TestAgainstClarabelCanonicalizer:
     
     def test_matches_clarabel_canonicalizer_A_matrix(self, real_pep_data_and_samples):
         """Test that our canonicalization produces same A matrix as ClarabelCanonicalizer."""
-        from learning_experiment_classes.jax_clarabel_layer import numpy_canonicalize_dro_expectation
+        from learning_experiment_classes.numpy_clarabel_layer import numpy_canonicalize_dro_expectation
         from reformulator.canonicalizers.clarabel_canonicalizer import ClarabelCanonicalizer
         
         d = real_pep_data_and_samples
@@ -407,7 +407,7 @@ class TestAgainstClarabelCanonicalizer:
     
     def test_matches_clarabel_canonicalizer_objective(self, real_pep_data_and_samples):
         """Test that both versions produce same optimal objective."""
-        from learning_experiment_classes.jax_clarabel_layer import numpy_canonicalize_dro_expectation
+        from learning_experiment_classes.numpy_clarabel_layer import numpy_canonicalize_dro_expectation
         from reformulator.canonicalizers.clarabel_canonicalizer import ClarabelCanonicalizer
         import scipy.sparse as spa
         import clarabel
@@ -519,6 +519,8 @@ class TestJaxCanonicalization:
         """
         from learning_experiment_classes.jax_clarabel_layer import (
             jax_canonicalize_dro_expectation,
+        )
+        from learning_experiment_classes.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation,
         )
         
@@ -696,7 +698,10 @@ class TestDroClarabelSolve:
     def test_forward_pass_runs(self, pep_data_for_solve):
         """Test that forward pass of dro_clarabel_solve works."""
         from learning_experiment_classes.jax_clarabel_layer import (
-            dro_clarabel_solve, numpy_canonicalize_dro_expectation
+            dro_clarabel_solve
+        )
+        from learning_experiment_classes.numpy_clarabel_layer import (
+            numpy_canonicalize_dro_expectation
         )
         import scipy.sparse as spa
         import clarabel
@@ -738,6 +743,8 @@ class TestDroClarabelSolve:
         """Test that JAX solve matches NumPy canonicalization solve."""
         from learning_experiment_classes.jax_clarabel_layer import (
             dro_clarabel_solve,
+        )
+        from learning_experiment_classes.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         import clarabel

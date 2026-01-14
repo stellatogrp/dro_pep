@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 # JAX Helper Functions (vectorization for PSD cones)
 # =============================================================================
 
+@jax.jit
 def jax_symm_vectorize(A, scale_factor):
     """Vectorize lower triangle of symmetric matrix with off-diagonal scaling.
     
@@ -51,6 +52,7 @@ def jax_symm_vectorize(A, scale_factor):
     return A_vec
 
 
+@jax.jit
 def jax_scaled_off_triangles(A, scale_factor):
     """Create diagonal matrix from scaled symmetric vectorization.
     
@@ -78,6 +80,7 @@ def jax_get_triangular_indices(n):
 # Pure JAX Canonicalization Function (JIT-compatible)
 # =============================================================================
 
+@jax.jit
 def jax_canonicalize_dro_expectation(
     # PEP data
     A_obj, b_obj, A_vals, b_vals, c_vals,
@@ -231,6 +234,185 @@ def jax_canonicalize_dro_expectation(
     return A_dense, b, c_obj, x_dim, cone_info
 
 
+@jax.jit
+def jax_canonicalize_dro_cvar(
+    # PEP data
+    A_obj, b_obj, A_vals, b_vals, c_vals,
+    # Sample data
+    G_batch, F_batch,
+    # Parameters
+    eps, alpha, precond_inv,
+):
+    """
+    Pure JAX canonicalization of DRO CVaR problem to Clarabel form.
+    
+    This is a JAX-traceable version that can be JIT compiled.
+    
+    CVaR has doubled dual variables (y1, y2) and corresponding Wasserstein
+    constraint variables (Fz1/Fz2, Gz1/Gz2). The VaR threshold is 't'.
+    
+    Returns:
+        A_dense: Constraint matrix as dense JAX array
+        b: RHS vector
+        c_obj: Objective vector
+        x_dim: Dimension of decision variable
+        cone_info: Dict with cone dimensions for later conversion
+    """
+    alpha_inv = 1.0 / alpha
+    
+    N = G_batch.shape[0]
+    M = A_vals.shape[0]  # Number of interpolation constraints
+    V = b_obj.shape[0]  # Dimension of Fz
+    S_mat = A_obj.shape[0]  # Dimension of main PSD constraint
+    S_vec = S_mat * (S_mat + 1) // 2
+    
+    # Process PEP matrices
+    A_obj_svec = jax_symm_vectorize(A_obj, jnp.sqrt(2.0))  # (S_vec,)
+    A_vals_svec = jax.vmap(lambda A: jax_symm_vectorize(A, jnp.sqrt(2.0)))(A_vals)  # (M, S_vec)
+    Bm_T = b_vals.T  # (V, M)
+    
+    # Process sample matrices to vectors
+    G_batch_svec = jax.vmap(lambda G: jax_symm_vectorize(G, 2.0))(G_batch)  # (N, S_vec)
+    
+    # Preconditioner
+    G_precond_vec, F_precond = precond_inv
+    F_precond_sq = F_precond ** 2
+    scaled_G_vec_outer = jnp.outer(G_precond_vec, G_precond_vec)
+    scaledG_mult = jax_scaled_off_triangles(scaled_G_vec_outer, jnp.sqrt(2.0))  # (S_vec, S_vec)
+    scaledI = jax_scaled_off_triangles(jnp.ones((S_mat, S_mat)), jnp.sqrt(2.0))  # (S_vec, S_vec)
+    
+    # Decision variable dimension
+    x_dim = 2 + N * (1 + 2 * (M + V + S_vec))
+    
+    # Index helpers
+    lambd_idx = 0
+    t_idx = 1
+    s_start = 2
+    y1_start = s_start + N
+    y2_start = y1_start + N * M
+    Fz1_start = y2_start + N * M
+    Fz2_start = Fz1_start + N * V
+    Gz1_start = Fz2_start + N * V
+    Gz2_start = Gz1_start + N * S_vec
+    
+    # Build objective
+    c_obj = jnp.zeros(x_dim)
+    c_obj = c_obj.at[lambd_idx].set(eps)
+    c_obj = c_obj.at[s_start:s_start + N].set(1.0 / N)
+    
+    Am_T = A_vals_svec.T  # (S_vec, M)
+    
+    # =========================================================================
+    # Build constraint blocks (in diffcp order: zero, nonneg, soc, psd)
+    # =========================================================================
+    
+    # --- ZERO CONE: Equality constraints (-B^T y1 + Fz1 = -b_obj, -B^T y2 + Fz2 = -alpha_inv * b_obj)
+    eq1_rows = jnp.zeros((N * V, x_dim))
+    for i in range(N):
+        eq1_rows = eq1_rows.at[i * V:(i + 1) * V, y1_start + i * M:y1_start + (i + 1) * M].set(-Bm_T)
+        eq1_rows = eq1_rows.at[i * V:(i + 1) * V, Fz1_start + i * V:Fz1_start + (i + 1) * V].set(jnp.eye(V))
+    eq1_b = jnp.tile(-b_obj, N)
+    
+    eq2_rows = jnp.zeros((N * V, x_dim))
+    for i in range(N):
+        eq2_rows = eq2_rows.at[i * V:(i + 1) * V, y2_start + i * M:y2_start + (i + 1) * M].set(-Bm_T)
+        eq2_rows = eq2_rows.at[i * V:(i + 1) * V, Fz2_start + i * V:Fz2_start + (i + 1) * V].set(jnp.eye(V))
+    eq2_b = jnp.tile(-alpha_inv * b_obj, N)
+    
+    # --- NONNEGATIVE CONE: epi1, epi2, y1 >= 0, y2 >= 0
+    # epi1: t - c^T y1 - Tr(G @ Gz1) - F @ Fz1 - s <= 0
+    epi1_rows = jnp.zeros((N, x_dim))
+    for i in range(N):
+        epi1_rows = epi1_rows.at[i, t_idx].set(1.0)
+        epi1_rows = epi1_rows.at[i, y1_start + i * M:y1_start + (i + 1) * M].set(-c_vals)
+        epi1_rows = epi1_rows.at[i, s_start + i].set(-1.0)
+        epi1_rows = epi1_rows.at[i, Fz1_start + i * V:Fz1_start + (i + 1) * V].set(-F_batch[i])
+        epi1_rows = epi1_rows.at[i, Gz1_start + i * S_vec:Gz1_start + (i + 1) * S_vec].set(-G_batch_svec[i])
+    epi1_b = jnp.zeros(N)
+    
+    # epi2: -(1/alpha - 1)*t - c^T y2 - Tr(G @ Gz2) - F @ Fz2 - s <= 0
+    epi2_rows = jnp.zeros((N, x_dim))
+    for i in range(N):
+        epi2_rows = epi2_rows.at[i, t_idx].set(-(alpha_inv - 1))
+        epi2_rows = epi2_rows.at[i, y2_start + i * M:y2_start + (i + 1) * M].set(-c_vals)
+        epi2_rows = epi2_rows.at[i, s_start + i].set(-1.0)
+        epi2_rows = epi2_rows.at[i, Fz2_start + i * V:Fz2_start + (i + 1) * V].set(-F_batch[i])
+        epi2_rows = epi2_rows.at[i, Gz2_start + i * S_vec:Gz2_start + (i + 1) * S_vec].set(-G_batch_svec[i])
+    epi2_b = jnp.zeros(N)
+    
+    # y1 >= 0, y2 >= 0
+    y1_nonneg = jnp.zeros((N * M, x_dim))
+    y1_nonneg = y1_nonneg.at[0:N*M, y1_start:y1_start + N*M].set(-jnp.eye(N * M))
+    y1_nonneg_b = jnp.zeros(N * M)
+    
+    y2_nonneg = jnp.zeros((N * M, x_dim))
+    y2_nonneg = y2_nonneg.at[0:N*M, y2_start:y2_start + N*M].set(-jnp.eye(N * M))
+    y2_nonneg_b = jnp.zeros(N * M)
+    
+    # --- SOC CONES: 2N SOC cones for (Gz1, Fz1) and (Gz2, Fz2)
+    socp_dim = 1 + V + S_vec
+    socp1_rows = jnp.zeros((N * socp_dim, x_dim))
+    for i in range(N):
+        socp1_rows = socp1_rows.at[i * socp_dim, lambd_idx].set(-1.0)
+        socp1_rows = socp1_rows.at[i * socp_dim + 1:i * socp_dim + 1 + V, 
+                                    Fz1_start + i * V:Fz1_start + (i + 1) * V].set(-jnp.diag(F_precond_sq))
+        socp1_rows = socp1_rows.at[i * socp_dim + 1 + V:(i + 1) * socp_dim,
+                                    Gz1_start + i * S_vec:Gz1_start + (i + 1) * S_vec].set(-scaledG_mult)
+    socp1_b = jnp.zeros(N * socp_dim)
+    
+    socp2_rows = jnp.zeros((N * socp_dim, x_dim))
+    for i in range(N):
+        socp2_rows = socp2_rows.at[i * socp_dim, lambd_idx].set(-1.0)
+        socp2_rows = socp2_rows.at[i * socp_dim + 1:i * socp_dim + 1 + V, 
+                                    Fz2_start + i * V:Fz2_start + (i + 1) * V].set(-jnp.diag(F_precond_sq))
+        socp2_rows = socp2_rows.at[i * socp_dim + 1 + V:(i + 1) * socp_dim,
+                                    Gz2_start + i * S_vec:Gz2_start + (i + 1) * S_vec].set(-scaledG_mult)
+    socp2_b = jnp.zeros(N * socp_dim)
+    
+    # --- PSD CONES: 2N PSD cones for Gz1 and Gz2
+    psd1_rows = jnp.zeros((N * S_vec, x_dim))
+    for i in range(N):
+        psd1_rows = psd1_rows.at[i * S_vec:(i + 1) * S_vec, y1_start + i * M:y1_start + (i + 1) * M].set(-Am_T)
+        psd1_rows = psd1_rows.at[i * S_vec:(i + 1) * S_vec, Gz1_start + i * S_vec:Gz1_start + (i + 1) * S_vec].set(scaledI)
+    psd1_b = jnp.tile(-A_obj_svec, N)
+    
+    psd2_rows = jnp.zeros((N * S_vec, x_dim))
+    for i in range(N):
+        psd2_rows = psd2_rows.at[i * S_vec:(i + 1) * S_vec, y2_start + i * M:y2_start + (i + 1) * M].set(-Am_T)
+        psd2_rows = psd2_rows.at[i * S_vec:(i + 1) * S_vec, Gz2_start + i * S_vec:Gz2_start + (i + 1) * S_vec].set(scaledI)
+    psd2_b = jnp.tile(-alpha_inv * A_obj_svec, N)
+    
+    # Combine all blocks (diffcp order: zero, nonneg, soc, psd)
+    A_dense = jnp.vstack([
+        eq1_rows, eq2_rows,  # zero cone (2*N*V)
+        epi1_rows, epi2_rows, y1_nonneg, y2_nonneg,  # nonneg cone (2*N + 2*N*M)
+        socp1_rows, socp2_rows,  # soc cones (2*N*socp_dim)
+        psd1_rows, psd2_rows,  # psd cones (2*N*S_vec)
+    ])
+    
+    b = jnp.concatenate([
+        eq1_b, eq2_b,
+        epi1_b, epi2_b, y1_nonneg_b, y2_nonneg_b,
+        socp1_b, socp2_b,
+        psd1_b, psd2_b,
+    ])
+    
+    # Cone info for later conversion
+    cone_info = {
+        'zero': 2 * N * V,
+        'nonneg': 2 * N + 2 * N * M,
+        'soc': [socp_dim] * (2 * N),
+        'psd': [S_mat] * (2 * N),
+        'N': N,
+        'M': M,
+        'V': V,
+        'S_mat': S_mat,
+        'S_vec': S_vec,
+    }
+    
+    return A_dense, b, c_obj, x_dim, cone_info
+
+
 def jax_to_clarabel_cones(cone_info):
     """Convert cone_info dict to Clarabel cone list.
     
@@ -252,185 +434,8 @@ def jax_to_clarabel_cones(cone_info):
     return cones
 
 
-
-def numpy_canonicalize_dro_expectation(
-    # PEP data
-    A_obj, b_obj, A_vals, b_vals, c_vals,
-    # Sample data
-    G_batch, F_batch,
-    # Parameters
-    eps, precond_inv,
-):
-    """
-    NumPy canonicalization of DRO expectation problem to Clarabel form.
-    
-    This mirrors ClarabelCanonicalizer.setup_expectation_problem() exactly.
-    For now, we assume no auxiliary PSD constraints (M_psd = 0).
-    
-    Returns:
-        A_csc: Constraint matrix (scipy CSC sparse)
-        b: RHS vector (numpy array)
-        c: Objective vector (numpy array) 
-        cones: List of Clarabel cone objects
-        x_dim: Dimension of decision variable
-    """
-    # Local helper functions that work on NumPy arrays
-    def symm_vectorize(A, scale_factor):
-        """Vectorize lower triangle of symmetric matrix with off-diagonal scaling."""
-        A = np.asarray(A)  # Ensure NumPy array
-        n = A.shape[0]
-        rows, cols = np.tril_indices(n)
-        A_vec = A[rows, cols].copy()  # Copy to avoid modifying original
-        off_diag_mask = rows != cols
-        A_vec[off_diag_mask] *= scale_factor
-        return A_vec
-    
-    def scaled_off_triangles(A, scale_factor):
-        """Create diagonal matrix from scaled symmetric vectorization."""
-        A_vec = symm_vectorize(A, scale_factor)
-        return np.diag(A_vec)
-    
-    N = len(G_batch)
-    M = len(A_vals)
-    V = b_obj.shape[0]
-    S_mat = A_obj.shape[0]
-    S_vec = S_mat * (S_mat + 1) // 2
-    
-    # No auxiliary PSD constraints for now
-    M_psd = 0
-    H_vec_sum = 0
-    
-    # Decision variable dimension
-    x_dim = 1 + N * (1 + M + V + S_vec + H_vec_sum)
-    
-    # Index offsets
-    lambd_idx = 0
-    s_start = 1
-    y_start = s_start + N
-    Fz_start = y_start + N * M
-    Gz_start = Fz_start + N * V
-    
-    def s_idx(i):
-        return s_start + i
-    
-    def y_idx(i, j):
-        return y_start + i * M + j
-    
-    def Fz_idx(i, j):
-        return Fz_start + i * V + j
-    
-    def Gz_idx(i, j):
-        return Gz_start + i * S_vec + j
-    
-    # Build objective vector
-    c_obj = np.zeros(x_dim)
-    c_obj[lambd_idx] = eps
-    c_obj[s_start:s_start + N] = 1.0 / N
-    
-    A_blocks = []
-    b_blocks = []
-    cones = []
-    
-    # 1. Epigraph constraints: -c^T y_i - Tr(G_i @ Gz_i) - F_i @ Fz_i - s_i <= 0
-    epi_constr = np.zeros((N, x_dim))
-    for i in range(N):
-        G_sample, F_sample = G_batch[i], F_batch[i]
-        y_s, y_e = y_idx(i, 0), y_idx(i, M)
-        epi_constr[i, y_s:y_e] = -c_vals
-        epi_constr[i, s_idx(i)] = -1
-        
-        Fz_s, Fz_e = Fz_idx(i, 0), Fz_idx(i, V)
-        epi_constr[i, Fz_s:Fz_e] = -F_sample
-        
-        Gz_s, Gz_e = Gz_idx(i, 0), Gz_idx(i, S_vec)
-        epi_constr[i, Gz_s:Gz_e] = -symm_vectorize(G_sample, 2)
-    
-    A_blocks.append(spa.csc_matrix(epi_constr))
-    b_blocks.append(np.zeros(N))
-    
-    # 2. y >= 0 constraints
-    y_nonneg = np.zeros((N * M, x_dim))
-    y_s = y_idx(0, 0)
-    y_e = y_idx(N-1, M)
-    y_nonneg[0:N*M, y_s:y_e] = -np.eye(N * M)
-    
-    A_blocks.append(spa.csc_matrix(y_nonneg))
-    b_blocks.append(np.zeros(N * M))
-    cones.append(clarabel.NonnegativeConeT(N + N * M))  # Coalesced
-    
-    # 3. Equality constraints: -B^T y_i + Fz_i = -b_obj
-    Bm_T = np.array(b_vals).T  # (V, M)
-    
-    yB_rows = []
-    yB_rhs = []
-    for i in range(N):
-        curr_lhs = np.zeros((V, x_dim))
-        y_s, y_e = y_idx(i, 0), y_idx(i, M)
-        curr_lhs[:, y_s:y_e] = -Bm_T
-        
-        Fz_s, Fz_e = Fz_idx(i, 0), Fz_idx(i, V)
-        curr_lhs[:, Fz_s:Fz_e] = np.eye(V)
-        
-        yB_rows.append(spa.csc_matrix(curr_lhs))
-        yB_rhs.append(-b_obj)
-    
-    A_blocks.append(spa.vstack(yB_rows))
-    b_blocks.append(np.hstack(yB_rhs))
-    cones.append(clarabel.ZeroConeT(V * N))
-    
-    # 4. PSD constraints: -A^* y_i + Gz_i << -A_obj
-    A_obj_svec = symm_vectorize(A_obj, np.sqrt(2.0))
-    Am_svec = np.array([symm_vectorize(A_vals[m], np.sqrt(2.0)) for m in range(M)])  # (M, S_vec)
-    Am_T = Am_svec.T  # (S_vec, M)
-    
-    yA_rows = []
-    yA_rhs = []
-    scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.0))
-    
-    for i in range(N):
-        curr_lhs = np.zeros((S_vec, x_dim))
-        y_s, y_e = y_idx(i, 0), y_idx(i, M)
-        curr_lhs[:, y_s:y_e] = -Am_T
-        
-        Gz_s, Gz_e = Gz_idx(i, 0), Gz_idx(i, S_vec)
-        curr_lhs[:, Gz_s:Gz_e] = scaledI
-        
-        yA_rows.append(spa.csc_matrix(curr_lhs))
-        yA_rhs.append(-A_obj_svec)
-    
-    A_blocks.append(spa.vstack(yA_rows))
-    b_blocks.append(np.hstack(yA_rhs))
-    cones.extend([clarabel.PSDTriangleConeT(S_mat) for _ in range(N)])
-    
-    # 5. SOCP constraints: || [Gz_i, Fz_i] ||_precond <= lambda
-    G_precond_vec, F_precond = precond_inv
-    F_precond_sq = F_precond ** 2
-    scaled_G_vec_outer_prod = np.outer(G_precond_vec, G_precond_vec)
-    scaledG_mult = scaled_off_triangles(scaled_G_vec_outer_prod, np.sqrt(2.0))
-    
-    socp_rows = []
-    socp_rhs = []
-    for i in range(N):
-        curr_lhs = np.zeros((1 + V + S_vec, x_dim))
-        Fz_s, Fz_e = Fz_idx(i, 0), Fz_idx(i, V)
-        Gz_s, Gz_e = Gz_idx(i, 0), Gz_idx(i, S_vec)
-        
-        curr_lhs[0, lambd_idx] = -1
-        curr_lhs[1:V+1, Fz_s:Fz_e] = -np.diag(F_precond_sq)
-        curr_lhs[V+1:, Gz_s:Gz_e] = -scaledG_mult
-        
-        socp_rows.append(spa.csc_matrix(curr_lhs))
-        socp_rhs.append(np.zeros(1 + V + S_vec))
-    
-    A_blocks.append(spa.vstack(socp_rows))
-    b_blocks.append(np.hstack(socp_rhs))
-    cones.extend([clarabel.SecondOrderConeT(1 + V + S_vec) for _ in range(N)])
-    
-    # Combine all blocks
-    A_csc = spa.vstack(A_blocks)
-    b = np.hstack(b_blocks)
-    
-    return A_csc, b, c_obj, cones, x_dim
+# NumPy canonicalization functions have been moved to numpy_clarabel_layer.py
+# Import them from there if needed for testing purposes
 
 
 # =============================================================================
@@ -627,6 +632,8 @@ def dro_clarabel_solve(
     G_batch, F_batch,
     # Parameters
     eps, precond_inv,
+    # Risk measure
+    dro_obj='expectation', alpha=0.1,
 ):
     """
     Full differentiable DRO solve using Clarabel + diffcp.
@@ -642,24 +649,32 @@ def dro_clarabel_solve(
         F_batch: (N, V) function values
         eps: Wasserstein radius
         precond_inv: (G_precond_inv, F_precond_inv) preconditioner
+        dro_obj: Risk measure type ('expectation' or 'cvar')
+        alpha: CVaR confidence level (only used when dro_obj='cvar')
     
     Returns:
         obj_val: Optimal DRO objective value (scalar, differentiable)
     """
-    # JAX canonicalization (differentiable)
-    A_dense, b, c, x_dim, cone_info = jax_canonicalize_dro_expectation(
-        A_obj, b_obj, A_vals, b_vals, c_vals,
-        G_batch, F_batch,
-        eps, precond_inv,
-    )
+    # Select canonicalization based on risk measure
+    if dro_obj == 'expectation':
+        A_dense, b, c, x_dim, cone_info = jax_canonicalize_dro_expectation(
+            A_obj, b_obj, A_vals, b_vals, c_vals,
+            G_batch, F_batch,
+            eps, precond_inv,
+        )
+    elif dro_obj == 'cvar':
+        A_dense, b, c, x_dim, cone_info = jax_canonicalize_dro_cvar(
+            A_obj, b_obj, A_vals, b_vals, c_vals,
+            G_batch, F_batch,
+            eps, alpha, precond_inv,
+        )
+    else:
+        raise ValueError(f"Unknown dro_obj: {dro_obj}")
     
     # Create static data for cones (non-traceable, used in callbacks)
-    # Note: This creates Python objects, so the function isn't fully JIT-able
-    # but the gradients will still flow through correctly
     static_data = ClarabelSolveData(cone_info, A_dense.shape)
     
     # Solve with custom VJP (non-traceable forward, diffcp adjoint backward)
     obj_val = clarabel_solve_wrapper(static_data, A_dense, b, c)
     
     return obj_val
-

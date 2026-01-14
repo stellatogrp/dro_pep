@@ -83,7 +83,7 @@ class AdamWMinMax:
             
         return new_params
 
-    def step(self, x_params, y_params, grads_x, grads_y, proj_y_fn=None):
+    def step(self, x_params, y_params, grads_x, grads_y, proj_x_fn=None, proj_y_fn=None):
         """
         Performs one step of optimization.
         
@@ -92,16 +92,23 @@ class AdamWMinMax:
             y_params: Current y parameters (list of JAX arrays)
             grads_x: Gradients for x (list of JAX arrays) - descent
             grads_y: Gradients for y (list of JAX arrays) - ascent
+            proj_x_fn: Optional projection function for x params (e.g., for nonnegativity)
             proj_y_fn: Optional projection function for y params
             
         Returns:
-            x_new: Updated x parameters
+            x_new: Updated x parameters (projected if proj_x_fn provided)
             y_new: Updated y parameters (projected if proj_y_fn provided)
         """
         self.t += 1
         
         # Update X (Minimization / Descent)
-        x_new = self._apply_adamw(x_params, grads_x, self.state_x, maximize=False)
+        x_unconstrained = self._apply_adamw(x_params, grads_x, self.state_x, maximize=False)
+        
+        # Project X if projection function provided
+        if proj_x_fn is not None:
+            x_new = proj_x_fn(x_unconstrained)
+        else:
+            x_new = x_unconstrained
         
         # Update Y (Maximization / Ascent)
         y_unconstrained = self._apply_adamw(y_params, grads_y, self.state_y, maximize=True)
@@ -186,7 +193,7 @@ class AdamMinMax:
             
         return new_params
 
-    def step(self, x_params, y_params, grads_x, grads_y, proj_y_fn=None):
+    def step(self, x_params, y_params, grads_x, grads_y, proj_x_fn=None, proj_y_fn=None):
         """
         Performs one step of optimization.
         
@@ -195,16 +202,23 @@ class AdamMinMax:
             y_params: Current y parameters (list of JAX arrays)
             grads_x: Gradients for x (list of JAX arrays) - descent
             grads_y: Gradients for y (list of JAX arrays) - ascent
+            proj_x_fn: Optional projection function for x params (e.g., for nonnegativity)
             proj_y_fn: Optional projection function for y params
             
         Returns:
-            x_new: Updated x parameters
+            x_new: Updated x parameters (projected if proj_x_fn provided)
             y_new: Updated y parameters (projected if proj_y_fn provided)
         """
         self.t += 1
         
         # Update X (Minimization / Descent)
-        x_new = self._apply_adam(x_params, grads_x, self.state_x, maximize=False)
+        x_unconstrained = self._apply_adam(x_params, grads_x, self.state_x, maximize=False)
+        
+        # Project X if projection function provided
+        if proj_x_fn is not None:
+            x_new = proj_x_fn(x_unconstrained)
+        else:
+            x_new = x_unconstrained
         
         # Update Y (Maximization / Ascent)
         y_unconstrained = self._apply_adam(y_params, grads_y, self.state_y, maximize=True)

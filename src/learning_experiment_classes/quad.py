@@ -26,6 +26,7 @@ from learning_experiment_classes.autodiff_setup import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
+from learning_experiment_classes.jax_clarabel_layer import dro_clarabel_solve
 from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
 from learning_experiment_classes.acceleration_stepsizes import (
     get_nesterov_fgm_beta_sequence,
@@ -198,6 +199,56 @@ def full_SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
     # 4. Call cvxpylayer and compute loss
     (lambd_star, s_star) = large_sdp_layer(*params_list)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
+    return loss
+
+
+def full_clarabel_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, 
+                            mu, L, R, K_max, eps, alpha, dro_obj, pep_obj, precond_inv, traj_fn, pep_data_fn):
+    """Full DRO pipeline using Clarabel/diffcp solver.
+    
+    This function uses dro_clarabel_solve with conditional logic for the risk measure.
+    
+    Args:
+        stepsizes: Tuple of step size arrays (e.g., (t,) for GD, (t, beta) for FGM)
+        Q_batch: Batch of quadratic matrices (N, d, d)
+        z0_batch: Batch of initial points (N, d)
+        zs_batch: Batch of optimal points (N, d)
+        fs_batch: Batch of optimal function values (N,)
+        mu: Strong convexity parameter
+        L: Lipschitz constant
+        R: Initial radius bound
+        K_max: Number of algorithm iterations
+        eps: Wasserstein ball radius
+        alpha: CVaR confidence level (ignored for expectation)
+        dro_obj: Risk measure type ('expectation' or 'cvar')
+        pep_obj: PEP objective type
+        precond_inv: Precomputed preconditioner (tuple of G_precond_vec, F_precond)
+        traj_fn: Trajectory function
+        pep_data_fn: PEP data construction function
+    
+    Returns:
+        Scalar loss value
+    """
+    # 1. Compute sample Gram matrices (G, F) from trajectories
+    batch_GF_func = jax.vmap(
+        lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+        in_axes=(0, 0, 0, 0)
+    )
+    G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
+    
+    # 2. Compute constraint matrices from stepsizes
+    pep_data = pep_data_fn(stepsizes, mu, L, R, K_max, pep_obj)
+    A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+    
+    # 3. Call unified dro_clarabel_solve with risk measure selection
+    loss = dro_clarabel_solve(
+        A_obj=A_obj, b_obj=b_obj,
+        A_vals=A_vals, b_vals=b_vals, c_vals=c_vals,
+        G_batch=G_batch, F_batch=F_batch,
+        eps=eps, precond_inv=precond_inv,
+        dro_obj=dro_obj, alpha=alpha,
+    )
+    
     return loss
 
 
@@ -398,7 +449,7 @@ def quad_run(cfg):
     os.makedirs(output_dir, exist_ok=True)
     
     # Random key for sampling
-    seed = 42
+    seed = cfg.seed
     key = jax.random.PRNGKey(seed)
     
     # Loop over K_max values
@@ -492,6 +543,11 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         evals_clipped = jnp.clip(evals, mu_val, L_val)
         return (evecs * evals_clipped) @ evecs.T
     
+    # Projection function for stepsizes (ensure nonnegativity)
+    def proj_stepsizes(stepsizes):
+        """Project stepsizes to be nonnegative using relu."""
+        return [jax.nn.relu(s) for s in stepsizes]
+    
     # Sample functions
     def sample_batch(key):
         key, k1, k2 = jax.random.split(key, 3)
@@ -571,22 +627,38 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         )
         log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
         
-        # Create the full DRO layer based on dro_obj type
-        if cfg.dro_obj == 'expectation':
-            full_dro_layer = create_full_dro_exp_layer(
-                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
-                c_vals_init, precond_inv, eps
-            )
-        elif cfg.dro_obj == 'cvar':
-            full_dro_layer = create_full_dro_cvar_layer(
-                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
-                c_vals_init, precond_inv, eps, alpha
-            )
-        else:
-            raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
+        # Get sdp_backend from config (default: scs for backward compatibility)
+        sdp_backend = cfg.get('sdp_backend', 'scs')
+        log.info(f'Using SDP backend: {sdp_backend}')
         
-        # Gradient function uses full_SCS_pipeline with all args traced
-        grad_fn = jax.grad(full_SCS_pipeline, argnums=(0, 1, 2))
+        if sdp_backend == 'clarabel':
+            # Use Clarabel/diffcp - no cvxpylayer needed
+            # Convert precond_inv to JAX arrays for Clarabel pipeline
+            precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
+            
+            # Single gradient function for both expectation and cvar (unified pipeline)
+            grad_fn = jax.grad(full_clarabel_pipeline, argnums=(0, 1, 2))
+            full_dro_layer = None  # Not used for Clarabel
+        else:
+            # Use SCS (original cvxpylayer approach)
+            precond_inv_jax = None  # Not needed
+            
+            # Create the full DRO layer based on dro_obj type
+            if cfg.dro_obj == 'expectation':
+                full_dro_layer = create_full_dro_exp_layer(
+                    M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                    c_vals_init, precond_inv, eps
+                )
+            elif cfg.dro_obj == 'cvar':
+                full_dro_layer = create_full_dro_cvar_layer(
+                    M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                    c_vals_init, precond_inv, eps, alpha
+                )
+            else:
+                raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
+            
+            # Gradient function uses full_SCS_pipeline with all args traced
+            grad_fn = jax.grad(full_SCS_pipeline, argnums=(0, 1, 2))
     elif learning_framework == 'l2o':
         grad_fn = jax.grad(l2o_pipeline, argnums=(0, 1, 2))
         full_dro_layer = None  # Not used for l2o
@@ -663,11 +735,18 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         
         # Compute gradients w.r.t stepsizes tuple, Q_batch, z0_batch
         if learning_framework == 'ldro-pep':
-            # Use full_SCS_pipeline which traces gradients through both G,F and A_vals,b_vals
-            d_stepsizes, dQ, dz0 = grad_fn(
-                stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
-                mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
-            )
+            if sdp_backend == 'clarabel':
+                # Unified full_clarabel_pipeline with alpha and dro_obj
+                d_stepsizes, dQ, dz0 = grad_fn(
+                    stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                    mu_val, L_val, R_val, K_max, eps, alpha, cfg.dro_obj, cfg.pep_obj, precond_inv_jax, traj_fn, pep_data_fn
+                )
+            else:
+                # Use full_SCS_pipeline with full_dro_layer
+                d_stepsizes, dQ, dz0 = grad_fn(
+                    stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                    mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
+                )
         elif learning_framework == 'l2o':
             d_stepsizes, dQ, dz0 = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha=alpha)
         
@@ -677,8 +756,8 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
         
         # SGDA step: descent in stepsizes, ascent in Q and z0 with projections
         if sgda_type == "vanilla_sgda":
-            # Update all stepsizes in tuple
-            stepsizes = tuple(s - eta_t * ds for s, ds in zip(stepsizes, d_stepsizes))
+            # Update all stepsizes in tuple and project to be nonnegative
+            stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
             Q = proj_Q(Q + eta_Q * dQ)
             z0 = proj_z0(z0 + eta_z0 * dz0)
         elif sgda_type in ("adam", "adamw"):
@@ -697,15 +776,16 @@ def run_sgda_for_K(cfg, K_max, key, M_val, t_init,
                 y_params=[Q, z0],
                 grads_x=grads_x,
                 grads_y=[dQ, dz0],
+                proj_x_fn=proj_stepsizes,
                 proj_y_fn=proj_y_params
             )
             stepsizes = tuple(x_new)
             Q = y_new[0]
             z0 = y_new[1]
         elif sgda_type == "sgda_wd":
-            # SGD with weight decay
+            # SGD with weight decay, project stepsizes to be nonnegative
             weight_decay = cfg.get('weight_decay', 1e-2)
-            stepsizes = tuple(s - eta_t * (ds + weight_decay * s) for s, ds in zip(stepsizes, d_stepsizes))
+            stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
             Q = proj_Q(Q + eta_Q * (dQ - weight_decay * Q))
             z0 = proj_z0(z0 + eta_z0 * (dz0 - weight_decay * z0))
         else:
