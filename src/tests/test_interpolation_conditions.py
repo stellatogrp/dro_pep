@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from learning_experiment_classes.interpolation_conditions import (
+from learning.interpolation_conditions import (
     smooth_strongly_convex_interp,
     smooth_strongly_convex_interp_consecutive
 )

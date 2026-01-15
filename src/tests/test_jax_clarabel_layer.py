@@ -13,7 +13,7 @@ from numpy.testing import assert_allclose
 import sys
 sys.path.insert(0, '..')
 
-from learning_experiment_classes.jax_clarabel_layer import (
+from learning.jax_clarabel_layer import (
     jax_symm_vectorize,
     jax_scaled_off_triangles,
     jax_get_triangular_indices,
@@ -213,7 +213,7 @@ class TestCanonicalization:
     
     def test_canonicalization_dimensions(self, pep_data_and_samples):
         """Test that canonicalization produces correct dimensions."""
-        from learning_experiment_classes.numpy_clarabel_layer import (
+        from learning.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         
@@ -248,7 +248,7 @@ class TestCanonicalization:
     
     def test_canonicalization_solves(self, pep_data_and_samples):
         """Test that canonicalized problem can be solved by Clarabel (or at least runs)."""
-        from learning_experiment_classes.numpy_clarabel_layer import (
+        from learning.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         import clarabel
@@ -301,7 +301,7 @@ class TestAgainstClarabelCanonicalizer:
         dim = 10  # Dimension of the problem
         
         # Generate trajectories and PEP data using GD for simplicity
-        from learning_experiment_classes.pep_construction import construct_gd_pep_data
+        from learning.pep_construction import construct_gd_pep_data
         
         # Step sizes
         t = 0.1 * np.ones(K_max)
@@ -310,7 +310,7 @@ class TestAgainstClarabelCanonicalizer:
         pep_data = construct_gd_pep_data(t, mu, L, R, K_max, 'obj_val')
         
         # Generate sample trajectories
-        from learning_experiment_classes.autodiff_setup import problem_data_to_gd_trajectories
+        from learning.autodiff_setup import problem_data_to_gd_trajectories
         import jax.numpy as jnp
         
         samples = []
@@ -336,7 +336,7 @@ class TestAgainstClarabelCanonicalizer:
             samples.append((np.array(G), np.array(F)))
         
         # Compute preconditioner
-        from learning_experiment_classes.autodiff_setup import compute_preconditioner_from_samples
+        from learning.autodiff_setup import compute_preconditioner_from_samples
         G_batch = np.stack([s[0] for s in samples])
         F_batch = np.stack([s[1] for s in samples])
         precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average')
@@ -356,7 +356,7 @@ class TestAgainstClarabelCanonicalizer:
     
     def test_matches_clarabel_canonicalizer_A_matrix(self, real_pep_data_and_samples):
         """Test that our canonicalization produces same A matrix as ClarabelCanonicalizer."""
-        from learning_experiment_classes.numpy_clarabel_layer import numpy_canonicalize_dro_expectation
+        from learning.numpy_clarabel_layer import numpy_canonicalize_dro_expectation
         from reformulator.canonicalizers.clarabel_canonicalizer import ClarabelCanonicalizer
         
         d = real_pep_data_and_samples
@@ -407,7 +407,7 @@ class TestAgainstClarabelCanonicalizer:
     
     def test_matches_clarabel_canonicalizer_objective(self, real_pep_data_and_samples):
         """Test that both versions produce same optimal objective."""
-        from learning_experiment_classes.numpy_clarabel_layer import numpy_canonicalize_dro_expectation
+        from learning.numpy_clarabel_layer import numpy_canonicalize_dro_expectation
         from reformulator.canonicalizers.clarabel_canonicalizer import ClarabelCanonicalizer
         import scipy.sparse as spa
         import clarabel
@@ -470,8 +470,8 @@ class TestJaxCanonicalization:
         N = 4
         dim = 5
         
-        from learning_experiment_classes.pep_construction import construct_gd_pep_data
-        from learning_experiment_classes.autodiff_setup import problem_data_to_gd_trajectories
+        from learning.pep_construction import construct_gd_pep_data
+        from learning.autodiff_setup import problem_data_to_gd_trajectories
         import jax.numpy as jnp
         
         t = 0.1 * np.ones(K_max)
@@ -495,7 +495,7 @@ class TestJaxCanonicalization:
         G_batch = np.stack([s[0] for s in samples])
         F_batch = np.stack([s[1] for s in samples])
         
-        from learning_experiment_classes.autodiff_setup import compute_preconditioner_from_samples
+        from learning.autodiff_setup import compute_preconditioner_from_samples
         precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, 'average')
         
         return {
@@ -517,10 +517,10 @@ class TestJaxCanonicalization:
         while NumPy uses a different ordering. We compare problem dimensions and c vectors,
         since the actual constraint rows are reordered.
         """
-        from learning_experiment_classes.jax_clarabel_layer import (
+        from learning.jax_clarabel_layer import (
             jax_canonicalize_dro_expectation,
         )
-        from learning_experiment_classes.numpy_clarabel_layer import (
+        from learning.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation,
         )
         
@@ -556,7 +556,7 @@ class TestJaxCanonicalization:
     
     def test_jit_compatible(self, pep_data_for_jax):
         """Test that JAX canonicalization can be JIT compiled."""
-        from learning_experiment_classes.jax_clarabel_layer import jax_canonicalize_dro_expectation
+        from learning.jax_clarabel_layer import jax_canonicalize_dro_expectation
         
         d = pep_data_for_jax
         
@@ -583,7 +583,7 @@ class TestJaxCanonicalization:
     
     def test_gradients_flow(self, pep_data_for_jax):
         """Test that gradients can be computed through the canonicalization."""
-        from learning_experiment_classes.jax_clarabel_layer import jax_canonicalize_dro_expectation
+        from learning.jax_clarabel_layer import jax_canonicalize_dro_expectation
         
         d = pep_data_for_jax
         
@@ -631,8 +631,8 @@ class TestDroClarabelSolve:
         
         # Import functions from quad.py for proper data generation
         from learning_experiment_classes.quad import get_Q_samples, get_z0_samples
-        from learning_experiment_classes.pep_construction import construct_gd_pep_data
-        from learning_experiment_classes.autodiff_setup import (
+        from learning.pep_construction import construct_gd_pep_data
+        from learning.autodiff_setup import (
             problem_data_to_gd_trajectories, compute_preconditioner_from_samples
         )
         
@@ -697,10 +697,10 @@ class TestDroClarabelSolve:
     
     def test_forward_pass_runs(self, pep_data_for_solve):
         """Test that forward pass of dro_clarabel_solve works."""
-        from learning_experiment_classes.jax_clarabel_layer import (
+        from learning.jax_clarabel_layer import (
             dro_clarabel_solve
         )
-        from learning_experiment_classes.numpy_clarabel_layer import (
+        from learning.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         import scipy.sparse as spa
@@ -741,10 +741,10 @@ class TestDroClarabelSolve:
     
     def test_forward_matches_numpy(self, pep_data_for_solve):
         """Test that JAX solve matches NumPy canonicalization solve."""
-        from learning_experiment_classes.jax_clarabel_layer import (
+        from learning.jax_clarabel_layer import (
             dro_clarabel_solve,
         )
-        from learning_experiment_classes.numpy_clarabel_layer import (
+        from learning.numpy_clarabel_layer import (
             numpy_canonicalize_dro_expectation
         )
         import clarabel
@@ -784,7 +784,7 @@ class TestDroClarabelSolve:
     
     def test_gradients_through_solve(self, pep_data_for_solve):
         """Test that gradients can be computed through dro_clarabel_solve."""
-        from learning_experiment_classes.jax_clarabel_layer import dro_clarabel_solve
+        from learning.jax_clarabel_layer import dro_clarabel_solve
         
         d = pep_data_for_solve
         

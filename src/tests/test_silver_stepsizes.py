@@ -5,7 +5,7 @@ Run with: pytest tests/test_silver_stepsizes.py -v
 """
 import pytest
 import numpy as np
-from learning_experiment_classes.silver_stepsizes import (
+from learning.silver_stepsizes import (
     get_nonstrongly_convex_silver_stepsizes,
     get_strongly_convex_silver_stepsizes,
     compute_shifted_2adics,

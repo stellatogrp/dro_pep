@@ -11,13 +11,13 @@ from functools import partial
 
 # from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
 # from reformulator.dro_reformulator import DROReformulator
-from learning_experiment_classes.pep_construction import (
+from learning.pep_construction import (
     construct_gd_pep_data,
     construct_fgm_pep_data,
     pep_data_to_numpy,
 )
-from learning_experiment_classes.adam_optimizers import AdamWMin
-from learning_experiment_classes.autodiff_setup import (
+from learning.adam_optimizers import AdamWMin
+from learning.autodiff_setup import (
     problem_data_to_gd_trajectories,
     problem_data_to_nesterov_fgm_trajectories,
     problem_data_to_pep_obj,
@@ -26,9 +26,9 @@ from learning_experiment_classes.autodiff_setup import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
-from learning_experiment_classes.jax_clarabel_layer import dro_clarabel_solve, pep_clarabel_solve
-from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
-from learning_experiment_classes.acceleration_stepsizes import (
+from learning.jax_clarabel_layer import dro_clarabel_solve, pep_clarabel_solve
+from learning.silver_stepsizes import get_strongly_convex_silver_stepsizes
+from learning.acceleration_stepsizes import (
     # get_nesterov_fgm_beta_sequence,
     jax_get_nesterov_fgm_beta_sequence,
 )

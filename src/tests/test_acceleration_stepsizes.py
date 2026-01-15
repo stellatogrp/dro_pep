@@ -5,7 +5,7 @@ Run with: pytest tests/test_acceleration_stepsizes.py -v
 """
 import pytest
 import numpy as np
-from learning_experiment_classes.acceleration_stepsizes import (
+from learning.acceleration_stepsizes import (
     get_nesterov_fgm_beta_sequence,
     jax_get_nesterov_fgm_beta_sequence,
 )

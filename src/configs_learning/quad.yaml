@@ -5,7 +5,7 @@ R: 1
 dim: 200
 
 # type of learning framework
-learning_framework: 'lpep'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Batch size
 N: 16

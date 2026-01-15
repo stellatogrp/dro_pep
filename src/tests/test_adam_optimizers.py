@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 import jax
 import jax.numpy as jnp
-from learning_experiment_classes.adam_optimizers import AdamWMinMax, AdamMinMax
+from learning.adam_optimizers import AdamWMinMax, AdamMinMax
 
 
 class TestAdamMinMaxProjX:
@@ -172,7 +172,7 @@ class TestAdamWMin:
     
     def test_step_returns_single_value(self):
         """Verify step() returns only x_new (not a tuple)."""
-        from learning_experiment_classes.adam_optimizers import AdamWMin
+        from learning.adam_optimizers import AdamWMin
         
         x_params = [jnp.array([1.0, 2.0, 3.0])]
         optimizer = AdamWMin(x_params, lr=0.1)
@@ -185,7 +185,7 @@ class TestAdamWMin:
     
     def test_proj_x_fn_applied(self):
         """Verify proj_x_fn is applied for nonnegativity."""
-        from learning_experiment_classes.adam_optimizers import AdamWMin
+        from learning.adam_optimizers import AdamWMin
         
         x_params = [jnp.array([0.1, 0.1])]
         optimizer = AdamWMin(x_params, lr=1.0)
@@ -203,7 +203,7 @@ class TestAdamWMin:
     
     def test_descent_direction(self):
         """Verify optimizer does descent (values decrease with positive gradient)."""
-        from learning_experiment_classes.adam_optimizers import AdamWMin
+        from learning.adam_optimizers import AdamWMin
         
         x_params = [jnp.array([5.0, 5.0])]
         optimizer = AdamWMin(x_params, lr=0.1, weight_decay=0.0)
@@ -216,7 +216,7 @@ class TestAdamWMin:
     
     def test_weight_decay_applied(self):
         """Verify weight decay shrinks parameters."""
-        from learning_experiment_classes.adam_optimizers import AdamWMin
+        from learning.adam_optimizers import AdamWMin
         
         x_params = [jnp.array([10.0, 10.0])]
         optimizer = AdamWMin(x_params, lr=0.1, weight_decay=0.1)

@@ -15,8 +15,8 @@ jax.config.update('jax_enable_x64', True)
 import clarabel
 import scipy.sparse as spa
 
-from learning_experiment_classes.numpy_clarabel_layer import numpy_canonicalize_pep
-from learning_experiment_classes.pep_construction import construct_gd_pep_data, pep_data_to_numpy
+from learning.numpy_clarabel_layer import numpy_canonicalize_pep
+from learning.pep_construction import construct_gd_pep_data, pep_data_to_numpy
 
 
 class TestNumpyCanonicalPep:
