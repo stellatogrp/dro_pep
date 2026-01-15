@@ -26,7 +26,7 @@ from learning_experiment_classes.autodiff_setup import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
-from learning_experiment_classes.jax_clarabel_layer import dro_clarabel_solve
+from learning_experiment_classes.jax_clarabel_layer import dro_clarabel_solve, pep_clarabel_solve
 from learning_experiment_classes.silver_stepsizes import get_strongly_convex_silver_stepsizes
 from learning_experiment_classes.acceleration_stepsizes import (
     # get_nesterov_fgm_beta_sequence,
@@ -362,23 +362,31 @@ def quad_run(cfg):
                 t_init = jnp.array(get_strongly_convex_silver_stepsizes(K, mu=mu_val, L=L_val))
         else:
             t_init = t_init_scalar
-        log.info(f"=== Running SGD for K={K} ===")
         
         # Create output directory for this K
         K_output_dir = os.path.join(output_dir, f"K_{K}")
         os.makedirs(K_output_dir, exist_ok=True)
         csv_path = os.path.join(K_output_dir, "progress.csv")
         
-        # Run SGD for this K value (CSV saved inside the loop)
-        run_sgd_for_K(
-            cfg, K, key, M_val, t_init, 
-            sgd_iters, eta_t,
-            eps, alpha, alg, optimizer_type,
-            mu_val, L_val, R_val, N_val, d_val,
-            csv_path
-        )
-    
-    log.info("=== SGD experiment complete ===")
+        # Select run function based on learning framework
+        learning_framework = cfg.learning_framework
+        
+        if learning_framework == 'lpep':
+            # LPEP: deterministic PEP minimization (no samples, no min-max)
+            run_gd_for_K_lpep(
+                cfg, K, t_init, sgd_iters, eta_t,
+                mu_val, L_val, R_val, alg, csv_path
+            )
+        else:
+            # LDRO-PEP or L2O: stochastic optimization with samples
+            run_sgd_for_K(
+                cfg, K, key, M_val, t_init, 
+                sgd_iters, eta_t,
+                eps, alpha, alg, optimizer_type,
+                mu_val, L_val, R_val, N_val, d_val,
+                csv_path
+            )
+            log.info("=== SGD experiment complete ===")
 
 
 def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta):
@@ -411,6 +419,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     Minimizes over stepsizes only. Q and z0 are resampled each iteration.
     Saves progress to csv_path after each iteration (overwrites to preserve intermediate progress).
     """
+    log.info(f"=== Running SGD for K={K_max} ===")
     
     # Select trajectory function based on algorithm
     if alg == 'vanilla_gd':
@@ -640,7 +649,8 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     """
     Run gradient descent for learning PEP (lpep) - no samples, no min-max.
     
-    Optimizes step sizes to minimize the standard (worst-case) PEP objective.
+    Optimizes step sizes to minimize the standard (worst-case) PEP objective
+    using the Clarabel solver with diffcp for differentiation.
     
     Args:
         cfg: Configuration object
@@ -654,64 +664,75 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     """
     log.info(f"=== Running lpep GD for K={K_max} ===")
     
-    # Select trajectory function based on algorithm
+    # Select PEP data construction function based on algorithm
     if alg == 'vanilla_gd':
-        traj_fn = problem_data_to_gd_trajectories
+        pep_data_fn = lambda t, mu, L, R, K, pep_obj: construct_gd_pep_data(t, mu, L, R, K, pep_obj)
     elif alg == 'nesterov_fgm':
-        traj_fn = problem_data_to_nesterov_fgm_trajectories
+        pep_data_fn = lambda stepsizes, mu, L, R, K, pep_obj: construct_fgm_pep_data(
+            stepsizes[0], stepsizes[1], mu, L, R, K, pep_obj
+        )
     else:
         log.error(f"Algorithm '{alg}' is not implemented.")
         raise ValueError(f"Unknown algorithm: {alg}")
     
-    # Placeholder for lpep-specific CP layer creation
-    def get_pep_cp_layer(t_curr):
-        """Create cvxpylayer for standard PEP (placeholder).
-        
-        TODO: Implement this function to create a differentiable layer
-        for the standard PEP SDP without samples/DRO.
-        
-        Args:
-            t_curr: Current step size (scalar or vector)
-            
-        Returns:
-            Callable cvxpylayer that takes step sizes and returns PEP objective
-        """
-        pep_problem = quad_pep_subproblem(
-            mu_val, L_val, R_val, t_curr, K_max, 
-            cfg.pep_obj, alg, algo, return_problem=True
-        )
-        mosek_params = {
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': cfg.mosek_tol_dfeas,
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': cfg.mosek_tol_pfeas,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': cfg.mosek_tol_rel_gap,
-        }
-        pep_problem.solve(
-            wrapper='cvxpy',
-            solver='MOSEK',
-            mosek_params=mosek_params,
-            verbose=0,
-        )
-        # TODO: Create and return the cvxpylayer for lpep
-        # For now, raise NotImplementedError
-        raise NotImplementedError("lpep cvxpylayer not yet implemented. Need to create lpep-specific layer.")
-    
     # Initialize stepsizes based on algorithm
     if alg == 'vanilla_gd':
-        stepsizes = (t_init,)
+        # Just step size t
+        t = jnp.atleast_1d(jnp.array(t_init))
+        if t.ndim == 0 or t.shape[0] == 1:
+            t = jnp.full(K_max, float(t_init))
+        stepsizes = [t]
+        has_beta = False
     elif alg == 'nesterov_fgm':
+        # Step size t and momentum beta
+        t = jnp.atleast_1d(jnp.array(t_init))
+        if t.ndim == 0 or t.shape[0] == 1:
+            t = jnp.full(K_max, float(t_init))
         beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
-        stepsizes = (t_init, beta_init)
+        stepsizes = [t, beta_init]
+        has_beta = True
     
-    # Track step size values
-    t = stepsizes[0]
-    is_vector_t = jnp.ndim(t) > 0
-    has_beta = len(stepsizes) > 1
-    all_stepsizes_vals = [stepsizes]
+    is_vector_t = True  # Always use vector step sizes for lpep
+    
+    # Track step size values for logging
+    all_stepsizes_vals = [tuple(stepsizes)]
+    
+    # Define the PEP loss function (differentiable w.r.t. stepsizes)
+    def pep_loss_fn(stepsizes_list):
+        """Compute PEP worst-case bound for given stepsizes."""
+        if alg == 'vanilla_gd':
+            t = stepsizes_list[0]
+            pep_data = construct_gd_pep_data(t, mu_val, L_val, R_val, K_max, cfg.pep_obj)
+        else:  # nesterov_fgm
+            t, beta = stepsizes_list[0], stepsizes_list[1]
+            pep_data = construct_fgm_pep_data(t, beta, mu_val, L_val, R_val, K_max, cfg.pep_obj)
+        
+        A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+        
+        # Solve PEP using Clarabel
+        loss = pep_clarabel_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
+        return loss
+    
+    # Create gradient function
+    grad_fn = jax.grad(pep_loss_fn)
+    
+    # Initialize AdamWMin optimizer
+    optimizer = AdamWMin(
+        x_params=stepsizes,
+        lr=eta_t,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=getattr(cfg, 'weight_decay', 0.0),
+    )
+    
+    # Projection function to keep stepsizes non-negative
+    def proj_nonneg(params):
+        return [jnp.maximum(p, 1e-6) for p in params]
     
     # GD iterations (descent only, no ascent)
     for iter_num in range(gd_iters):
         t = stepsizes[0]
-        t_log = f'{t:.5f}' if not is_vector_t else '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
+        t_log = '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
         if has_beta:
             beta = stepsizes[1]
             beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
@@ -719,18 +740,25 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         else:
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
-        # Get PEP layer for current stepsizes
-        t_for_pep = t.tolist() if is_vector_t else float(t)
-        pep_layer = get_pep_cp_layer(t_for_pep)
+        # Compute gradients
+        grads = grad_fn(stepsizes)
         
-        # TODO: Compute gradients via autodiff of pep_layer
-        # For now, this will raise NotImplementedError from get_pep_cp_layer
+        # Check for NaN gradients
+        if any(jnp.any(jnp.isnan(g)) for g in grads):
+            log.warning(f'NaN gradients at iter {iter_num}, skipping update')
+            continue
         
-        # Placeholder gradient update (will be replaced with actual autodiff)
-        # d_stepsizes = grad_fn(stepsizes, ...)
-        # stepsizes = tuple(s - eta_t * ds for s, ds in zip(stepsizes, d_stepsizes))
+        # Update stepsizes via AdamWMin
+        stepsizes = optimizer.step(stepsizes, grads, proj_x_fn=proj_nonneg)
         
-        all_stepsizes_vals.append(stepsizes)
+        all_stepsizes_vals.append(tuple(stepsizes))
+        
+        # Compute and log current loss
+        try:
+            current_loss = pep_loss_fn(stepsizes)
+            log.info(f'  PEP loss: {current_loss:.6f}')
+        except Exception as e:
+            log.warning(f'  Could not compute loss: {e}')
         
         # Save progress
         df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
@@ -739,6 +767,6 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     # Final save
     df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
     t = stepsizes[0]
-    t_str = str(t) if is_vector_t else f'{float(t):.6f}'
+    t_str = '[' + ', '.join(f'{x:.6f}' for x in t.tolist()) + ']'
     log.info(f'K={K_max} complete. Final t={t_str}. Saved to {csv_path}')
     df.to_csv(csv_path, index=False)

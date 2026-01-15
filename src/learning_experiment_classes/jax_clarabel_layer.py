@@ -483,9 +483,91 @@ def jax_to_clarabel_cones(cone_info):
         cones.append(clarabel.PSDTriangleConeT(int(psd_dim)))
     return cones
 
+@jax.jit
+def jax_canonicalize_pep(A_obj, b_obj, A_vals, b_vals, c_vals):
+    """
+    Pure JAX canonicalization of vanilla PEP (no DRO) to Clarabel form.
+    
+    This is a JAX-traceable version for differentiable PEP without samples.
+    Simpler than DRO version - just the dual SDP with y >= 0, equality, and PSD constraints.
+    
+    The PEP dual problem is:
+        min  c^T y
+        s.t. B^T y = -b_obj   (equality)
+             y >= 0           (non-negativity)
+             A_obj - A^* y >> 0  (PSD)
+    
+    Args:
+        A_obj: Objective matrix (S_mat, S_mat) - contribution to Gram matrix
+        b_obj: Objective vector (V,) - contribution to function values
+        A_vals: Constraint matrices (M, S_mat, S_mat)
+        b_vals: Constraint vectors (M, V)
+        c_vals: Constraint constants (M,)
+    
+    Returns:
+        A_dense: Dense constraint matrix (V + M + S_vec, M) - JAX array
+        b: RHS vector - JAX array  
+        c: Objective vector - JAX array
+        x_dim: Dimension of decision variable (= M)
+        cone_info: Dict with cone dimensions for later conversion
+    """
+    # Get dimensions
+    M = A_vals.shape[0]     # Number of constraints / dual variables
+    V = b_obj.shape[0]      # Dimension of b_obj (function values)
+    S_mat = A_obj.shape[0]  # Dimension of PSD constraint matrix
+    S_vec = S_mat * (S_mat + 1) // 2  # Vectorized lower triangle size
+    
+    # Decision variable is just y with dimension M
+    x_dim = M
+    
+    # Build constraint matrix rows
+    # 1. Equality: -B^T y = -b_obj  =>  constraint matrix is -B^T
+    Bm_T = b_vals.T  # (V, M) - transpose of b_vals
+    
+    # 2. Non-negativity: -y <= 0  =>  constraint matrix is -I
+    eye_M = jnp.eye(M)
+    
+    # 3. PSD: -A^* y + slack = -A_obj (vectorized)
+    # A^* y = sum_m y_m * A_vals[m], in svec form
+    A_obj_svec = jax_symm_vectorize(A_obj, jnp.sqrt(2.0))  # (S_vec,)
+    A_vals_svec = jax.vmap(lambda A: jax_symm_vectorize(A, jnp.sqrt(2.0)))(A_vals)  # (M, S_vec)
+    Am_T = A_vals_svec.T  # (S_vec, M)
+    
+    # Stack constraint matrix (diffcp order: zero, nonneg, psd)
+    A_dense = jnp.vstack([
+        -Bm_T,    # (V, M) - equality constraints
+        -eye_M,   # (M, M) - non-negativity constraints
+        -Am_T,    # (S_vec, M) - PSD constraints
+    ])
+    
+    # Build RHS vector b
+    b = jnp.concatenate([
+        -b_obj,           # (V,) - equality RHS
+        jnp.zeros(M),     # (M,) - non-negativity RHS
+        -A_obj_svec,      # (S_vec,) - PSD RHS
+    ])
+    
+    # Objective: negate c_vals for correct sign (PEP primal is maximization)
+    c = -c_vals
+    
+    # Cone info for later conversion to Clarabel cones
+    cone_info = {
+        'zero': V,          # V equality constraints
+        'nonneg': M,        # M non-negativity constraints
+        'soc': [],          # No SOC constraints in vanilla PEP
+        'psd': [S_mat],     # One PSD constraint of size S_mat
+        'M': M,
+        'V': V,
+        'S_mat': S_mat,
+        'S_vec': S_vec,
+    }
+    
+    return A_dense, b, c, x_dim, cone_info
+
 
 # NumPy canonicalization functions have been moved to numpy_clarabel_layer.py
 # Import them from there if needed for testing purposes
+
 
 
 # =============================================================================
@@ -505,11 +587,6 @@ class ClarabelSolveData:
     
     def _build_diffcp_cone_dict(self, cone_info):
         """Build diffcp cone dictionary matching the JAX canonicalization ordering."""
-        N = cone_info['N']
-        V = cone_info['V']
-        S_mat = cone_info['S_mat']
-        S_vec = cone_info['S_vec']
-        
         # Order: nonnegative, zero, PSD, SOC - matching jax_to_clarabel_cones
         cone_dict = {}
         
@@ -722,6 +799,42 @@ def dro_clarabel_solve(
         )
     else:
         raise ValueError(f"Unknown dro_obj: {dro_obj}")
+    
+    # Create static data for cones (non-traceable, used in callbacks)
+    static_data = ClarabelSolveData(cone_info, A_dense.shape)
+    
+    # Solve with custom VJP (non-traceable forward, diffcp adjoint backward)
+    obj_val = clarabel_solve_wrapper(static_data, A_dense, b, c)
+    
+    return obj_val
+
+
+def pep_clarabel_solve(A_obj, b_obj, A_vals, b_vals, c_vals):
+    """
+    Differentiable vanilla PEP solve using Clarabel + diffcp.
+    
+    This is the non-DRO version - solves the standard PEP SDP without samples.
+    Used for learning step sizes by minimizing the worst-case PEP bound.
+    
+    The function combines:
+    1. JAX canonicalization (traceable, JIT-compatible)
+    2. Clarabel solve (via pure_callback)
+    3. diffcp adjoint derivative (via pure_callback in backward pass)
+    
+    Args:
+        A_obj: Objective matrix (S_mat, S_mat) - Gram matrix contribution
+        b_obj: Objective vector (V,) - function value contribution
+        A_vals: Constraint matrices (M, S_mat, S_mat)
+        b_vals: Constraint vectors (M, V)
+        c_vals: Constraint constants (M,)
+    
+    Returns:
+        obj_val: PEP worst-case bound (scalar, differentiable)
+    """
+    # JAX canonicalization (traceable)
+    A_dense, b, c, x_dim, cone_info = jax_canonicalize_pep(
+        A_obj, b_obj, A_vals, b_vals, c_vals
+    )
     
     # Create static data for cones (non-traceable, used in callbacks)
     static_data = ClarabelSolveData(cone_info, A_dense.shape)

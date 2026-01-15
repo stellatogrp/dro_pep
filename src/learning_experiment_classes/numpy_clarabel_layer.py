@@ -491,3 +491,52 @@ def numpy_canonicalize_dro_cvar(
     b = np.hstack(b_blocks)
     
     return A_csc, b, c_obj, cones, x_dim
+
+
+def numpy_canonicalize_pep(
+    A_obj, b_obj, A_vals, b_vals, c_vals,
+):
+    def symm_vectorize(A, scale_factor):
+        """Vectorize lower triangle of symmetric matrix with off-diagonal scaling."""
+        A = np.asarray(A)  # Ensure NumPy array
+        n = A.shape[0]
+        rows, cols = np.tril_indices(n)
+        A_vec = A[rows, cols].copy()  # Copy to avoid modifying original
+        off_diag_mask = rows != cols
+        A_vec[off_diag_mask] *= scale_factor
+        return A_vec
+    
+    M = len(A_vals)
+    V = b_obj.shape[0]
+    S_mat = A_obj.shape[0]
+    S_vec = S_mat * (S_mat + 1) // 2
+
+    x_dim = c_vals.shape[0]
+
+    Bm_T = np.array(b_vals).T  # (V, M)
+
+    A_obj_svec = symm_vectorize(A_obj, np.sqrt(2.0))
+    Am_svec = np.array([symm_vectorize(A_vals[m], np.sqrt(2.0)) for m in range(M)])  # (M, S_vec)
+    Am_T = Am_svec.T  # (S_vec, M)
+
+    A = spa.vstack([
+        -Bm_T,
+        -spa.eye(M),
+        -Am_T,
+    ])
+
+    b = np.hstack([
+        -b_obj,
+        np.zeros(M),
+        -A_obj_svec,
+    ])
+
+    c = -c_vals  # Negate for minimization (PEP primal is maximization)
+
+    cones = [
+        clarabel.ZeroConeT(V),
+        clarabel.NonnegativeConeT(M),
+        clarabel.PSDTriangleConeT(S_mat),
+    ]
+
+    return spa.csc_matrix(A), b, c, cones, x_dim

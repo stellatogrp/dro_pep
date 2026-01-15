@@ -312,7 +312,15 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
         
         return G, F
     else:
-        return y_iter, g_iter, f_y_iter, x_K
+        # Return 3 values like GD: (positions, gradients, function values)
+        # Include x_K as the final position for objective computation
+        # Stack y_iter with x_K as the last column
+        z_stack = jnp.concatenate([y_iter, x_K.reshape(-1, 1)], axis=1)
+        # Stack g_iter with g(x_K) as the last column
+        g_stack = jnp.concatenate([g_iter, g_xK.reshape(-1, 1)], axis=1)
+        # Stack f_y_iter with f(x_K) as the last entry
+        f_stack = jnp.concatenate([f_y_iter, jnp.array([f_xK])])
+        return z_stack, g_stack, f_stack
 
 
 
