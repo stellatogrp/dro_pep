@@ -1,8 +1,8 @@
 # Problem parameters
-mu: 1
-L: 10
-R: 1
-dim: 200
+mu: 1.
+L: 10.
+R: 1.
+dim: 20
 
 # type of learning framework
 learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
@@ -13,19 +13,19 @@ N: 16
 seed: 50
 
 # Algorithm and optimizer type (selected by Slurm job index)
-alg: "nesterov_fgm"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
-stepsize_type: "scalar" # "scalar" or "vector"
-vector_init: "fixed" # "fixed" or "silver"
+stepsize_type: "vector" # "scalar" or "vector"
+vector_init: "silver" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [3, 7, 15, 31]
-K_max: [8]
+K_max: [4]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
-dro_obj: "cvar"  # "expectation" or "cvar"
-sdp_backend: "clarabel"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
+dro_obj: "expectation"  # "expectation" or "cvar"
+sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
 eps: 0.1
 alpha: 0.1
 

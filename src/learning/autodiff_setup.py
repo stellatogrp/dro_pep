@@ -323,6 +323,53 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
         return z_stack, g_stack, f_stack
 
 
+def create_full_pep_layer(M, mat_shape, vec_shape):
+    """Create vanilla PEP cvxpylayer (primal formulation) with constraint matrices as Parameters.
+    
+    This enables full gradient flow through step sizes by making A_vals, b_vals, 
+    A_obj, b_obj into cvxpy Parameters.
+    
+    The PEP primal problem is:
+        max  trace(A_obj @ G) + b_obj^T @ F
+        s.t. G >> 0
+             trace(A_m @ G) + b_m^T @ F + c_m <= 0  for all m
+    
+    Args:
+        M: Number of interpolation constraints
+        mat_shape: Shape of each A_m matrix (dimG, dimG)
+        vec_shape: Shape of each b_m vector (dimF,)
+    
+    Returns:
+        CvxpyLayer that takes parameters in order:
+        [A_0, ..., A_{M-1}, b_0, ..., b_{M-1}, c_vals, A_obj, b_obj]
+        
+        And returns: [G, F] the optimal Gram matrix and function values
+    """
+    # Create parameters for constraint matrices (computed from t via JAX)
+    A_params = [cp.Parameter(mat_shape) for _ in range(M)]  # M constraint matrices
+    b_params = [cp.Parameter(vec_shape) for _ in range(M)]  # M constraint vectors
+    A_obj_param = cp.Parameter(mat_shape)                    # Objective matrix
+    b_obj_param = cp.Parameter(vec_shape)                    # Objective vector
+    c_vals_param = cp.Parameter(M)                           # Objective coefficients
+    
+    G = cp.Variable(mat_shape)
+    F = cp.Variable(vec_shape)
+
+    constraints = [G >> 0]
+
+    for m in range(M):
+        Am = A_params[m]
+        bm = b_params[m]
+        cm = c_vals_param[m]
+        constraints += [cp.trace(Am @ G) + bm.T @ F + cm <= 0]
+    
+    obj = cp.trace(A_obj_param @ G) + b_obj_param.T @ F
+
+    prob = cp.Problem(cp.Maximize(obj), constraints)
+
+    all_params = A_params + b_params + [c_vals_param, A_obj_param, b_obj_param]
+    
+    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[G, F])
 
 
 def create_full_dro_exp_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec_shape, 

@@ -23,6 +23,7 @@ from learning.autodiff_setup import (
     problem_data_to_pep_obj,
     create_full_dro_exp_layer,
     create_full_dro_cvar_layer,
+    create_full_pep_layer,  # For lpep with SCS backend
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
@@ -389,9 +390,21 @@ def quad_run(cfg):
             log.info("=== SGD experiment complete ===")
 
 
-def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta):
-    """Build a DataFrame from stepsizes history for CSV saving."""
+def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses=None):
+    """Build a DataFrame from stepsizes history for CSV saving.
+    
+    Args:
+        all_stepsizes_vals: List of stepsizes tuples
+        K_max: Number of algorithm iterations
+        is_vector_t: Whether t is a vector
+        has_beta: Whether beta values are present
+        all_losses: Optional list of loss values (same length as all_stepsizes_vals)
+    """
     data = {'iteration': list(range(len(all_stepsizes_vals)))}
+    
+    # Add loss column if provided
+    if all_losses is not None:
+        data['loss'] = [float(l) if l is not None else float('nan') for l in all_losses]
     
     # Extract t values (first element of each stepsizes tuple)
     if is_vector_t:
@@ -523,8 +536,8 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             # Convert precond_inv to JAX arrays for Clarabel pipeline
             precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
             
-            # Gradient function for stepsizes only
-            grad_fn = jax.grad(full_clarabel_pipeline, argnums=0)
+            # Value and gradient function for stepsizes only (returns (loss, grads))
+            value_and_grad_fn = jax.value_and_grad(full_clarabel_pipeline, argnums=0)
             full_dro_layer = None  # Not used for Clarabel
         else:
             # Use SCS (original cvxpylayer approach)
@@ -544,10 +557,10 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             else:
                 raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
             
-            # Gradient function for stepsizes only
-            grad_fn = jax.grad(full_SCS_pipeline, argnums=0)
+            # Value and gradient function for stepsizes only (returns (loss, grads))
+            value_and_grad_fn = jax.value_and_grad(full_SCS_pipeline, argnums=0)
     elif learning_framework == 'l2o':
-        grad_fn = jax.grad(l2o_pipeline, argnums=0)
+        value_and_grad_fn = jax.value_and_grad(l2o_pipeline, argnums=0)
         full_dro_layer = None  # Not used for l2o
         pep_data_fn = None  # Not used for l2o
     else:
@@ -560,13 +573,13 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
         stepsizes = (t_init, beta_init)
     
-    # Track all stepsizes values for logging/CSV
+    # Track all stepsizes values and losses for logging/CSV
     t = stepsizes[0]  # For logging compatibility
     is_vector_t = jnp.ndim(t) > 0
     has_beta = len(stepsizes) > 1
     
-    # Store all stepsizes at each iteration
     all_stepsizes_vals = [stepsizes]  # List of tuples
+    all_losses = [None]  # No loss for initial stepsizes at each iteration
     
     # Initialize optimizer if needed
     optimizer = None
@@ -593,20 +606,22 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         # Sample new batch (Q and z0 are resampled each iteration)
         key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
         
-        # Compute gradients w.r.t stepsizes only
+        # Compute loss and gradients w.r.t stepsizes only
         if learning_framework == 'ldro-pep':
             if sdp_backend == 'clarabel':
-                d_stepsizes = grad_fn(
+                loss, d_stepsizes = value_and_grad_fn(
                     stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
                     mu_val, L_val, R_val, K_max, eps, alpha, cfg.dro_obj, cfg.pep_obj, precond_inv_jax, traj_fn, pep_data_fn
                 )
             else:
-                d_stepsizes = grad_fn(
+                loss, d_stepsizes = value_and_grad_fn(
                     stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
                     mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
                 )
         elif learning_framework == 'l2o':
-            d_stepsizes = grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
+            loss, d_stepsizes = value_and_grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
+        
+        log.info(f'  loss: {float(loss):.6f}')
     
         # SGD step: descent in stepsizes with projection
         if optimizer_type == "vanilla_sgd":
@@ -631,13 +646,14 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         
         t = stepsizes[0]  # For logging
         all_stepsizes_vals.append(stepsizes)
+        all_losses.append(float(loss))
         
         # Save progress to CSV after each iteration (overwrite to preserve intermediate progress)
-        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
         df.to_csv(csv_path, index=False)
     
     # Final save after loop completes
-    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
+    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
     t = stepsizes[0]
     t_str = str(t) if is_vector_t else f'{float(t):.6f}'
     log.info(f'K={K_max} complete. Final t={t_str}. Saved to {csv_path}')
@@ -675,27 +691,53 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         log.error(f"Algorithm '{alg}' is not implemented.")
         raise ValueError(f"Unknown algorithm: {alg}")
     
-    # Initialize stepsizes based on algorithm
+    # Initialize stepsizes based on algorithm and stepsize_type
+    is_vector_t = cfg.stepsize_type == 'vector'
+    
     if alg == 'vanilla_gd':
         # Just step size t
-        t = jnp.atleast_1d(jnp.array(t_init))
-        if t.ndim == 0 or t.shape[0] == 1:
-            t = jnp.full(K_max, float(t_init))
+        if is_vector_t:
+            t = jnp.atleast_1d(jnp.array(t_init))
+            if t.ndim == 0 or t.shape[0] == 1:
+                t = jnp.full(K_max, float(t_init))
+        else:
+            t = jnp.array(float(t_init))  # Keep as scalar
         stepsizes = [t]
         has_beta = False
     elif alg == 'nesterov_fgm':
         # Step size t and momentum beta
-        t = jnp.atleast_1d(jnp.array(t_init))
-        if t.ndim == 0 or t.shape[0] == 1:
-            t = jnp.full(K_max, float(t_init))
+        if is_vector_t:
+            t = jnp.atleast_1d(jnp.array(t_init))
+            if t.ndim == 0 or t.shape[0] == 1:
+                t = jnp.full(K_max, float(t_init))
+        else:
+            t = jnp.array(float(t_init))  # Keep as scalar
         beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
         stepsizes = [t, beta_init]
         has_beta = True
     
-    is_vector_t = True  # Always use vector step sizes for lpep
-    
     # Track step size values for logging
     all_stepsizes_vals = [tuple(stepsizes)]
+    all_losses = [None]  # No loss for initial stepsizes
+    
+    # Create SCS-based PEP layer if using SCS backend
+    use_scs = getattr(cfg, 'sdp_backend', 'clarabel') == 'scs'
+    pep_layer = None
+    if use_scs:
+        # Get problem dimensions from initial PEP data
+        if alg == 'vanilla_gd':
+            t = stepsizes[0]
+            pep_data = construct_gd_pep_data(t, mu_val, L_val, R_val, K_max, cfg.pep_obj)
+        else:
+            t, beta = stepsizes[0], stepsizes[1]
+            pep_data = construct_fgm_pep_data(t, beta, mu_val, L_val, R_val, K_max, cfg.pep_obj)
+        
+        A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+        M = A_vals.shape[0]
+        mat_shape = (A_obj.shape[0], A_obj.shape[1])
+        vec_shape = (b_obj.shape[0],)
+        pep_layer = create_full_pep_layer(M, mat_shape, vec_shape)
+        log.info(f"Using SCS backend for lpep (M={M}, mat_shape={mat_shape}, vec_shape={vec_shape})")
     
     # Define the PEP loss function (differentiable w.r.t. stepsizes)
     def pep_loss_fn(stepsizes_list):
@@ -709,12 +751,24 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         
         A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
         
-        # Solve PEP using Clarabel
-        loss = pep_clarabel_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
+        if use_scs:
+            # Use cvxpylayers with SCS
+            M = A_vals.shape[0]
+            params_list = (
+                [A_vals[m] for m in range(M)] +
+                [b_vals[m] for m in range(M)] +
+                [c_vals, A_obj, b_obj]
+            )
+            (G_opt, F_opt) = pep_layer(*params_list)
+            # Compute objective: trace(A_obj @ G) + b_obj^T @ F
+            loss = jnp.trace(A_obj @ G_opt) + jnp.dot(b_obj, F_opt)
+        else:
+            # Use Clarabel backend
+            loss = pep_clarabel_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
         return loss
     
-    # Create gradient function
-    grad_fn = jax.grad(pep_loss_fn)
+    # Create value and gradient function
+    value_and_grad_fn = jax.value_and_grad(pep_loss_fn)
     
     # Initialize AdamWMin optimizer
     optimizer = AdamWMin(
@@ -732,7 +786,10 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     # GD iterations (descent only, no ascent)
     for iter_num in range(gd_iters):
         t = stepsizes[0]
-        t_log = '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
+        if is_vector_t:
+            t_log = '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
+        else:
+            t_log = f'{float(t):.5f}'
         if has_beta:
             beta = stepsizes[1]
             beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
@@ -740,33 +797,33 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         else:
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
-        # Compute gradients
-        grads = grad_fn(stepsizes)
+        # Compute loss and gradients
+        current_loss, grads = value_and_grad_fn(stepsizes)
+        log.info(f'  PEP loss: {current_loss:.6f}')
         
         # Check for NaN gradients
         if any(jnp.any(jnp.isnan(g)) for g in grads):
             log.warning(f'NaN gradients at iter {iter_num}, skipping update')
+            all_stepsizes_vals.append(tuple(stepsizes))
+            all_losses.append(None)
             continue
         
         # Update stepsizes via AdamWMin
         stepsizes = optimizer.step(stepsizes, grads, proj_x_fn=proj_nonneg)
         
         all_stepsizes_vals.append(tuple(stepsizes))
-        
-        # Compute and log current loss
-        try:
-            current_loss = pep_loss_fn(stepsizes)
-            log.info(f'  PEP loss: {current_loss:.6f}')
-        except Exception as e:
-            log.warning(f'  Could not compute loss: {e}')
+        all_losses.append(float(current_loss))
         
         # Save progress
-        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
         df.to_csv(csv_path, index=False)
     
     # Final save
-    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta)
+    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
     t = stepsizes[0]
-    t_str = '[' + ', '.join(f'{x:.6f}' for x in t.tolist()) + ']'
+    if is_vector_t:
+        t_str = '[' + ', '.join(f'{x:.6f}' for x in t.tolist()) + ']'
+    else:
+        t_str = f'{float(t):.6f}'
     log.info(f'K={K_max} complete. Final t={t_str}. Saved to {csv_path}')
     df.to_csv(csv_path, index=False)

@@ -9,7 +9,7 @@ Usage:
     Local:   python run_learning_experiment.py Quad local
     Cluster: python run_learning_experiment.py Quad cluster
 """
-from site import execsitecustomize
+# from site import execsitecustomize
 import hydra
 import logging
 import os
