@@ -9,6 +9,8 @@ import logging
 import time
 from functools import partial
 
+# from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
+# from reformulator.dro_reformulator import DROReformulator
 from learning.pep_construction import (
     construct_gd_pep_data,
     construct_fgm_pep_data,
@@ -21,12 +23,14 @@ from learning.autodiff_setup import (
     problem_data_to_pep_obj,
     create_full_dro_exp_layer,
     create_full_dro_cvar_layer,
-    create_full_pep_layer,
+    create_full_pep_layer,  # For lpep with SCS backend
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
+from learning.jax_clarabel_layer import dro_clarabel_solve, pep_clarabel_solve
 from learning.silver_stepsizes import get_strongly_convex_silver_stepsizes
 from learning.acceleration_stepsizes import (
+    # get_nesterov_fgm_beta_sequence,
     jax_get_nesterov_fgm_beta_sequence,
 )
 jax.config.update("jax_enable_x64", True)
@@ -196,6 +200,56 @@ def full_SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
     # 4. Call cvxpylayer and compute loss
     (lambd_star, s_star) = large_sdp_layer(*params_list)
     loss = dro_pep_obj_jax(eps, lambd_star, s_star)
+    return loss
+
+
+def full_clarabel_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, 
+                            mu, L, R, K_max, eps, alpha, dro_obj, pep_obj, precond_inv, traj_fn, pep_data_fn):
+    """Full DRO pipeline using Clarabel/diffcp solver.
+    
+    This function uses dro_clarabel_solve with conditional logic for the risk measure.
+    
+    Args:
+        stepsizes: Tuple of step size arrays (e.g., (t,) for GD, (t, beta) for FGM)
+        Q_batch: Batch of quadratic matrices (N, d, d)
+        z0_batch: Batch of initial points (N, d)
+        zs_batch: Batch of optimal points (N, d)
+        fs_batch: Batch of optimal function values (N,)
+        mu: Strong convexity parameter
+        L: Lipschitz constant
+        R: Initial radius bound
+        K_max: Number of algorithm iterations
+        eps: Wasserstein ball radius
+        alpha: CVaR confidence level (ignored for expectation)
+        dro_obj: Risk measure type ('expectation' or 'cvar')
+        pep_obj: PEP objective type
+        precond_inv: Precomputed preconditioner (tuple of G_precond_vec, F_precond)
+        traj_fn: Trajectory function
+        pep_data_fn: PEP data construction function
+    
+    Returns:
+        Scalar loss value
+    """
+    # 1. Compute sample Gram matrices (G, F) from trajectories
+    batch_GF_func = jax.vmap(
+        lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+        in_axes=(0, 0, 0, 0)
+    )
+    G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
+    
+    # 2. Compute constraint matrices from stepsizes
+    pep_data = pep_data_fn(stepsizes, mu, L, R, K_max, pep_obj)
+    A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+    
+    # 3. Call unified dro_clarabel_solve with risk measure selection
+    loss = dro_clarabel_solve(
+        A_obj=A_obj, b_obj=b_obj,
+        A_vals=A_vals, b_vals=b_vals, c_vals=c_vals,
+        G_batch=G_batch, F_batch=F_batch,
+        eps=eps, precond_inv=precond_inv,
+        dro_obj=dro_obj, alpha=alpha,
+    )
+    
     return loss
 
 
@@ -409,6 +463,13 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         
         return key, Q_batch, z0_batch, zs_batch, fs_batch
     
+    # Batched trajectory and gradient functions (using stepsizes and traj_fn set above)
+    def make_batch_GF_func(stepsizes):
+        return jax.vmap(
+            lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+            in_axes=(0, 0, 0, 0)
+        )
+    
     # Define grad_fn based on learning framework
     learning_framework = cfg.learning_framework
     
@@ -472,27 +533,34 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         sdp_backend = cfg.get('sdp_backend', 'scs')
         log.info(f'Using SDP backend: {sdp_backend}')
         
-        if sdp_backend != 'scs':
-            raise ValueError(f"Only 'scs' backend is supported. Got: {sdp_backend}")
-        
-        # Use SCS (cvxpylayer approach)
-        # Create the full DRO layer based on dro_obj type
-        if cfg.dro_obj == 'expectation':
-            full_dro_layer = create_full_dro_exp_layer(
-                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
-                c_vals_init, precond_inv, eps
-            )
-        elif cfg.dro_obj == 'cvar':
-            full_dro_layer = create_full_dro_cvar_layer(
-                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
-                c_vals_init, precond_inv, eps, alpha
-            )
+        if sdp_backend == 'clarabel':
+            # Use Clarabel/diffcp - no cvxpylayer needed
+            # Convert precond_inv to JAX arrays for Clarabel pipeline
+            precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
+            
+            # Value and gradient function for stepsizes only (returns (loss, grads))
+            value_and_grad_fn = jax.value_and_grad(full_clarabel_pipeline, argnums=0)
+            full_dro_layer = None  # Not used for Clarabel
         else:
-            raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
-        
-        # Value and gradient function for stepsizes only (returns (loss, grads))
-        value_and_grad_fn = jax.value_and_grad(full_SCS_pipeline, argnums=0)
-        
+            # Use SCS (original cvxpylayer approach)
+            precond_inv_jax = None  # Not needed
+            
+            # Create the full DRO layer based on dro_obj type
+            if cfg.dro_obj == 'expectation':
+                full_dro_layer = create_full_dro_exp_layer(
+                    M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                    c_vals_init, precond_inv, eps
+                )
+            elif cfg.dro_obj == 'cvar':
+                full_dro_layer = create_full_dro_cvar_layer(
+                    M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                    c_vals_init, precond_inv, eps, alpha
+                )
+            else:
+                raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
+            
+            # Value and gradient function for stepsizes only (returns (loss, grads))
+            value_and_grad_fn = jax.value_and_grad(full_SCS_pipeline, argnums=0)
     elif learning_framework == 'l2o':
         value_and_grad_fn = jax.value_and_grad(l2o_pipeline, argnums=0)
         full_dro_layer = None  # Not used for l2o
@@ -543,10 +611,16 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         # Compute loss and gradients w.r.t stepsizes only
         # The loss corresponds to the CURRENT stepsizes (before update)
         if learning_framework == 'ldro-pep':
-            loss, d_stepsizes = value_and_grad_fn(
-                stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
-                mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
-            )
+            if sdp_backend == 'clarabel':
+                loss, d_stepsizes = value_and_grad_fn(
+                    stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                    mu_val, L_val, R_val, K_max, eps, alpha, cfg.dro_obj, cfg.pep_obj, precond_inv_jax, traj_fn, pep_data_fn
+                )
+            else:
+                loss, d_stepsizes = value_and_grad_fn(
+                    stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                    mu_val, L_val, R_val, K_max, eps, cfg.pep_obj, full_dro_layer, traj_fn, pep_data_fn
+                )
         elif learning_framework == 'l2o':
             loss, d_stepsizes = value_and_grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
         
@@ -597,7 +671,7 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     Run gradient descent for learning PEP (lpep) - no samples, no min-max.
     
     Optimizes step sizes to minimize the standard (worst-case) PEP objective
-    using SCS solver with cvxpylayers for differentiation.
+    using the Clarabel solver with diffcp for differentiation.
     
     Args:
         cfg: Configuration object
@@ -610,11 +684,6 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         csv_path: Path to save progress CSV
     """
     log.info(f"=== Running lpep GD for K={K_max} ===")
-    
-    # Validate backend
-    sdp_backend = cfg.get('sdp_backend', 'scs')
-    if sdp_backend != 'scs':
-        raise ValueError(f"Only 'scs' backend is supported for lpep. Got: {sdp_backend}")
     
     # Select PEP data construction function based on algorithm
     if alg == 'vanilla_gd':
@@ -656,21 +725,24 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     all_stepsizes_vals = [tuple(stepsizes)]
     all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
     
-    # Create SCS-based PEP layer
-    # Get problem dimensions from initial PEP data
-    if alg == 'vanilla_gd':
-        t = stepsizes[0]
-        pep_data = construct_gd_pep_data(t, mu_val, L_val, R_val, K_max, cfg.pep_obj)
-    else:
-        t, beta = stepsizes[0], stepsizes[1]
-        pep_data = construct_fgm_pep_data(t, beta, mu_val, L_val, R_val, K_max, cfg.pep_obj)
-    
-    A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
-    M = A_vals.shape[0]
-    mat_shape = (A_obj.shape[0], A_obj.shape[1])
-    vec_shape = (b_obj.shape[0],)
-    pep_layer = create_full_pep_layer(M, mat_shape, vec_shape)
-    log.info(f"Using SCS backend for lpep (M={M}, mat_shape={mat_shape}, vec_shape={vec_shape})")
+    # Create SCS-based PEP layer if using SCS backend
+    use_scs = getattr(cfg, 'sdp_backend', 'clarabel') == 'scs'
+    pep_layer = None
+    if use_scs:
+        # Get problem dimensions from initial PEP data
+        if alg == 'vanilla_gd':
+            t = stepsizes[0]
+            pep_data = construct_gd_pep_data(t, mu_val, L_val, R_val, K_max, cfg.pep_obj)
+        else:
+            t, beta = stepsizes[0], stepsizes[1]
+            pep_data = construct_fgm_pep_data(t, beta, mu_val, L_val, R_val, K_max, cfg.pep_obj)
+        
+        A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+        M = A_vals.shape[0]
+        mat_shape = (A_obj.shape[0], A_obj.shape[1])
+        vec_shape = (b_obj.shape[0],)
+        pep_layer = create_full_pep_layer(M, mat_shape, vec_shape)
+        log.info(f"Using SCS backend for lpep (M={M}, mat_shape={mat_shape}, vec_shape={vec_shape})")
     
     # Define the PEP loss function (differentiable w.r.t. stepsizes)
     def pep_loss_fn(stepsizes_list):
@@ -684,16 +756,20 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         
         A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
         
-        # Use cvxpylayers with SCS
-        M = A_vals.shape[0]
-        params_list = (
-            [A_vals[m] for m in range(M)] +
-            [b_vals[m] for m in range(M)] +
-            [c_vals, A_obj, b_obj]
-        )
-        (G_opt, F_opt) = pep_layer(*params_list)
-        # Compute objective: trace(A_obj @ G) + b_obj^T @ F
-        loss = jnp.trace(A_obj @ G_opt) + jnp.dot(b_obj, F_opt)
+        if use_scs:
+            # Use cvxpylayers with SCS
+            M = A_vals.shape[0]
+            params_list = (
+                [A_vals[m] for m in range(M)] +
+                [b_vals[m] for m in range(M)] +
+                [c_vals, A_obj, b_obj]
+            )
+            (G_opt, F_opt) = pep_layer(*params_list)
+            # Compute objective: trace(A_obj @ G) + b_obj^T @ F
+            loss = jnp.trace(A_obj @ G_opt) + jnp.dot(b_obj, F_opt)
+        else:
+            # Use Clarabel backend
+            loss = pep_clarabel_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
         return loss
     
     # Create value and gradient function

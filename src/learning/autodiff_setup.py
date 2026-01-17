@@ -459,7 +459,7 @@ def create_full_dro_exp_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec
     # Parameters ordered: A_params, b_params, A_obj, b_obj, G_params, F_params
     all_params = A_params + b_params + [A_obj_param, b_obj_param] + G_params + F_params
     
-    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s], solver_args={'verbose': True})
+    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s])
 
 
 def create_full_dro_cvar_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec_shape,
