@@ -404,7 +404,9 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_los
     
     # Add loss column if provided
     if all_losses is not None:
-        data['loss'] = [float(l) if l is not None else float('nan') for l in all_losses]
+        # Pad with None if losses list is shorter than stepsizes list
+        padded_losses = list(all_losses) + [None] * (len(all_stepsizes_vals) - len(all_losses))
+        data['loss'] = [float(l) if l is not None else float('nan') for l in padded_losses]
     
     # Extract t values (first element of each stepsizes tuple)
     if is_vector_t:
@@ -578,8 +580,8 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     is_vector_t = jnp.ndim(t) > 0
     has_beta = len(stepsizes) > 1
     
-    all_stepsizes_vals = [stepsizes]  # List of tuples
-    all_losses = [None]  # No loss for initial stepsizes at each iteration
+    all_stepsizes_vals = [stepsizes]  # List of tuples, starting with initial stepsizes
+    all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
     
     # Initialize optimizer if needed
     optimizer = None
@@ -607,6 +609,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
         
         # Compute loss and gradients w.r.t stepsizes only
+        # The loss corresponds to the CURRENT stepsizes (before update)
         if learning_framework == 'ldro-pep':
             if sdp_backend == 'clarabel':
                 loss, d_stepsizes = value_and_grad_fn(
@@ -622,6 +625,9 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             loss, d_stepsizes = value_and_grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
         
         log.info(f'  loss: {float(loss):.6f}')
+        
+        # Store loss for current stepsizes (iteration iter_num)
+        all_losses.append(float(loss))
     
         # SGD step: descent in stepsizes with projection
         if optimizer_type == "vanilla_sgd":
@@ -644,9 +650,8 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         else:
             raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
         
-        t = stepsizes[0]  # For logging
+        # Store updated stepsizes for next iteration
         all_stepsizes_vals.append(stepsizes)
-        all_losses.append(float(loss))
         
         # Save progress to CSV after each iteration (overwrite to preserve intermediate progress)
         df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
@@ -718,7 +723,7 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     
     # Track step size values for logging
     all_stepsizes_vals = [tuple(stepsizes)]
-    all_losses = [None]  # No loss for initial stepsizes
+    all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
     
     # Create SCS-based PEP layer if using SCS backend
     use_scs = getattr(cfg, 'sdp_backend', 'clarabel') == 'scs'
@@ -797,22 +802,24 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         else:
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
         
-        # Compute loss and gradients
+        # Compute loss and gradients (loss corresponds to CURRENT stepsizes before update)
         current_loss, grads = value_and_grad_fn(stepsizes)
         log.info(f'  PEP loss: {current_loss:.6f}')
+        
+        # Store loss for current stepsizes (iteration iter_num)
+        all_losses.append(float(current_loss))
         
         # Check for NaN gradients
         if any(jnp.any(jnp.isnan(g)) for g in grads):
             log.warning(f'NaN gradients at iter {iter_num}, skipping update')
             all_stepsizes_vals.append(tuple(stepsizes))
-            all_losses.append(None)
             continue
         
         # Update stepsizes via AdamWMin
         stepsizes = optimizer.step(stepsizes, grads, proj_x_fn=proj_nonneg)
         
+        # Store updated stepsizes for next iteration
         all_stepsizes_vals.append(tuple(stepsizes))
-        all_losses.append(float(current_loss))
         
         # Save progress
         df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)

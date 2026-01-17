@@ -289,5 +289,228 @@ class TestEdgeCases(unittest.TestCase):
         self.assertFalse(jnp.any(jnp.isinf(b_vals)))
 
 
+def numpy_convex(repX, repG, repF):
+    """
+    Reference numpy implementation for convex function interpolation.
+    Returns A_list, b_list as numpy arrays.
+    """
+    n_points = len(repX) - 1
+    A_list, b_list = [], []
+    
+    for i in range(n_points + 1):
+        for j in range(n_points + 1):
+            if i != j:
+                xi, xj = repX[i, :], repX[j, :]
+                gj = repG[j, :]
+                fi, fj = repF[i, :], repF[j, :]
+                
+                diff_x = xi - xj
+                # Convex: h(xi) - h(xj) - <gj, xi-xj> >= 0
+                # In <= form: <gj, xi-xj> - (h(xi) - h(xj)) <= 0
+                Ai = (1 / 2) * np.outer(gj, diff_x) + (1 / 2) * np.outer(diff_x, gj)
+                bi = fj - fi
+                
+                A_list.append(Ai)
+                b_list.append(bi)
+    
+    return np.array(A_list), np.array(b_list)
+
+
+class TestConvexInterp(unittest.TestCase):
+    """Tests for convex_interp function."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from learning.interpolation_conditions import convex_interp
+        self.convex_interp = convex_interp
+        
+        self.n_points = 3
+        self.dimG = 5
+        self.dimF = 4
+        
+        # Create random test data
+        np.random.seed(42)
+        self.repX_np = np.random.randn(self.n_points + 1, self.dimG)
+        self.repG_np = np.random.randn(self.n_points + 1, self.dimG)
+        self.repF_np = np.random.randn(self.n_points + 1, self.dimF)
+        
+        # JAX versions
+        self.repX = jnp.array(self.repX_np)
+        self.repG = jnp.array(self.repG_np)
+        self.repF = jnp.array(self.repF_np)
+    
+    def test_output_shapes(self):
+        """Test that output shapes are correct."""
+        A_vals, b_vals = self.convex_interp(
+            self.repX, self.repG, self.repF, self.n_points
+        )
+        
+        expected_num_constraints = (self.n_points + 1) * self.n_points
+        
+        self.assertEqual(A_vals.shape, (expected_num_constraints, self.dimG, self.dimG))
+        self.assertEqual(b_vals.shape, (expected_num_constraints, self.dimF))
+    
+    def test_matches_numpy_reference(self):
+        """Test that JAX implementation matches numpy reference."""
+        # Get JAX result
+        A_jax, b_jax = self.convex_interp(
+            self.repX, self.repG, self.repF, self.n_points
+        )
+        
+        # Get numpy reference result
+        A_np, b_np = numpy_convex(
+            self.repX_np, self.repG_np, self.repF_np
+        )
+        
+        # Compare
+        np.testing.assert_allclose(np.array(A_jax), A_np, rtol=1e-10)
+        np.testing.assert_allclose(np.array(b_jax), b_np, rtol=1e-10)
+    
+    def test_symmetry_of_A_matrices(self):
+        """Test that each A matrix is symmetric."""
+        A_vals, _ = self.convex_interp(
+            self.repX, self.repG, self.repF, self.n_points
+        )
+        
+        for i in range(A_vals.shape[0]):
+            np.testing.assert_allclose(
+                A_vals[i], A_vals[i].T, rtol=1e-10,
+                err_msg=f"A_vals[{i}] is not symmetric"
+            )
+    
+    def test_differentiability(self):
+        """Test that the function is differentiable w.r.t. inputs."""
+        def loss_fn(repX, repG, repF):
+            A_vals, b_vals = self.convex_interp(
+                repX, repG, repF, self.n_points
+            )
+            return jnp.sum(A_vals ** 2) + jnp.sum(b_vals ** 2)
+        
+        # Compute gradients
+        grad_fn = jax.grad(loss_fn, argnums=(0, 1, 2))
+        grads = grad_fn(self.repX, self.repG, self.repF)
+        
+        # Check gradients have correct shapes
+        self.assertEqual(grads[0].shape, self.repX.shape)
+        self.assertEqual(grads[1].shape, self.repG.shape)
+        self.assertEqual(grads[2].shape, self.repF.shape)
+        
+        # Check gradients are not all zero
+        self.assertGreater(jnp.abs(grads[0]).sum(), 0)
+        self.assertGreater(jnp.abs(grads[1]).sum(), 0)
+
+
+class TestProximalGradientInterp(unittest.TestCase):
+    """Tests for smooth_strongly_convex_proximal_gradient_interp function."""
+    
+    def setUp(self):
+        """Set up test fixtures."""
+        from learning.interpolation_conditions import (
+            smooth_strongly_convex_proximal_gradient_interp
+        )
+        self.prox_grad_interp = smooth_strongly_convex_proximal_gradient_interp
+        
+        self.K = 3  # Number of iterations
+        self.dimG = 2 * self.K + 3  # Gram basis dimension: 1 + (K+1) + (K+1) = 2K+3
+        self.dimF1 = self.K + 1  # f1 function value dimension
+        self.dimF2 = self.K + 1  # f2 function value dimension (now includes x0)
+        self.mu = 0.1
+        self.L = 1.0
+        
+        # Create random test data for f1 (smooth strongly convex)
+        # f1 has K+2 points: x_0, x_1, ..., x_K, x_s
+        np.random.seed(42)
+        self.repX_f1 = jnp.array(np.random.randn(self.K + 2, self.dimG))
+        self.repG_f1 = jnp.array(np.random.randn(self.K + 2, self.dimG))
+        self.repF_f1 = jnp.array(np.random.randn(self.K + 2, self.dimF1))
+        
+        # Create random test data for f2 (convex)
+        # f2 has K+2 points: x_0, x_1, ..., x_K, x_s
+        self.repX_f2 = jnp.array(np.random.randn(self.K + 2, self.dimG))
+        self.repG_f2 = jnp.array(np.random.randn(self.K + 2, self.dimG))
+        self.repF_f2 = jnp.array(np.random.randn(self.K + 2, self.dimF2))
+    
+    def test_output_shapes(self):
+        """Test that output shapes are correct."""
+        A_f1, b_f1, A_f2, b_f2 = self.prox_grad_interp(
+            self.repX_f1, self.repG_f1, self.repF_f1,
+            self.repX_f2, self.repG_f2, self.repF_f2,
+            self.mu, self.L, self.K
+        )
+        
+        # f1 has K+2 points, so (K+2)*(K+1) constraints
+        n_points_f1 = self.K + 1
+        expected_f1_constraints = (n_points_f1 + 1) * n_points_f1
+        
+        # f2 has K+2 points, so (K+2)*(K+1) constraints
+        n_points_f2 = self.K + 1
+        expected_f2_constraints = (n_points_f2 + 1) * n_points_f2
+        
+        self.assertEqual(A_f1.shape, (expected_f1_constraints, self.dimG, self.dimG))
+        self.assertEqual(b_f1.shape, (expected_f1_constraints, self.dimF1))
+        self.assertEqual(A_f2.shape, (expected_f2_constraints, self.dimG, self.dimG))
+        self.assertEqual(b_f2.shape, (expected_f2_constraints, self.dimF2))
+    
+    def test_symmetry_of_A_matrices(self):
+        """Test that each A matrix is symmetric."""
+        A_f1, _, A_f2, _ = self.prox_grad_interp(
+            self.repX_f1, self.repG_f1, self.repF_f1,
+            self.repX_f2, self.repG_f2, self.repF_f2,
+            self.mu, self.L, self.K
+        )
+        
+        # Check f1 A matrices
+        for i in range(A_f1.shape[0]):
+            np.testing.assert_allclose(
+                A_f1[i], A_f1[i].T, rtol=1e-10,
+                err_msg=f"A_f1[{i}] is not symmetric"
+            )
+        
+        # Check f2 A matrices
+        for i in range(A_f2.shape[0]):
+            np.testing.assert_allclose(
+                A_f2[i], A_f2[i].T, rtol=1e-10,
+                err_msg=f"A_f2[{i}] is not symmetric"
+            )
+    
+    def test_differentiability(self):
+        """Test that the function is differentiable."""
+        def loss_fn(repX_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2):
+            A_f1, b_f1, A_f2, b_f2 = self.prox_grad_interp(
+                repX_f1, repG_f1, repF_f1,
+                repX_f2, repG_f2, repF_f2,
+                self.mu, self.L, self.K
+            )
+            return (jnp.sum(A_f1 ** 2) + jnp.sum(b_f1 ** 2) + 
+                    jnp.sum(A_f2 ** 2) + jnp.sum(b_f2 ** 2))
+        
+        # Compute gradients
+        grad_fn = jax.grad(loss_fn, argnums=(0, 1, 2, 3, 4, 5))
+        grads = grad_fn(
+            self.repX_f1, self.repG_f1, self.repF_f1,
+            self.repX_f2, self.repG_f2, self.repF_f2
+        )
+        
+        # Check gradients have correct shapes
+        self.assertEqual(grads[0].shape, self.repX_f1.shape)
+        self.assertEqual(grads[1].shape, self.repG_f1.shape)
+        self.assertEqual(grads[2].shape, self.repF_f1.shape)
+        self.assertEqual(grads[3].shape, self.repX_f2.shape)
+        self.assertEqual(grads[4].shape, self.repG_f2.shape)
+        self.assertEqual(grads[5].shape, self.repF_f2.shape)
+    
+    def test_mu_equals_zero(self):
+        """Test with mu=0 (smooth convex, not strongly convex for f1)."""
+        A_f1, b_f1, A_f2, b_f2 = self.prox_grad_interp(
+            self.repX_f1, self.repG_f1, self.repF_f1,
+            self.repX_f2, self.repG_f2, self.repF_f2,
+            0.0, self.L, self.K
+        )
+        
+        # Should produce valid output without NaN
+        self.assertFalse(jnp.any(jnp.isnan(A_f1)))
+        self.assertFalse(jnp.any(jnp.isnan(A_f2)))
+
+
 if __name__ == '__main__':
     unittest.main()

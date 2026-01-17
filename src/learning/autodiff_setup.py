@@ -3,10 +3,20 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import logging
-from cvxpylayers.jax import CvxpyLayer
 from functools import partial
 
 log = logging.getLogger(__name__)
+
+# NOTE: We investigated adding ignore_dpp=True to speed up cvxpylayers compilation,
+# but this is incompatible with how cvxpylayers handles parametric problems.
+# With ignore_dpp=True, CVXPY tries to evaluate parameters immediately, breaking the layer.
+# The DPP warning about "too many parameters" can cause OOM for very large problems.
+# Alternative solutions:
+#   1. Reduce N (number of samples) or M (constraint count)
+#   2. Use a different backend (e.g., custom JAX solver)
+#   3. Split the problem into smaller sub-problems
+
+from cvxpylayers.jax import CvxpyLayer
 
 
 class CvxpyLayerWithDefaults:
@@ -18,7 +28,8 @@ class CvxpyLayerWithDefaults:
     """
     def __init__(self, problem, parameters, variables, solver_args=None):
         self._default_solver_args = solver_args or {}
-        # ignore_dpp=True speeds up compilation when there are many parameters
+        # Note: The DPP warning about "too many parameters" is purely about compilation speed,
+        # not correctness. Gradients still work correctly without DPP optimization.
         self._layer = CvxpyLayer(problem, parameters=parameters, variables=variables)
     
     def __call__(self, *params, solver_args=None):
@@ -448,7 +459,7 @@ def create_full_dro_exp_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec
     # Parameters ordered: A_params, b_params, A_obj, b_obj, G_params, F_params
     all_params = A_params + b_params + [A_obj_param, b_obj_param] + G_params + F_params
     
-    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s])
+    return CvxpyLayerWithDefaults(prob, parameters=all_params, variables=[lambd, s], solver_args={'verbose': True})
 
 
 def create_full_dro_cvar_layer(M, N, mat_shape, vec_shape, obj_mat_shape, obj_vec_shape,
