@@ -220,18 +220,11 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     
     Key: gradients g are evaluated at y points, subgradients h at x points.
     
-    Representation structure (extending test_ista_interpolation.py for x_K in f1):
-        - Gram basis: [x_0-x_s, g(y_0), h_0, h_1, g(y_1), ..., h_K, g(x_K), g_s]
-        - dimG = 2K + 4 (position + K y-gradients + 1 x_K gradient + 1 g_s + K+1 subgradients)
-        - Actually: [x_0-x_s, g(y_0), h_0, h_1, g(y_1), h_2, g(y_2), ..., h_{K-1}, g(y_{K-1}), h_K, g(x_K), g_s]
-          = 1 + K (y-grads) + (K+1) (subgrads) + 1 (g(x_K)) + 1 (g_s) = 2K + 4
-          Wait, let me count: position(1) + [g(y_0), h_0](at k=0) + [h_1, g(y_1)](k=1)... 
-          Following the pattern from ISTA test: position, then alternating g/h pairs plus extras
-          
-        Simpler approach matching FGM in pep_construction.py:
-        - Points for f1 interpolation: y_0, y_1, ..., y_{K-1}, x_K, x_s
-        - Points for f2 interpolation: x_0, x_1, ..., x_K, x_s
-        - dimG includes gradients at all these points
+    Representation structure:
+        - Gram basis: [x_0-x_s, g(y_0), g(y_1), ..., g(y_{K-1}), g(x_K), h_0, h_1, ..., h_K, g_s]
+        - dimG = 2K + 4
+        - f1 interpolation points: y_0, y_1, ..., y_{K-1}, x_K, x_s
+        - f2 interpolation points: x_0, x_1, ..., x_K, x_s
         
     Args:
         t: Step sizes - scalar or vector of length K_max
@@ -249,22 +242,11 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     # Broadcast t to vector if scalar
     t_vec = jnp.broadcast_to(t, (K_max,))
     
-    # Dimensions - similar to FGM in pep_construction.py
-    # f1 is evaluated at: y_0, y_1, ..., y_{K-1}, x_K, x_s (K+2 points)
-    # f2 is evaluated at: x_0, x_1, ..., x_K, x_s (K+2 points)
-    # Gram basis: [y_0-y_s, g(y_0), g(y_1), ..., g(y_{K-1}), g(x_K), h_0, h_1, ..., h_K]
-    # Actually, for FISTA we have both y and x sequences, so:
-    # Position basis: x_0 - x_s (since y_0 = x_0)
-    # Gradients: g(y_0), g(y_1), ..., g(y_{K-1}), g(x_K) = K+1 gradients
-    # Subgradients: h_0, h_1, ..., h_K = K+1 subgradients
-    # Total dimG = 1 + (K+1) + (K+1) = 2K + 3
-    # But we also need g_s for stationarity, so dimG = 2K + 4
-    # Actually matching the test structure more closely:
-    # [x_0-x_s, g(y_0), h_0, h_1, g(y_1), h_2, g(y_2), ..., h_K, g(x_K), g_s]
-    
-    # Let's use a cleaner structure:
-    # Basis columns: [x_0-x_s, g(y_0), g(y_1), ..., g(y_{K-1}), g(x_K), h_0, h_1, ..., h_K, g_s]
-    # This gives: 1 + K + 1 + (K+1) + 1 = 2K + 4
+    # Dimensions
+    # f1 evaluated at: y_0, ..., y_{K-1}, x_K, x_s (K+2 points)
+    # f2 evaluated at: x_0, ..., x_K, x_s (K+2 points)
+    # Gram basis: [x_0-x_s, g(y_0), g(y_1), ..., g(y_{K-1}), g(x_K), h_0, h_1, ..., h_K, g_s]
+    # Total: 1 + K + 1 + (K+1) + 1 = 2K + 4
     dimG = 2 * K_max + 4
     dimF1 = K_max + 2  # f1 at y_0, ..., y_{K-1}, x_K, x_s
     dimF2 = K_max + 2  # f2 at x_0, ..., x_K, x_s

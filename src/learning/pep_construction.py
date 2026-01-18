@@ -237,53 +237,18 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
                         PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
         
     Representation structure:
-        - dimG = K_max + 2: columns for [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]
-          (1 column for y0-ys, K columns for y gradients, but the last gradient is for x_K)
-          Wait - actually we only have K y-gradients and 1 x_K gradient = K+1 gradients + 1 position = K+2
-        - dimF = K_max + 1: entries for [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]
-          (K entries for y function values + 1 for x_K = K+1)
+        - dimG = K_max + 2: [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]
+        - dimF = K_max + 1: [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]
         - Points: y0, y1, ..., y_{K-1}, x_K, ys (n_points = K_max + 1, plus ys)
     """
     # Broadcast t to vector if scalar
     t_vec = jnp.broadcast_to(t, (K_max,))
     
     # Dimensions for Gram representation
-    # We have K y-points (y0 to y_{K-1}) and x_K, but they share gradient basis:
-    # [y0-ys, g(y0), g(y1), ..., g(y_{K-1})] = 1 + K columns
-    # But we also need g(x_K) as a new basis vector (gradient at x_K, not at a y point)
-    # Wait - let's think about what gradients we actually evaluate:
-    # - g(y_0), g(y_1), ..., g(y_{K-1}) for the y points
-    # - g(x_K) for the x_K point
-    # That's K + 1 gradient basis vectors + 1 position basis = K + 2 total
-    # 
-    # But actually, in the iteration: at step k, we use g(y_k) to compute x_{k+1}
-    # For K iterations (k=0..K-1), we have gradients g(y_0)..g(y_{K-1}) = K gradients
-    # Plus g(x_K) = K+1 gradients total
-    # Plus y0-ys position = K+2 total
-    # 
-    # However, for dimF: we have f(y_0)..f(y_{K-1}) = K values + f(x_K) = K+1 total
-    dimG = K_max + 2  # [y0-ys, g(y0), ..., g(y_{K-1})]  (K gradients + 1 position = K+1... wait)
-    # Let me recount carefully:
-    # Index 0: y0-ys
-    # Index 1: g(y_0)
-    # ...
-    # Index K: g(y_{K-1})
-    # That's K+1 indices (0 to K), so dimG should be K+1 if we DON'T include g(x_K)
-    # But we DO want g(x_K) for the objective ||g(x_K)||^2
-    # So: Index K+1: g(x_K) -> dimG = K+2
-    #
-    # For F:
-    # Index 0: f(y_0) - fs
-    # ...
-    # Index K-1: f(y_{K-1}) - fs  
-    # Index K: f(x_K) - fs
-    # That's K+1 indices, so dimF = K+1
-    dimG = K_max + 2  # [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)] ... but that's 1 + K + 1 = K+2? No:
-    # y0-ys: 1 column
-    # g(y_0) to g(y_{K-1}): K columns
-    # g(x_K): 1 column
-    # Total: 1 + K + 1 = K + 2 ✓
-    dimF = K_max + 1  # [f(y0)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs] = K + 1 entries
+    # Gram basis: [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)] = K+2 columns
+    # Function values: [f(y0)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs] = K+1 entries
+    dimG = K_max + 2
+    dimF = K_max + 1
     
     # Identity matrices for symbolic representation
     eyeG = jnp.eye(dimG)
@@ -299,15 +264,10 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     repG = jnp.zeros((n_points + 1, dimG))
     repF = jnp.zeros((n_points + 1, dimF))
     
-    # Basis vectors:
-    # y0 - ys is at index 0 in eyeG
-    # g(y0), g(y1), ..., g(y_{K-1}) are at indices 1, 2, ..., K
-    # There's no room for g(x_K) - we need to handle this differently!
-    # Actually with dimG = K+2, index K+1 is for g(x_K)... but that's only K+2 columns
+    # Basis vector indices:
     # Index 0: y0-ys
     # Index 1..K: g(y_0)..g(y_{K-1}) 
     # Index K+1: g(x_K)
-    # This requires dimG = K+2 ✓
     
     # Initial: y0 = x0, so y0 - ys is the first basis vector
     y0 = eyeG[0, :]  # y0 - ys (relative position)
@@ -318,9 +278,7 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     repG = repG.at[0].set(g_y0)
     repF = repF.at[0].set(f_y0)
     
-    # FGM iterations to build y sequence symbolically
-    # Algorithm: x = y - t * g(y), then y_new = x + beta * (x - x_prev)
-    # We track y_k and x_k symbolically
+    # FGM iterations: x = y - t * g(y), then y_new = x + beta * (x - x_prev)
     def fgm_step(k, carry):
         repY, x_prev, y_prev = carry
         t_k = t_vec[k]
@@ -343,8 +301,7 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     x0 = y0
     repY, x_final, y_final = jax.lax.fori_loop(0, K_max, fgm_step, (repY, x0, y0))
     
-    # x_K is x_final from the last iteration, stored at index K_max (position n_points - 1 = K)
-    # Actually after K iterations, x_final = x_K
+    # x_K is x_final from the last iteration
     repY = repY.at[K_max].set(x_final)
     
     # Set gradient representations for y points (y0, ..., y_{K-1})

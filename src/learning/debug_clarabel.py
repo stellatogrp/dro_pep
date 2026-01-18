@@ -179,7 +179,7 @@ def test_diffcp_directly():
     else:
         print("Could not access cvxpylayers problem")
     
-    # Actually CALL the cvxpylayer with our samples
+    # Call the cvxpylayer with samples
     print("\n=== Calling cvxpylayer with SCS (should work) ===")
     batch_GF_func = jax.vmap(
         lambda Q, z0, zs, fs: problem_data_to_gd_trajectories(

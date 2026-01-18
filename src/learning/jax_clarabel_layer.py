@@ -620,7 +620,7 @@ def clarabel_solve_wrapper(static_data, A_dense, b, c):
     Returns:
         Optimal objective value
     """
-    # We use a module-level cache to store the adjoint_derivative function
+    # Module-level cache stores the adjoint_derivative function between forward and backward
     # since jax.custom_vjp doesn't support closures with non-JAX objects
     _adjoint_cache = {}
     
