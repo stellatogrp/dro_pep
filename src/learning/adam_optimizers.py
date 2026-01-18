@@ -240,9 +240,11 @@ class AdamWMin:
     Used for SGD on stepsizes when Q/z0 are resampled each iteration.
     
     Stores optimizer state (first and second moments) internally.
+    
+    Optionally supports an update_mask to selectively update only some parameters.
     """
     
-    def __init__(self, x_params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2):
+    def __init__(self, x_params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=1e-2, update_mask=None):
         """
         Args:
             x_params: Initial parameters for minimization (list of JAX arrays)
@@ -250,12 +252,16 @@ class AdamWMin:
             betas: Coefficients for computing running averages of gradient and its square
             eps: Term added to denominator for numerical stability
             weight_decay: Weight decay coefficient (L2 penalty)
+            update_mask: Optional list of booleans indicating which parameters to update.
+                         If None, all parameters are updated. If provided, only parameters
+                         with True in the mask are updated; others retain their original values.
         """
         self.lr = lr
         self.betas = betas
         self.eps = eps
         self.wd = weight_decay
         self.t = 0
+        self.update_mask = update_mask
         
         # Initialize state (First and Second moments) as JAX arrays
         self.state_x = [{'m': jnp.zeros_like(p), 'v': jnp.zeros_like(p)} for p in x_params]
@@ -265,6 +271,7 @@ class AdamWMin:
         Internal AdamW step for minimization.
         
         Returns new_params list and updates states in-place.
+        Respects self.update_mask if set.
         """
         beta1, beta2 = self.betas
         new_params = []
@@ -274,28 +281,35 @@ class AdamWMin:
         bias_correction2 = 1.0 - beta2 ** self.t
 
         for i, (p, g, s) in enumerate(zip(params, grads, states)):
-            # 1. Update biased first moment estimate
-            m_new = beta1 * s['m'] + (1 - beta1) * g
+            # Check if this parameter should be updated
+            should_update = self.update_mask is None or self.update_mask[i]
             
-            # 2. Update biased second raw moment estimate
-            v_new = beta2 * s['v'] + (1 - beta2) * (g ** 2)
-            
-            # Update state (in-place via dict mutation)
-            states[i]['m'] = m_new
-            states[i]['v'] = v_new
-            
-            # 3. Compute bias-corrected moments
-            m_hat = m_new / bias_correction1
-            v_hat = v_new / bias_correction2
-            
-            # 4. Compute the adaptive step
-            step = m_hat / (jnp.sqrt(v_hat) + self.eps)
-            
-            # 5. Apply Weight Decay (Decoupled)
-            p_decayed = p - (self.lr * self.wd * p)
-            
-            # 6. Apply Update (Gradient Descent)
-            p_new = p_decayed - (self.lr * step)
+            if should_update:
+                # 1. Update biased first moment estimate
+                m_new = beta1 * s['m'] + (1 - beta1) * g
+                
+                # 2. Update biased second raw moment estimate
+                v_new = beta2 * s['v'] + (1 - beta2) * (g ** 2)
+                
+                # Update state (in-place via dict mutation)
+                states[i]['m'] = m_new
+                states[i]['v'] = v_new
+                
+                # 3. Compute bias-corrected moments
+                m_hat = m_new / bias_correction1
+                v_hat = v_new / bias_correction2
+                
+                # 4. Compute the adaptive step
+                step = m_hat / (jnp.sqrt(v_hat) + self.eps)
+                
+                # 5. Apply Weight Decay (Decoupled)
+                p_decayed = p - (self.lr * self.wd * p)
+                
+                # 6. Apply Update (Gradient Descent)
+                p_new = p_decayed - (self.lr * step)
+            else:
+                # Keep the original parameter value (no update)
+                p_new = p
                 
             new_params.append(p_new)
             

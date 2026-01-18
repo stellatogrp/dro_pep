@@ -235,7 +235,8 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj):
         
     Args:
         t: Step sizes - scalar or vector of length K_max
-        beta: Momentum parameters - vector of length K_max
+        beta: Raw momentum sequence (length K_max + 1) where beta[0]=1.0.
+              The momentum coefficient at step k is computed as (beta[k] - 1) / beta[k+1].
         mu: Strong convexity parameter of f1
         L: Lipschitz constant of gradient of f1
         R: Initial radius bound
@@ -314,7 +315,9 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj):
     def fista_step(k, carry):
         repY_f1, repX_f2, repG_f1, repG_f2, repF_f1, repF_f2, x_prev, y_prev = carry
         t_k = t_vec[k]
-        beta_k = beta[k]
+        
+        # Momentum coefficient: (beta_k - 1) / beta_{k+1}
+        mom_coef = (beta[k] - 1.0) / beta[k + 1]
         
         # x_{k+1} = y_k - t_k * g(y_k) - t_k * h_{k+1}
         g_yk = eyeG[idx_g_y[k], :]
@@ -327,8 +330,8 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj):
         repG_f2 = repG_f2.at[k + 1].set(h_kp1)
         repF_f2 = repF_f2.at[k + 1].set(eyeF2[k + 1, :])
         
-        # y_{k+1} = x_{k+1} + beta_k * (x_{k+1} - x_k)
-        y_new = x_new + beta_k * (x_new - x_prev)
+        # y_{k+1} = x_{k+1} + mom_coef * (x_{k+1} - x_k)
+        y_new = x_new + mom_coef * (x_new - x_prev)
         
         # Store y_{k+1} for f1 (only for k < K-1, since y_K is not used)
         # For f1 interpolation, we store y_1, ..., y_{K-1} at indices 1, ..., K-1

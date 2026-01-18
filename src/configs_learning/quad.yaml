@@ -13,10 +13,10 @@ N: 16
 seed: 50
 
 # Algorithm and optimizer type (selected by Slurm job index)
-alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+alg: "nesterov_fgm"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
 stepsize_type: "vector" # "scalar" or "vector"
-vector_init: "silver" # "fixed" or "silver"
+vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [3, 7, 15, 31]
@@ -30,8 +30,10 @@ dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
 eps: 0.1
 alpha: 0.1
 
+learn_beta: False  # True or False depending on if beta is learnable or not
+
 # SGD training parameters
-sgd_iters: 25
+sgd_iters: 10
 eta_t: 1e-3     # learning rate for stepsizes (descent)
 weight_decay: 1e-2  # weight decay for sgd_wd
 

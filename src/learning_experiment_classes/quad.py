@@ -558,6 +558,15 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
     all_times = []   # Will store iteration times in seconds
     
+    # Determine update mask for learn_beta
+    # If learn_beta=False and we have beta (nesterov_fgm), only update t
+    learn_beta = cfg.get('learn_beta', True)
+    if has_beta and not learn_beta:
+        update_mask = [True, False]  # Update t, keep beta fixed
+        log.info(f'learn_beta=False: beta will NOT be updated during optimization')
+    else:
+        update_mask = None  # Update all parameters
+    
     # Initialize optimizer if needed
     optimizer = None
     if optimizer_type == "adamw":
@@ -567,6 +576,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             betas=(0.9, 0.999),
             eps=1e-8,
             weight_decay=0.01,
+            update_mask=update_mask,
         )
     
     # SGD iterations
@@ -603,8 +613,15 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     
         # SGD step: descent in stepsizes with projection
         if optimizer_type == "vanilla_sgd":
-            # Update all stepsizes in tuple and project to be nonnegative
-            stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
+            # Update stepsizes and project to be nonnegative
+            # Respect update_mask: if learn_beta=False, don't update beta
+            if update_mask is None:
+                stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
+            else:
+                stepsizes = tuple(
+                    jax.nn.relu(s - eta_t * ds) if should_update else s 
+                    for s, ds, should_update in zip(stepsizes, d_stepsizes, update_mask)
+                )
         elif optimizer_type == "adamw":
             # Use AdamWMin optimizer step
             x_params = [jnp.array(s) for s in stepsizes]
@@ -617,8 +634,15 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             stepsizes = tuple(x_new)
         elif optimizer_type == "sgd_wd":
             # SGD with weight decay, project stepsizes to be nonnegative
+            # Respect update_mask: if learn_beta=False, don't update beta
             weight_decay = cfg.get('weight_decay', 1e-2)
-            stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
+            if update_mask is None:
+                stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
+            else:
+                stepsizes = tuple(
+                    jax.nn.relu(s - eta_t * (ds + weight_decay * s)) if should_update else s 
+                    for s, ds, should_update in zip(stepsizes, d_stepsizes, update_mask)
+                )
         else:
             raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
         
@@ -745,6 +769,15 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
     # Create value and gradient function
     value_and_grad_fn = jax.value_and_grad(pep_loss_fn)
     
+    # Determine update mask for learn_beta
+    # If learn_beta=False and we have beta (nesterov_fgm), only update t
+    learn_beta = cfg.get('learn_beta', True)
+    if has_beta and not learn_beta:
+        update_mask = [True, False]  # Update t, keep beta fixed
+        log.info(f'learn_beta=False: beta will NOT be updated during optimization')
+    else:
+        update_mask = None  # Update all parameters
+    
     # Initialize AdamWMin optimizer
     optimizer = AdamWMin(
         x_params=stepsizes,
@@ -752,6 +785,7 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         betas=(0.9, 0.999),
         eps=1e-8,
         weight_decay=getattr(cfg, 'weight_decay', 0.0),
+        update_mask=update_mask,
     )
     
     # Projection function to keep stepsizes non-negative
