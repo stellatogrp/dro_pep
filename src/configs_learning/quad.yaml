@@ -26,7 +26,7 @@ K_max: [4]
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
 dro_obj: "expectation"  # "expectation" or "cvar"
 sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
-canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
 eps: 0.1
 alpha: 0.1
 

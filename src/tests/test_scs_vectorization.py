@@ -578,7 +578,94 @@ class TestSCSCanonicalization:
         np.testing.assert_allclose(deriv_scs, deriv_cla, rtol=0.1, atol=1e-3,
             err_msg=f"Numerical derivatives differ: SCS={deriv_scs}, Clarabel={deriv_cla}")
 
+    def test_scs_autodiff_vs_finite_difference(self):
+        """Test that SCS autodiff gradient matches finite difference approximation.
+        
+        Uses jax.grad on dro_scs_solve and compares to central difference.
+        """
+        from learning.jax_scs_layer import dro_scs_solve, jax_scs_canonicalize_dro_expectation
+        from learning.autodiff_setup import (
+            problem_data_to_gd_trajectories,
+            compute_preconditioner_from_samples,
+        )
+        from learning.pep_construction import construct_gd_pep_data
+        
+        # Problem parameters
+        np.random.seed(42)
+        K = 2
+        N = 3
+        mu, L, R = 1.0, 10.0, 1.0
+        dim = 10
+        eps = 0.1
+        
+        # Use scalar stepsize
+        t_base = 0.1
+        h = 1e-5  # Finite difference step
+        
+        # Generate fixed samples (don't change with stepsize)
+        sample_data = []
+        for _ in range(N):
+            Q = np.random.randn(dim, dim)
+            Q = Q @ Q.T / dim + np.eye(dim)
+            Q = (Q / np.linalg.norm(Q, 2)) * (L - mu) + mu * np.eye(dim)
+            x0 = np.random.randn(dim)
+            x0 = x0 / np.linalg.norm(x0) * R
+            xs = np.zeros(dim)
+            fs = 0.0
+            sample_data.append((jnp.array(Q), jnp.array(x0), jnp.array(xs), fs))
+        
+        def compute_objective(t_scalar):
+            """Compute SCS objective for given scalar stepsize using full diffcp pipeline."""
+            t = jnp.array([t_scalar, t_scalar])
+            
+            # Build PEP data - returns JAX arrays directly
+            pep_data = construct_gd_pep_data(t, mu, L, R, K, pep_obj='obj_val')
+            # pep_data is tuple: (A_obj, b_obj, A_vals, b_vals, c_vals, ...)
+            A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+            
+            # Generate sample trajectories (keep in JAX)
+            G_list = []
+            F_list = []
+            for Q, x0, xs, fs in sample_data:
+                G, F = problem_data_to_gd_trajectories((t,), Q, x0, xs, fs, K)
+                G_list.append(G)
+                F_list.append(F)
+            G_batch = jnp.stack(G_list)
+            F_batch = jnp.stack(F_list)
+            
+            # Compute preconditioner from average of diagonals
+            # Note: using JAX operations only to stay traceable
+            G_diag_sqrt = jnp.sqrt(jnp.mean(jnp.array([jnp.diag(G) for G in G_list]), axis=0))
+            F_avg = jnp.mean(F_batch, axis=0)
+            precond_G = 1.0 / G_diag_sqrt
+            precond_F = 1.0 / jnp.sqrt(jnp.maximum(F_avg, 1e-10))
+            precond_inv = (precond_G, precond_F)
+            
+            # Use the full differentiable pipeline
+            obj = dro_scs_solve(
+                A_obj, b_obj, A_vals, b_vals, c_vals,
+                G_batch, F_batch,
+                eps, precond_inv,
+            )
+            
+            return obj
+        
+        # Compute gradient using JAX autodiff
+        grad_fn = jax.grad(compute_objective)
+        autodiff_grad = grad_fn(t_base)
+        
+        # Compute gradient using finite difference
+        obj_plus = compute_objective(t_base + h)
+        obj_minus = compute_objective(t_base - h)
+        finite_diff_grad = (obj_plus - obj_minus) / (2 * h)
+        
+        # Check gradients match
+        np.testing.assert_allclose(
+            autodiff_grad, finite_diff_grad, 
+            rtol=0.1, atol=1e-3,
+            err_msg=f"SCS autodiff gradient ({autodiff_grad}) differs from finite difference ({finite_diff_grad})"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

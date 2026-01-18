@@ -25,6 +25,7 @@ from learning.autodiff_setup import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
+from learning.jax_scs_layer import dro_scs_solve
 from learning.silver_stepsizes import get_strongly_convex_silver_stepsizes
 from learning.acceleration_stepsizes import (
     jax_get_nesterov_fgm_beta_sequence,
@@ -336,7 +337,7 @@ def quad_run(cfg):
             log.info("=== SGD experiment complete ===")
 
 
-def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses=None):
+def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses=None, all_times=None):
     """Build a DataFrame from stepsizes history for CSV saving.
     
     Args:
@@ -345,6 +346,7 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_los
         is_vector_t: Whether t is a vector
         has_beta: Whether beta values are present
         all_losses: Optional list of loss values (same length as all_stepsizes_vals)
+        all_times: Optional list of iteration times in seconds
     """
     data = {'iteration': list(range(len(all_stepsizes_vals)))}
     
@@ -353,6 +355,11 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_los
         # Pad with None if losses list is shorter than stepsizes list
         padded_losses = list(all_losses) + [None] * (len(all_stepsizes_vals) - len(all_losses))
         data['loss'] = [float(l) if l is not None else float('nan') for l in padded_losses]
+    
+    # Add timing column if provided
+    if all_times is not None:
+        padded_times = list(all_times) + [None] * (len(all_stepsizes_vals) - len(all_times))
+        data['iter_time'] = [float(t) if t is not None else float('nan') for t in padded_times]
     
     # Extract t values (first element of each stepsizes tuple)
     if is_vector_t:
@@ -468,30 +475,65 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         )
         log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
         
-        # Get sdp_backend from config (default: scs for backward compatibility)
-        sdp_backend = cfg.get('sdp_backend', 'scs')
-        log.info(f'Using SDP backend: {sdp_backend}')
+        # Get dro_canon_backend from config (default: cvxpylayers for backward compatibility)
+        dro_canon_backend = cfg.get('dro_canon_backend', 'cvxpylayers')
+        log.info(f'Using DRO canon backend: {dro_canon_backend}')
         
-        if sdp_backend != 'scs':
-            raise ValueError(f"Only 'scs' backend is supported. Got: {sdp_backend}")
-        
-        # Use SCS (cvxpylayer approach)
-        # Create the full DRO layer based on dro_obj type
-        if cfg.dro_obj == 'expectation':
-            full_dro_layer = create_full_dro_exp_layer(
-                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
-                c_vals_init, precond_inv, eps
-            )
-        elif cfg.dro_obj == 'cvar':
-            full_dro_layer = create_full_dro_cvar_layer(
-                M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
-                c_vals_init, precond_inv, eps, alpha
-            )
+        if dro_canon_backend == 'manual_jax':
+            # Use the new manual JAX canonicalization + diffcp backend
+            # This bypasses cvxpylayers entirely, avoiding DPP compilation OOM
+            precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
+            
+            # Determine risk type string for dro_scs_solve
+            risk_type = 'cvar' if cfg.dro_obj == 'cvar' else 'expectation'
+            
+            def manual_jax_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                                    mu, L, R, K_max, eps, pep_obj, _unused_layer, traj_fn, pep_data_fn):
+                """Full DRO pipeline using manual JAX canonicalization."""
+                # Compute trajectories for all samples
+                batch_GF_func = jax.vmap(
+                    lambda Q, z0, zs, fs: traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=True),
+                    in_axes=(0, 0, 0, 0)
+                )
+                G_batch, F_batch = batch_GF_func(Q_batch, z0_batch, zs_batch, fs_batch)
+                
+                # Compute PEP constraint matrices (these depend on stepsizes)
+                pep_data = pep_data_fn(stepsizes, mu, L, R, K_max, pep_obj)
+                A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+                
+                # Call the manual JAX SCS solver
+                return dro_scs_solve(
+                    A_obj, b_obj, A_vals, b_vals, c_vals,
+                    G_batch, F_batch,
+                    eps, precond_inv_jax,
+                    risk_type=risk_type,
+                    alpha=alpha,
+                )
+            
+            value_and_grad_fn = jax.value_and_grad(manual_jax_pipeline, argnums=0)
+            full_dro_layer = None  # Not used for manual_jax
+            log.info(f'Using manual JAX pipeline with risk_type={risk_type}')
+            
+        elif dro_canon_backend == 'cvxpylayers':
+            # Use the original cvxpylayers approach
+            # Create the full DRO layer based on dro_obj type
+            if cfg.dro_obj == 'expectation':
+                full_dro_layer = create_full_dro_exp_layer(
+                    M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                    c_vals_init, precond_inv, eps
+                )
+            elif cfg.dro_obj == 'cvar':
+                full_dro_layer = create_full_dro_cvar_layer(
+                    M, N_val, mat_shape, vec_shape, mat_shape, vec_shape,
+                    c_vals_init, precond_inv, eps, alpha
+                )
+            else:
+                raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
+            
+            value_and_grad_fn = jax.value_and_grad(full_SCS_pipeline, argnums=0)
+            log.info(f'Using cvxpylayers pipeline')
         else:
-            raise ValueError(f"Unknown dro_obj: {cfg.dro_obj}")
-        
-        # Value and gradient function for stepsizes only (returns (loss, grads))
-        value_and_grad_fn = jax.value_and_grad(full_SCS_pipeline, argnums=0)
+            raise ValueError(f"Unknown dro_canon_backend: {dro_canon_backend}. Must be 'manual_jax' or 'cvxpylayers'.")
         
     elif learning_framework == 'l2o':
         value_and_grad_fn = jax.value_and_grad(l2o_pipeline, argnums=0)
@@ -514,6 +556,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     
     all_stepsizes_vals = [stepsizes]  # List of tuples, starting with initial stepsizes
     all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
+    all_times = []   # Will store iteration times in seconds
     
     # Initialize optimizer if needed
     optimizer = None
@@ -542,6 +585,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         
         # Compute loss and gradients w.r.t stepsizes only
         # The loss corresponds to the CURRENT stepsizes (before update)
+        iter_start_time = time.time()
         if learning_framework == 'ldro-pep':
             loss, d_stepsizes = value_and_grad_fn(
                 stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
@@ -549,11 +593,13 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             )
         elif learning_framework == 'l2o':
             loss, d_stepsizes = value_and_grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
+        iter_time = time.time() - iter_start_time
         
-        log.info(f'  loss: {float(loss):.6f}')
+        log.info(f'  loss: {float(loss):.6f}, iter_time: {iter_time:.3f}s')
         
-        # Store loss for current stepsizes (iteration iter_num)
+        # Store loss and timing for current stepsizes (iteration iter_num)
         all_losses.append(float(loss))
+        all_times.append(iter_time)
     
         # SGD step: descent in stepsizes with projection
         if optimizer_type == "vanilla_sgd":
@@ -580,11 +626,11 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         all_stepsizes_vals.append(stepsizes)
         
         # Save progress to CSV after each iteration (overwrite to preserve intermediate progress)
-        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses, all_times)
         df.to_csv(csv_path, index=False)
     
     # Final save after loop completes
-    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses)
+    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_losses, all_times)
     t = stepsizes[0]
     t_str = str(t) if is_vector_t else f'{float(t):.6f}'
     log.info(f'K={K_max} complete. Final t={t_str}. Saved to {csv_path}')
