@@ -363,14 +363,299 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all
         for k in range(K_max):
             data[f'gamma_{k}'] = [float(ss[0][k]) for ss in all_stepsizes_vals]
     else:
-        data['gamma'] = [float(ss[0]) for ss in all_stepsizes_vals]
+        # Handle both scalar and 1-element array cases
+        def get_scalar_gamma(ss):
+            g = ss[0]
+            if hasattr(g, 'item') and g.size == 1:
+                return float(g.item())
+            else:
+                return float(g)
+        data['gamma'] = [get_scalar_gamma(ss) for ss in all_stepsizes_vals]
     
     # Add beta values if present
     if has_beta:
-        for k in range(K_max):
-            data[f'beta_{k}'] = [float(ss[1][k]) for ss in all_stepsizes_vals]
+        for k in range(K_max + 1):  # Beta has K+1 values for FISTA
+            if k < K_max + 1 and all(len(ss) > 1 and len(ss[1]) > k for ss in all_stepsizes_vals):
+                data[f'beta_{k}'] = [float(ss[1][k]) for ss in all_stepsizes_vals]
     
     return pd.DataFrame(data)
+
+
+# =============================================================================
+# L2O Pipeline (Learning to Optimize without DRO)
+# =============================================================================
+
+@partial(jax.jit, static_argnames=['traj_fn', 'pep_obj', 'K_max', 'return_Gram'])
+def lasso_pep_obj_from_trajectory(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn, pep_obj, return_Gram=True):
+    """
+    Compute PEP objective directly from ISTA/FISTA trajectory without SDP.
+    
+    For Lasso, the composite objective is:
+        f(x) = f1(x) + f2(x) = 0.5*||Ax - b||^2 + lambd*||x||_1
+    
+    At optimal x_opt, f(x_opt) = f_opt.
+    
+    Args:
+        stepsizes: Step sizes (gamma,) for ISTA or (gamma, beta) for FISTA
+        A, b: Problem data
+        x0: Initial point
+        x_opt, f_opt: Optimal point and value
+        lambd: L1 regularization
+        K_max: Number of iterations
+        traj_fn: Trajectory function (ISTA or FISTA)
+        pep_obj: 'obj_val', 'opt_dist_sq_norm', or 'grad_sq_norm'
+        return_Gram: Whether traj_fn returns Gram representation
+    
+    Returns:
+        Scalar PEP objective value
+    """
+    if return_Gram:
+        # Get Gram representation (not needed for l2o, but reuse trajectory function)
+        G, F = traj_fn(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
+        
+        # For obj_val: F contains [F1, F2] concatenated
+        # F1 = f1(x_k) - f1_s for k=0..K and 0 for optimal
+        # F2 = f2(x_k) - f2_s for k=0..K and 0 for optimal
+        # The objective is (f1(x_K) + f2(x_K)) - (f1_s + f2_s)
+        # For ISTA: dimF1 = K+2, dimF2 = K+2, so F1[-2] is f1(x_K)-f1_s, F2[-2] is f2(x_K)-f2_s
+        if pep_obj == 'obj_val':
+            # The F vector structure gives us f1(x_K) - f1_s + f2(x_K) - f2_s at specific indices
+            # But simpler: just compute directly from trajectory
+            pass  # Fall through to direct computation below
+        elif pep_obj == 'opt_dist_sq_norm':
+            # Need ||x_K - x_s||^2, but x_s = 0 in shifted coordinates
+            # G[0,0] is ||x_0 - x_s||^2, but for x_K we need to extract from G structure
+            pass
+    
+    # Direct computation is cleaner - run trajectory and compute objective
+    traj_result = traj_fn(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=False)
+    
+    # Extract final iterate (x_K is in shifted coordinates, so x_K + x_opt is actual)
+    # Both ISTA and FISTA return x_iter as first element
+    x_iter = traj_result[0]  # Shape (n, K+1), columns are x_0, ..., x_K in shifted coords
+    x_K_shifted = x_iter[:, -1]  # Final iterate in shifted coordinates
+    x_K = x_K_shifted + x_opt    # Actual final iterate
+    
+    if pep_obj == 'obj_val':
+        # Compute actual objective at x_K
+        f1_xK = 0.5 * jnp.sum((A @ x_K - b) ** 2)
+        f2_xK = lambd * jnp.sum(jnp.abs(x_K))
+        return f1_xK + f2_xK - f_opt
+    elif pep_obj == 'opt_dist_sq_norm':
+        return jnp.sum((x_K - x_opt) ** 2)
+    elif pep_obj == 'grad_sq_norm':
+        # Composite gradient: g_f1(x_K) + h_f2(x_K) where h is a subgradient
+        g_f1 = A.T @ (A @ x_K - b)
+        h_f2 = lambd * jnp.sign(x_K)  # Subgradient
+        return jnp.sum((g_f1 + h_f2) ** 2)
+    else:
+        raise ValueError(f"Unknown pep_obj: {pep_obj}")
+
+
+def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch, 
+                       lambd, K_max, traj_fn, pep_obj, risk_type, alpha=0.1):
+    """
+    L2O pipeline for Lasso: compute PEP objectives without DRO SDP.
+    
+    Computes PEP objectives for each sample in the batch and returns a risk measure.
+    
+    Args:
+        stepsizes: Step size parameters (gamma,) or (gamma, beta)
+        A: Fixed A matrix
+        b_batch: Batch of b vectors (N, m)
+        x0_batch: Batch of initial points (N, n)
+        x_opt_batch: Batch of optimal points (N, n)
+        f_opt_batch: Batch of optimal values (N,)
+        lambd: L1 regularization
+        K_max: Number of iterations
+        traj_fn: Trajectory function
+        pep_obj: PEP objective type
+        risk_type: 'expectation' or 'cvar'
+        alpha: CVaR confidence level
+    
+    Returns:
+        Scalar loss value
+    """
+    # vmap over the batch
+    batch_pep_obj_func = jax.vmap(
+        lambda b, x0, x_opt, f_opt: lasso_pep_obj_from_trajectory(
+            stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn, pep_obj
+        ),
+        in_axes=(0, 0, 0, 0)
+    )
+    pep_objs = batch_pep_obj_func(b_batch, x0_batch, x_opt_batch, f_opt_batch)
+    
+    if risk_type == 'expectation':
+        return jnp.mean(pep_objs)
+    elif risk_type == 'cvar':
+        # CVaR: expectation of the top alpha fraction of values
+        N = pep_objs.shape[0]
+        k = max(int(np.ceil(alpha * N)), 1)
+        sorted_objs = jnp.sort(pep_objs)[::-1]  # Sort descending
+        return jnp.mean(sorted_objs[:k])
+    else:
+        raise ValueError(f"Unknown risk_type: {risk_type}")
+
+
+# =============================================================================
+# LPEP Run Function for Single K (Deterministic PEP Optimization)
+# =============================================================================
+
+def run_gd_for_K_lpep_lasso(cfg, K_max, problem_data, gamma_init, gd_iters, eta_t,
+                            alg, csv_path):
+    """
+    Run gradient descent for learning PEP (lpep) for Lasso - no samples, no DRO.
+    
+    Optimizes step sizes to minimize the standard (worst-case) PEP objective
+    using cvxpylayers with SCS solver for differentiation.
+    
+    Args:
+        cfg: Configuration object
+        K_max: Number of algorithm iterations
+        problem_data: Problem data dict with A, L, mu, R, lambd
+        gamma_init: Initial step sizes
+        gd_iters: Number of gradient descent iterations
+        eta_t: Learning rate for step sizes
+        alg: Algorithm name ('ista' or 'fista')
+        csv_path: Path to save progress CSV
+    """
+    from learning.cvxpylayers_setup import create_full_pep_layer
+    
+    log.info(f"=== Running lpep GD for K={K_max}, alg={alg} ===")
+    
+    # Extract problem data
+    L = problem_data['L']
+    mu = problem_data['mu']
+    R = problem_data['R']
+    
+    # Select PEP data function based on algorithm
+    if alg == 'ista':
+        pep_data_fn = construct_ista_pep_data
+        has_beta = False
+    elif alg == 'fista':
+        pep_data_fn = construct_fista_pep_data
+        has_beta = True
+    else:
+        raise ValueError(f"Unknown algorithm: {alg}. Must be 'ista' or 'fista'.")
+    
+    # Initialize stepsizes
+    is_vector_gamma = cfg.stepsize_type == 'vector'
+    
+    if has_beta:
+        # FISTA: compute raw t_k sequence (Nesterov sequence of length K+1)
+        betas_t = [1.0]
+        for k in range(K_max):
+            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
+            betas_t.append(t_new)
+        beta_init = jnp.array(betas_t)
+        stepsizes = [gamma_init, beta_init]
+    else:
+        stepsizes = [gamma_init]
+    
+    # Track step size values for logging
+    all_stepsizes_vals = [tuple(stepsizes)]
+    all_losses = []
+    
+    # Create cvxpylayers-based PEP layer
+    if has_beta:
+        pep_data = pep_data_fn(gamma_init, beta_init, mu, L, R, K_max, cfg.pep_obj)
+    else:
+        pep_data = pep_data_fn(gamma_init, mu, L, R, K_max, cfg.pep_obj)
+    
+    A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+    M = A_vals.shape[0]
+    mat_shape = (A_obj.shape[0], A_obj.shape[1])
+    vec_shape = (b_obj.shape[0],)
+    pep_layer = create_full_pep_layer(M, mat_shape, vec_shape)
+    log.info(f"Using SCS backend for lpep (M={M}, mat_shape={mat_shape}, vec_shape={vec_shape})")
+    
+    # Define the PEP loss function (differentiable w.r.t. stepsizes)
+    def pep_loss_fn(stepsizes_list):
+        """Compute PEP worst-case bound for given stepsizes."""
+        if has_beta:
+            gamma, beta = stepsizes_list[0], stepsizes_list[1]
+            pep_data = pep_data_fn(gamma, beta, mu, L, R, K_max, cfg.pep_obj)
+        else:
+            gamma = stepsizes_list[0]
+            pep_data = pep_data_fn(gamma, mu, L, R, K_max, cfg.pep_obj)
+        
+        A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
+        
+        # Use cvxpylayers with SCS
+        M = A_vals.shape[0]
+        params_list = (
+            [A_vals[m] for m in range(M)] +
+            [b_vals[m] for m in range(M)] +
+            [c_vals, A_obj, b_obj]
+        )
+        (G_opt, F_opt) = pep_layer(*params_list)
+        # Compute objective: trace(A_obj @ G) + b_obj^T @ F
+        loss = jnp.trace(A_obj @ G_opt) + jnp.dot(b_obj, F_opt)
+        return loss
+    
+    value_and_grad_fn = jax.value_and_grad(pep_loss_fn, argnums=0)
+    
+    # Projection function
+    def proj_stepsizes(x):
+        return [jax.nn.relu(xi) for xi in x]
+    
+    # Determine update mask for learn_beta
+    learn_beta = cfg.get('learn_beta', True)
+    if has_beta and not learn_beta:
+        update_mask = [True, False]
+        log.info(f'learn_beta=False: beta will NOT be updated during optimization')
+    else:
+        update_mask = None
+    
+    # Initialize optimizer
+    optimizer = AdamWMin(
+        x_params=[jnp.array(s) for s in stepsizes],
+        lr=eta_t,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.01,
+        update_mask=update_mask,
+    )
+    
+    # GD iterations
+    for iter_num in range(gd_iters):
+        gamma = stepsizes[0]
+        # gamma is always an array, format appropriately
+        if not is_vector_gamma and gamma.size == 1:
+            gamma_log = f'{float(gamma.item()):.5f}'
+        else:
+            gamma_log = '[' + ', '.join(f'{float(x):.5f}' for x in gamma.tolist()) + ']'
+        if has_beta:
+            beta_log = '[' + ', '.join(f'{x:.5f}' for x in stepsizes[1].tolist()[:4]) + ', ...]'
+            log.info(f"K={K_max}, iter={iter_num}, gamma={gamma_log}, beta={beta_log}")
+        else:
+            log.info(f"K={K_max}, iter={iter_num}, gamma={gamma_log}")
+        
+        start_time = time.time()
+        
+        # Compute loss and gradient
+        try:
+            loss_val, grads = value_and_grad_fn(stepsizes)
+        except Exception as e:
+            log.warning(f"PEP solve failed: {e}")
+            loss_val = float('nan')
+            grads = [jnp.zeros_like(s) for s in stepsizes]
+        
+        iter_time = time.time() - start_time
+        log.info(f"  loss: {loss_val:.6f}, iter_time: {iter_time:.3f}s")
+        
+        all_losses.append(float(loss_val))
+        
+        # Update step sizes using AdamWMin
+        stepsizes = optimizer.step(stepsizes, grads, proj_stepsizes)
+        
+        all_stepsizes_vals.append(tuple(stepsizes))
+        
+        # Save progress
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses)
+        df.to_csv(csv_path, index=False)
+    
+    log.info(f"=== lpep GD for K={K_max} complete ===")
 
 
 # =============================================================================
@@ -409,13 +694,15 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
     
     learning_framework = cfg.learning_framework
     
-    # Validate backend
-    if learning_framework != 'ldro-pep':
-        raise ValueError(f"Only 'ldro-pep' learning_framework is supported for Lasso SGD. Got: {learning_framework}")
-    
-    dro_canon_backend = cfg.get('dro_canon_backend', 'manual_jax')
-    if dro_canon_backend != 'manual_jax':
-        raise ValueError(f"Only 'manual_jax' dro_canon_backend is supported. Got: {dro_canon_backend}")
+    # Validate backend based on learning framework
+    if learning_framework == 'ldro-pep':
+        dro_canon_backend = cfg.get('dro_canon_backend', 'manual_jax')
+        if dro_canon_backend != 'manual_jax':
+            raise ValueError(f"Only 'manual_jax' dro_canon_backend is supported. Got: {dro_canon_backend}")
+    elif learning_framework == 'l2o':
+        pass  # L2O doesn't use DRO backend
+    else:
+        raise ValueError(f"Only 'ldro-pep' or 'l2o' learning_framework is supported for Lasso SGD. Got: {learning_framework}")
     
     # Select trajectory function and PEP data function based on algorithm
     if alg == 'ista':
@@ -429,6 +716,15 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
     else:
         raise ValueError(f"Unknown algorithm: {alg}. Must be 'ista' or 'fista'.")
     
+    # Compute initial beta for FISTA (raw t_k sequence)
+    beta_init = None
+    if has_beta:
+        betas_t = [1.0]
+        for k in range(K_max):
+            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
+            betas_t.append(t_new)
+        beta_init = jnp.array(betas_t)  # Raw t_k sequence of length K+1
+    
     # Helper to sample a batch of Lasso problems
     def sample_batch(sample_key):
         batch_key, next_key = jax.random.split(sample_key)
@@ -438,87 +734,98 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         )
         return next_key, b_batch, x_opt_batch, f_opt_batch
     
-    # Compute preconditioner from initial sample batch
-    log.info("Computing preconditioner from initial sample batch...")
-    key, b_precond, x_opt_precond, f_opt_precond = sample_batch(key)
-    
-    # Initial x0 for preconditioner: zeros (since problem is shifted, optimal is at 0)
-    x0_precond = jnp.zeros((N_val, A_jax.shape[1]))
-    
-    # Compute initial stepsizes for preconditioner
-    if has_beta:
-        # FISTA: compute raw t_k sequence (Nesterov sequence of length K+1)
-        # The trajectory function will internally compute momentum as (t_k - 1) / t_{k+1}
-        betas_t = [1.0]
-        for k in range(K_max):
-            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
-            betas_t.append(t_new)
-        beta_init = jnp.array(betas_t)  # Raw t_k sequence of length K+1
-        stepsizes_for_precond = (gamma_init, beta_init)
-    else:
-        stepsizes_for_precond = (gamma_init,)
-    
-    # Compute G, F for preconditioner
-    # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
-    def compute_GF_single(stepsizes_tuple, b, x0, x_opt, f_opt):
+    # Compute preconditioner from initial sample batch (only needed for ldro-pep)
+    if learning_framework == 'ldro-pep':
+        log.info("Computing preconditioner from initial sample batch...")
+        key, b_precond, x_opt_precond, f_opt_precond = sample_batch(key)
+        
+        # Initial x0 for preconditioner: zeros (since problem is shifted, optimal is at 0)
+        x0_precond = jnp.zeros((N_val, A_jax.shape[1]))
+        
+        # Compute initial stepsizes for preconditioner
         if has_beta:
-            # FISTA: pass (gamma, beta) tuple
-            return traj_fn(stepsizes_tuple, A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
+            stepsizes_for_precond = (gamma_init, beta_init)
         else:
-            # ISTA: pass gamma array directly
-            return traj_fn(stepsizes_tuple[0], A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
-    
-    batch_GF_func = jax.vmap(
-        lambda b, x0, x_opt, f_opt: compute_GF_single(stepsizes_for_precond, b, x0, x_opt, f_opt),
-        in_axes=(0, 0, 0, 0)
-    )
-    G_precond_batch, F_precond_batch = batch_GF_func(b_precond, x0_precond, x_opt_precond, f_opt_precond)
-    
-    precond_type = cfg.get('precond_type', 'average')
-    precond_inv = compute_preconditioner_from_samples(
-        np.array(G_precond_batch), np.array(F_precond_batch), precond_type=precond_type
-    )
-    precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
-    log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
+            stepsizes_for_precond = (gamma_init,)
+        
+        # Compute G, F for preconditioner
+        # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
+        def compute_GF_single(stepsizes_tuple, b, x0, x_opt, f_opt):
+            if has_beta:
+                # FISTA: pass (gamma, beta) tuple
+                return traj_fn(stepsizes_tuple, A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
+            else:
+                # ISTA: pass gamma array directly
+                return traj_fn(stepsizes_tuple[0], A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
+        
+        batch_GF_func = jax.vmap(
+            lambda b, x0, x_opt, f_opt: compute_GF_single(stepsizes_for_precond, b, x0, x_opt, f_opt),
+            in_axes=(0, 0, 0, 0)
+        )
+        G_precond_batch, F_precond_batch = batch_GF_func(b_precond, x0_precond, x_opt_precond, f_opt_precond)
+        
+        precond_type = cfg.get('precond_type', 'average')
+        precond_inv = compute_preconditioner_from_samples(
+            np.array(G_precond_batch), np.array(F_precond_batch), precond_type=precond_type
+        )
+        precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
+        log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
     
     # Determine risk type
     risk_type = 'cvar' if cfg.dro_obj == 'cvar' else 'expectation'
     
-    # Define the DRO pipeline function
-    def lasso_dro_pipeline(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
-        """Full DRO pipeline for Lasso using manual JAX canonicalization."""
-        # Compute trajectories for all samples
-        # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
-        if has_beta:
-            # FISTA: pass the tuple directly
-            traj_stepsizes = stepsizes_tuple
-        else:
-            # ISTA: extract gamma array from tuple
-            traj_stepsizes = stepsizes_tuple[0]
+    # Define the pipeline function based on learning framework
+    if learning_framework == 'ldro-pep':
+        # DRO pipeline: compute Gram representation, then solve DRO SDP
+        def lasso_dro_pipeline(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
+            """Full DRO pipeline for Lasso using manual JAX canonicalization."""
+            # Compute trajectories for all samples
+            # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
+            if has_beta:
+                traj_stepsizes = stepsizes_tuple
+            else:
+                traj_stepsizes = stepsizes_tuple[0]
+            
+            batch_GF_fn = jax.vmap(
+                lambda b, x0, x_opt, f_opt: traj_fn(traj_stepsizes, A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True),
+                in_axes=(0, 0, 0, 0)
+            )
+            G_batch, F_batch = batch_GF_fn(b_batch, x0_batch, x_opt_batch, f_opt_batch)
+            
+            # Compute PEP constraint matrices (these depend on stepsizes)
+            if has_beta:
+                pep_data = pep_data_fn(stepsizes_tuple[0], stepsizes_tuple[1], mu, L, R, K_max, cfg.pep_obj)
+            else:
+                pep_data = pep_data_fn(stepsizes_tuple[0], mu, L, R, K_max, cfg.pep_obj)
+            A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+            
+            # Call the manual JAX SCS solver
+            return dro_scs_solve(
+                A_obj, b_obj, A_vals, b_vals, c_vals,
+                G_batch, F_batch,
+                eps, precond_inv_jax,
+                risk_type=risk_type,
+                alpha=alpha,
+            )
         
-        batch_GF_fn = jax.vmap(
-            lambda b, x0, x_opt, f_opt: traj_fn(traj_stepsizes, A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True),
-            in_axes=(0, 0, 0, 0)
-        )
-        G_batch, F_batch = batch_GF_fn(b_batch, x0_batch, x_opt_batch, f_opt_batch)
-        
-        # Compute PEP constraint matrices (these depend on stepsizes)
-        if has_beta:
-            pep_data = pep_data_fn(stepsizes_tuple[0], stepsizes_tuple[1], mu, L, R, K_max, cfg.pep_obj)
-        else:
-            pep_data = pep_data_fn(stepsizes_tuple[0], mu, L, R, K_max, cfg.pep_obj)
-        A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
-        
-        # Call the manual JAX SCS solver
-        return dro_scs_solve(
-            A_obj, b_obj, A_vals, b_vals, c_vals,
-            G_batch, F_batch,
-            eps, precond_inv_jax,
-            risk_type=risk_type,
-            alpha=alpha,
-        )
+        value_and_grad_fn = jax.value_and_grad(lasso_dro_pipeline, argnums=0)
     
-    value_and_grad_fn = jax.value_and_grad(lasso_dro_pipeline, argnums=0)
+    elif learning_framework == 'l2o':
+        # L2O pipeline: compute PEP objectives directly without DRO SDP
+        def lasso_l2o_wrapper(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
+            """L2O pipeline wrapper for Lasso."""
+            # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
+            if has_beta:
+                traj_stepsizes = stepsizes_tuple
+            else:
+                traj_stepsizes = stepsizes_tuple[0]
+            
+            return l2o_lasso_pipeline(
+                traj_stepsizes, A_jax, b_batch, x0_batch, x_opt_batch, f_opt_batch,
+                lambd, K_max, traj_fn, cfg.pep_obj, risk_type, alpha
+            )
+        
+        value_and_grad_fn = jax.value_and_grad(lasso_l2o_wrapper, argnums=0)
     
     # Initialize stepsizes
     if has_beta:
@@ -696,11 +1003,13 @@ def lasso_run(cfg):
         learning_framework = cfg.learning_framework
         
         if learning_framework == 'lpep':
-            raise ValueError("'lpep' learning framework not yet implemented for Lasso. Use 'ldro-pep'.")
-        elif learning_framework == 'l2o':
-            raise ValueError("'l2o' learning framework not yet implemented for Lasso. Use 'ldro-pep'.")
+            # LPEP: deterministic PEP minimization (no samples, no DRO)
+            run_gd_for_K_lpep_lasso(
+                cfg, K, problem_data, gamma_init, sgd_iters, eta_t,
+                alg, csv_path
+            )
         else:
-            # LDRO-PEP: stochastic optimization with samples
+            # LDRO-PEP or L2O: stochastic optimization with samples
             run_sgd_for_K_lasso(
                 cfg, K, problem_data, key,
                 gamma_init, sgd_iters, eta_t,
