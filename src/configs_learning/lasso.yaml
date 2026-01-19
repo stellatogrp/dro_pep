@@ -28,9 +28,9 @@ b_seed: 2000            # Seed for b vector sampling
 learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Algorithm and optimizer type (selected by Slurm job index)
-alg: "ista"            # ista or fista
+alg: "fista"            # ista or fista
 optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
-stepsize_type: "vector" # "scalar" or "vector"
+stepsize_type: "scalar" # "scalar" or "vector"
 vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
@@ -44,8 +44,9 @@ sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
 dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
 eps: 0.1
 alpha: 0.1
+precond_type: 'average'
 
-learn_beta: False  # True or False depending on if beta is learnable or not
+learn_beta: True  # True or False depending on if beta is learnable or not
 
 # SGD training parameters
 sgd_iters: 10

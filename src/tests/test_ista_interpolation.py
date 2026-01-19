@@ -121,7 +121,10 @@ def build_gram_representation(x_iterates, g_iterates, h_iterates, f1_iterates, f
     F1 = np.array([f1 - f1_s for f1 in f1_iterates] + [0.0])
     F2 = np.array([f2 - f2_s for f2 in f2_iterates] + [0.0])
     
-    return G, F1, F2
+    # Concatenate F1 and F2 for consistency with DRO pipeline
+    F = np.concatenate([F1, F2])
+    
+    return G, F1, F2, F
 
 
 def check_interpolation_constraints(G, F, A_vals, b_vals, tol=1e-6):
@@ -251,7 +254,7 @@ class TestISTAInterpolation(unittest.TestCase):
             self.x0, self.A, self.b, self.lambd, self.gamma, self.K
         )
         
-        G, F1, F2 = build_gram_representation(
+        G, F1, F2, F = build_gram_representation(
             x_iters, g_iters, h_iters, f1_iters, f2_iters,
             self.x_s, self.f1_s, self.f2_s, self.A, self.b
         )
@@ -276,7 +279,7 @@ class TestISTAInterpolation(unittest.TestCase):
             self.x0, self.A, self.b, self.lambd, self.gamma, self.K
         )
         
-        G, F1, F2 = build_gram_representation(
+        G, F1, F2, F = build_gram_representation(
             x_iters, g_iters, h_iters, f1_iters, f2_iters,
             self.x_s, self.f1_s, self.f2_s, self.A, self.b
         )
@@ -329,7 +332,7 @@ class TestISTAInterpolation(unittest.TestCase):
                 x0, A, b, lambd, gamma, K
             )
             
-            G, F1, F2 = build_gram_representation(
+            G, F1, F2, F = build_gram_representation(
                 x_iters, g_iters, h_iters, f1_iters, f2_iters,
                 x_s, f1_s, f2_s, A, b
             )
@@ -486,7 +489,10 @@ def build_fista_gram_representation(x_iterates, y_iterates, g_iterates, h_iterat
     # F2: f2 at x points relative to f2_s
     F2 = np.array([f2 - f2_s for f2 in f2_x_iters] + [0.0])
     
-    return G, F1, F2
+    # Concatenate F1 and F2 for consistency with DRO pipeline
+    F = np.concatenate([F1, F2])
+    
+    return G, F1, F2, F
 
 
 def build_fista_symbolic_reps(K, gamma, betas):
@@ -633,7 +639,7 @@ class TestFISTAInterpolation(unittest.TestCase):
             self.x0, self.A, self.b, self.lambd, self.gamma, self.K
         )
         
-        G, F1, F2 = build_fista_gram_representation(
+        G, F1, F2, F = build_fista_gram_representation(
             x_iters, y_iters, g_iters, h_iters, f1_y_iters, f2_x_iters, betas,
             self.x_s, self.f1_s, self.f2_s, self.A, self.b, self.gamma
         )
@@ -660,7 +666,7 @@ class TestFISTAInterpolation(unittest.TestCase):
             self.x0, self.A, self.b, self.lambd, self.gamma, self.K
         )
         
-        G, F1, F2 = build_fista_gram_representation(
+        G, F1, F2, F = build_fista_gram_representation(
             x_iters, y_iters, g_iters, h_iters, f1_y_iters, f2_x_iters, betas,
             self.x_s, self.f1_s, self.f2_s, self.A, self.b, self.gamma
         )
@@ -709,7 +715,7 @@ class TestFISTAInterpolation(unittest.TestCase):
                 x0, A, b, lambd, gamma, K
             )
             
-            G, F1, F2 = build_fista_gram_representation(
+            G, F1, F2, F = build_fista_gram_representation(
                 x_iters, y_iters, g_iters, h_iters, f1_y_iters, f2_x_iters, betas,
                 x_s, f1_s, f2_s, A, b, gamma
             )
@@ -866,7 +872,10 @@ def build_shifted_gram_representation(x_iterates, g_iterates, h_iterates, f1_ite
     F1 = np.array([f1 - f1_s for f1 in f1_iterates] + [0.0])
     F2 = np.array([f2 - f2_s for f2 in f2_iterates] + [0.0])
     
-    return G, F1, F2
+    # Concatenate F1 and F2 for consistency with DRO pipeline
+    F = np.concatenate([F1, F2])
+    
+    return G, F1, F2, F
 
 
 class TestShiftedISTAInterpolation(unittest.TestCase):
@@ -897,7 +906,7 @@ class TestShiftedISTAInterpolation(unittest.TestCase):
             x0, A, b, lambd, gamma, K, x_opt, f_opt
         )
         
-        G, F1, F2 = build_shifted_gram_representation(
+        G, F1, F2, F = build_shifted_gram_representation(
             x_iters, g_iters, h_iters, f1_iters, f2_iters, problem_info
         )
         
@@ -950,7 +959,7 @@ class TestShiftedISTAInterpolation(unittest.TestCase):
                 x0, A, b, lambd, gamma, K, x_opt, f_opt
             )
             
-            G, F1, F2 = build_shifted_gram_representation(
+            G, F1, F2, F = build_shifted_gram_representation(
                 x_iters, g_iters, h_iters, f1_iters, f2_iters, problem_info
             )
             
@@ -1118,6 +1127,176 @@ class TestShiftedFISTAInterpolation(unittest.TestCase):
             f"Shifted FISTA f1 interpolation violated! Max violation: {max_viol_f1}")
         self.assertLessEqual(max_viol_f2, 1e-4,
             f"Shifted FISTA f2 interpolation violated! Max violation: {max_viol_f2}")
+
+
+class TestJAXTrajectoryFunctions(unittest.TestCase):
+    """Test that JAX trajectory functions match the test implementations exactly."""
+    
+    def test_jax_ista_matches_test_implementation(self):
+        """Verify problem_data_to_ista_trajectories matches run_shifted_ista."""
+        import jax.numpy as jnp
+        from learning.trajectories_ista_fista import problem_data_to_ista_trajectories
+        
+        np.random.seed(42)
+        m, n = 20, 10
+        A_np = np.random.randn(m, n) / np.sqrt(m)
+        b_np = np.random.randn(m)
+        lambd = 0.1
+        K = 3
+        
+        # Solve Lasso
+        x_opt_np, f_opt_np = solve_lasso(A_np, b_np, lambd)
+        
+        ATA = A_np.T @ A_np
+        L = np.max(np.linalg.eigvalsh(ATA))
+        gamma_float = 1.0 / L
+        x0_np = np.random.randn(n) * 0.5
+        
+        # Run JAX implementation
+        A_jax = jnp.array(A_np)
+        b_jax = jnp.array(b_np)
+        x_opt_jax = jnp.array(x_opt_np)
+        x0_jax = jnp.array(x0_np)
+        gamma_jax = jnp.array([gamma_float] * K)
+        
+        G_jax, F_jax = problem_data_to_ista_trajectories(
+            gamma_jax, A_jax, b_jax, x0_jax, x_opt_jax, float(f_opt_np), lambd, K_max=K
+        )
+        
+        # Run test implementation
+        x_iterates, g_iterates, h_iterates, f1_iterates, f2_iterates, problem_info = run_shifted_ista(
+            x0_np, A_np, b_np, lambd, gamma_float, K, x_opt_np, f_opt_np
+        )
+        G_test, F1_test, F2_test, F_test = build_shifted_gram_representation(
+            x_iterates, g_iterates, h_iterates, f1_iterates, f2_iterates, problem_info
+        )
+        
+        # Compare
+        np.testing.assert_allclose(np.array(G_jax), G_test, atol=1e-10,
+            err_msg="ISTA JAX Gram matrix doesn't match test implementation")
+        np.testing.assert_allclose(np.array(F_jax), F_test, atol=1e-10,
+            err_msg="ISTA JAX F vector doesn't match test implementation")
+    
+    def test_jax_fista_matches_test_implementation(self):
+        """Verify problem_data_to_fista_trajectories matches the shifted FISTA test."""
+        import jax.numpy as jnp
+        from learning.trajectories_ista_fista import problem_data_to_fista_trajectories
+        
+        np.random.seed(42)
+        m, n = 20, 10
+        A_np = np.random.randn(m, n) / np.sqrt(m)
+        b_np = np.random.randn(m)
+        lambd = 0.1
+        K = 3
+        
+        # Solve Lasso
+        x_opt_np, f_opt_np = solve_lasso(A_np, b_np, lambd)
+        
+        ATA = A_np.T @ A_np
+        L = np.max(np.linalg.eigvalsh(ATA))
+        gamma_float = 1.0 / L
+        x0_np = np.random.randn(n) * 0.5
+        
+        # Compute betas like FISTA test
+        betas_t = [1.0]
+        for k in range(K):
+            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
+            betas_t.append(t_new)
+        effective_betas = [(betas_t[k] - 1) / betas_t[k+1] for k in range(K)]
+        
+        # Run JAX implementation
+        A_jax = jnp.array(A_np)
+        b_jax = jnp.array(b_np)
+        x_opt_jax = jnp.array(x_opt_np)
+        x0_jax = jnp.array(x0_np)
+        gamma_jax = jnp.array([gamma_float] * K)
+        betas_jax = jnp.array(effective_betas)
+        
+        G_jax, F_jax = problem_data_to_fista_trajectories(
+            (gamma_jax, betas_jax), A_jax, b_jax, x0_jax, x_opt_jax, float(f_opt_np), lambd, K_max=K
+        )
+        
+        # Run inline FISTA test implementation (matching test_shifted_fista_interpolation)
+        x0_shifted = x0_np - x_opt_np
+        
+        def f1_shifted(x):
+            return 0.5 * np.linalg.norm(A_np @ (x + x_opt_np) - b_np) ** 2 - f_opt_np
+        
+        def f2_shifted(x):
+            return lambd * np.linalg.norm(x + x_opt_np, 1)
+        
+        def grad_f1_shifted(x):
+            return A_np.T @ (A_np @ (x + x_opt_np) - b_np)
+        
+        def subgrad_f2_shifted(x):
+            return lambd * np.sign(x + x_opt_np)
+        
+        x_iterates = [x0_shifted]
+        y_iterates = [x0_shifted]
+        g_iterates = [grad_f1_shifted(x0_shifted)]
+        h_iterates = [subgrad_f2_shifted(x0_shifted)]
+        f1_y_iters = [f1_shifted(x0_shifted)]
+        f2_x_iters = [f2_shifted(x0_shifted)]
+        
+        x_curr = x0_shifted
+        y_curr = x0_shifted
+        beta_curr = 1.0
+        
+        for k in range(K):
+            g_yk = grad_f1_shifted(y_curr)
+            ytilde = y_curr - gamma_float * g_yk
+            
+            x_new_plus_xopt = soft_threshold(ytilde + x_opt_np, gamma_float * lambd)
+            x_new = x_new_plus_xopt - x_opt_np
+            h_new = (ytilde - x_new) / gamma_float
+            
+            beta_new = 0.5 * (1 + np.sqrt(1 + 4 * beta_curr ** 2))
+            y_new = x_new + (beta_curr - 1) / beta_new * (x_new - x_curr)
+            
+            x_iterates.append(x_new)
+            h_iterates.append(h_new)
+            f2_x_iters.append(f2_shifted(x_new))
+            
+            if k < K - 1:
+                y_iterates.append(y_new)
+                g_iterates.append(grad_f1_shifted(y_new))
+                f1_y_iters.append(f1_shifted(y_new))
+            
+            x_curr = x_new
+            y_curr = y_new
+            beta_curr = beta_new
+        
+        # Build Gram representation
+        g_s = A_np.T @ (A_np @ x_opt_np - b_np)
+        
+        G_half_columns = []
+        G_half_columns.append(x_iterates[0])
+        G_half_columns.append(g_iterates[0])
+        G_half_columns.append(h_iterates[0])
+        
+        for k in range(1, K):
+            G_half_columns.append(h_iterates[k])
+            G_half_columns.append(g_iterates[k])
+        
+        G_half_columns.append(h_iterates[K])
+        G_half_columns.append(g_s)
+        
+        G_half = np.column_stack(G_half_columns)
+        G_test = G_half.T @ G_half
+        
+        f2_x_opt = lambd * np.linalg.norm(x_opt_np, 1)
+        f1_s = -f2_x_opt
+        f2_s = f2_x_opt
+        
+        F1_test = np.array([f1 - f1_s for f1 in f1_y_iters] + [0.0])
+        F2_test = np.array([f2 - f2_s for f2 in f2_x_iters] + [0.0])
+        F_test = np.concatenate([F1_test, F2_test])
+        
+        # Compare
+        np.testing.assert_allclose(np.array(G_jax), G_test, atol=1e-10,
+            err_msg="FISTA JAX Gram matrix doesn't match test implementation")
+        np.testing.assert_allclose(np.array(F_jax), F_test, atol=1e-10,
+            err_msg="FISTA JAX F vector doesn't match test implementation")
 
 
 if __name__ == '__main__':

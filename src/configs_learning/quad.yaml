@@ -29,6 +29,7 @@ sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
 dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
 eps: 0.1
 alpha: 0.1
+precond_type: 'average'
 
 learn_beta: False  # True or False depending on if beta is learnable or not
 

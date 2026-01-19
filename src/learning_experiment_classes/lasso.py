@@ -26,6 +26,10 @@ from learning.trajectories_gd_fgm import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
+from learning.trajectories_ista_fista import (
+    problem_data_to_ista_trajectories,
+    problem_data_to_fista_trajectories,
+)
 from learning.jax_scs_layer import dro_scs_solve
 
 jax.config.update("jax_enable_x64", True)
@@ -132,7 +136,7 @@ def solve_lasso_cvxpy(A_np, b_np, lambd):
         
     Returns:
         x_opt: Optimal solution
-        R: Distance from origin to optimal (||x_opt||)
+        f_opt: Optimal objective value
     """
     n = A_np.shape[1]
     x = cp.Variable(n)
@@ -141,9 +145,9 @@ def solve_lasso_cvxpy(A_np, b_np, lambd):
     prob.solve(solver='CLARABEL')
     
     x_opt = x.value
-    R = np.linalg.norm(x_opt)
+    f_opt = prob.value
     
-    return x_opt, R
+    return x_opt, f_opt
 
 
 def solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd):
@@ -157,20 +161,24 @@ def solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd):
         
     Returns:
         x_opt_batch: (N, n) array of optimal solutions
+        f_opt_batch: (N,) array of optimal objective values
         R_max: Maximum radius across all samples
     """
     N = b_batch_np.shape[0]
     n = A_np.shape[1]
     
     x_opt_batch = np.zeros((N, n))
+    f_opt_batch = np.zeros(N)
     R_max = 0.0
     
-    for i in trange(N):
-        x_opt, R = solve_lasso_cvxpy(A_np, b_batch_np[i], lambd)
+    for i in range(N):
+        x_opt, f_opt = solve_lasso_cvxpy(A_np, b_batch_np[i], lambd)
         x_opt_batch[i] = x_opt
+        f_opt_batch[i] = f_opt
+        R = np.linalg.norm(x_opt)
         R_max = max(R_max, R)
     
-    return x_opt_batch, R_max
+    return x_opt_batch, f_opt_batch, R_max
 
 
 # =============================================================================
@@ -229,7 +237,7 @@ def compute_sample_radius(cfg, A_np):
     b_batch_np = np.array(b_batch)
     
     # Solve all Lasso problems
-    _, R_max = solve_batch_lasso_cvxpy(A_np, b_batch_np, cfg.lambd)
+    _, _, R_max = solve_batch_lasso_cvxpy(A_np, b_batch_np, cfg.lambd)
     
     log.info(f"Computed R = {R_max:.6f}")
     return R_max
@@ -239,21 +247,32 @@ def compute_sample_radius(cfg, A_np):
 # Sample Batch for SGD Iteration
 # =============================================================================
 
-def sample_lasso_batch(key, A, N, p_xsamp_nonzero, noise_eps):
+def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, noise_eps, lambd):
     """
     Sample a batch of Lasso problems for one SGD iteration.
     
     Args:
         key: JAX random key
-        A: (m, n) JAX array
+        A_jax: (m, n) JAX array
+        A_np: (m, n) NumPy array
         N: Batch size
         p_xsamp_nonzero: Sparsity parameter
         noise_eps: Noise level
+        lambd: L1 regularization
         
     Returns:
-        b_batch: (N, m) array of b vectors
+        b_batch: (N, m) JAX array of b vectors
+        x_opt_batch: (N, n) JAX array of optimal solutions
+        f_opt_batch: (N,) JAX array of optimal objectives
     """
-    return generate_batch_b_jax(key, A, N, p_xsamp_nonzero, noise_eps)
+    # Generate b vectors
+    b_batch = generate_batch_b_jax(key, A_jax, N, p_xsamp_nonzero, noise_eps)
+    
+    # Solve Lasso to get x_opt, f_opt for each sample
+    b_batch_np = np.array(b_batch)
+    x_opt_batch_np, f_opt_batch_np, _ = solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd)
+    
+    return b_batch, jnp.array(x_opt_batch_np), jnp.array(f_opt_batch_np)
 
 
 # =============================================================================
@@ -282,15 +301,12 @@ def setup_lasso_problem(cfg):
     log.info(f"Generating A matrix with seed={cfg.A_seed}")
     A_np = generate_A(cfg.A_seed, cfg.m, cfg.n, cfg.p_A_nonzero)
     A_jax = jnp.array(A_np)
-
-    log.info(A_jax)
     
     # Compute L and mu
     L, mu = compute_lasso_params(A_jax)
     log.info(f"L = {L:.6f}, mu = {mu:.6f}")
     
     # Select R based on strong convexity
-    # mu close to 0 means non-strongly convex (m < n case)
     MU_TOL = 1e-6
     is_strongly_convex = mu > MU_TOL
     
@@ -324,7 +340,296 @@ def setup_lasso_problem(cfg):
 
 
 # =============================================================================
-# Main Entry Point (placeholder for now)
+# Build Stepsizes DataFrame for CSV Logging
+# =============================================================================
+
+def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses=None, all_times=None):
+    """Build a DataFrame from stepsizes history for CSV saving."""
+    data = {'iteration': list(range(len(all_stepsizes_vals)))}
+    
+    # Add losses if provided
+    if all_losses is not None:
+        # Pad losses with NaN for rows that don't have loss yet
+        padded_losses = all_losses + [np.nan] * (len(all_stepsizes_vals) - len(all_losses))
+        data['loss'] = padded_losses
+    
+    # Add times if provided
+    if all_times is not None:
+        padded_times = all_times + [np.nan] * (len(all_stepsizes_vals) - len(all_times))
+        data['iter_time'] = padded_times
+    
+    # Add gamma values
+    if is_vector_gamma:
+        for k in range(K_max):
+            data[f'gamma_{k}'] = [float(ss[0][k]) for ss in all_stepsizes_vals]
+    else:
+        data['gamma'] = [float(ss[0]) for ss in all_stepsizes_vals]
+    
+    # Add beta values if present
+    if has_beta:
+        for k in range(K_max):
+            data[f'beta_{k}'] = [float(ss[1][k]) for ss in all_stepsizes_vals]
+    
+    return pd.DataFrame(data)
+
+
+# =============================================================================
+# SGD Run Function for Single K
+# =============================================================================
+
+def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, eta_t,
+                         eps, alpha, alg, optimizer_type, N_val, csv_path):
+    """
+    Run SGD for a single K value for Lasso learning.
+    
+    Args:
+        cfg: Config object
+        K_max: Number of algorithm iterations
+        problem_data: Dict with A_jax, A_np, L, mu, R, lambd
+        key: JAX random key
+        gamma_init: Initial step sizes
+        sgd_iters: Number of SGD iterations
+        eta_t: Learning rate for stepsizes
+        eps: DRO radius
+        alpha: CVaR alpha (if using CVaR)
+        alg: Algorithm ('ista' or 'fista')
+        optimizer_type: Optimizer type ('vanilla_sgd', 'adamw', 'sgd_wd')
+        N_val: Batch size
+        csv_path: Path to save progress CSV
+    """
+    log.info(f"=== Running SGD for K={K_max}, alg={alg} ===")
+    
+    # Extract problem data
+    A_jax = problem_data['A_jax']
+    A_np = problem_data['A_np']
+    L = problem_data['L']
+    mu = problem_data['mu']
+    R = problem_data['R']
+    lambd = problem_data['lambd']
+    
+    learning_framework = cfg.learning_framework
+    
+    # Validate backend
+    if learning_framework != 'ldro-pep':
+        raise ValueError(f"Only 'ldro-pep' learning_framework is supported for Lasso SGD. Got: {learning_framework}")
+    
+    dro_canon_backend = cfg.get('dro_canon_backend', 'manual_jax')
+    if dro_canon_backend != 'manual_jax':
+        raise ValueError(f"Only 'manual_jax' dro_canon_backend is supported. Got: {dro_canon_backend}")
+    
+    # Select trajectory function and PEP data function based on algorithm
+    if alg == 'ista':
+        traj_fn = problem_data_to_ista_trajectories
+        pep_data_fn = construct_ista_pep_data
+        has_beta = False
+    elif alg == 'fista':
+        traj_fn = problem_data_to_fista_trajectories
+        pep_data_fn = construct_fista_pep_data
+        has_beta = True
+    else:
+        raise ValueError(f"Unknown algorithm: {alg}. Must be 'ista' or 'fista'.")
+    
+    # Helper to sample a batch of Lasso problems
+    def sample_batch(sample_key):
+        batch_key, next_key = jax.random.split(sample_key)
+        b_batch, x_opt_batch, f_opt_batch = sample_lasso_batch(
+            batch_key, A_jax, A_np, N_val,
+            cfg.p_xsamp_nonzero, cfg.noise_eps, lambd
+        )
+        return next_key, b_batch, x_opt_batch, f_opt_batch
+    
+    # Compute preconditioner from initial sample batch
+    log.info("Computing preconditioner from initial sample batch...")
+    key, b_precond, x_opt_precond, f_opt_precond = sample_batch(key)
+    
+    # Initial x0 for preconditioner: zeros (since problem is shifted, optimal is at 0)
+    x0_precond = jnp.zeros((N_val, A_jax.shape[1]))
+    
+    # Compute initial stepsizes for preconditioner
+    if has_beta:
+        # FISTA: compute raw t_k sequence (Nesterov sequence of length K+1)
+        # The trajectory function will internally compute momentum as (t_k - 1) / t_{k+1}
+        betas_t = [1.0]
+        for k in range(K_max):
+            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
+            betas_t.append(t_new)
+        beta_init = jnp.array(betas_t)  # Raw t_k sequence of length K+1
+        stepsizes_for_precond = (gamma_init, beta_init)
+    else:
+        stepsizes_for_precond = (gamma_init,)
+    
+    # Compute G, F for preconditioner
+    # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
+    def compute_GF_single(stepsizes_tuple, b, x0, x_opt, f_opt):
+        if has_beta:
+            # FISTA: pass (gamma, beta) tuple
+            return traj_fn(stepsizes_tuple, A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
+        else:
+            # ISTA: pass gamma array directly
+            return traj_fn(stepsizes_tuple[0], A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True)
+    
+    batch_GF_func = jax.vmap(
+        lambda b, x0, x_opt, f_opt: compute_GF_single(stepsizes_for_precond, b, x0, x_opt, f_opt),
+        in_axes=(0, 0, 0, 0)
+    )
+    G_precond_batch, F_precond_batch = batch_GF_func(b_precond, x0_precond, x_opt_precond, f_opt_precond)
+    
+    precond_type = cfg.get('precond_type', 'average')
+    precond_inv = compute_preconditioner_from_samples(
+        np.array(G_precond_batch), np.array(F_precond_batch), precond_type=precond_type
+    )
+    precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
+    log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
+    
+    # Determine risk type
+    risk_type = 'cvar' if cfg.dro_obj == 'cvar' else 'expectation'
+    
+    # Define the DRO pipeline function
+    def lasso_dro_pipeline(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
+        """Full DRO pipeline for Lasso using manual JAX canonicalization."""
+        # Compute trajectories for all samples
+        # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
+        if has_beta:
+            # FISTA: pass the tuple directly
+            traj_stepsizes = stepsizes_tuple
+        else:
+            # ISTA: extract gamma array from tuple
+            traj_stepsizes = stepsizes_tuple[0]
+        
+        batch_GF_fn = jax.vmap(
+            lambda b, x0, x_opt, f_opt: traj_fn(traj_stepsizes, A_jax, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=True),
+            in_axes=(0, 0, 0, 0)
+        )
+        G_batch, F_batch = batch_GF_fn(b_batch, x0_batch, x_opt_batch, f_opt_batch)
+        
+        # Compute PEP constraint matrices (these depend on stepsizes)
+        if has_beta:
+            pep_data = pep_data_fn(stepsizes_tuple[0], stepsizes_tuple[1], mu, L, R, K_max, cfg.pep_obj)
+        else:
+            pep_data = pep_data_fn(stepsizes_tuple[0], mu, L, R, K_max, cfg.pep_obj)
+        A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+        
+        # Call the manual JAX SCS solver
+        return dro_scs_solve(
+            A_obj, b_obj, A_vals, b_vals, c_vals,
+            G_batch, F_batch,
+            eps, precond_inv_jax,
+            risk_type=risk_type,
+            alpha=alpha,
+        )
+    
+    value_and_grad_fn = jax.value_and_grad(lasso_dro_pipeline, argnums=0)
+    
+    # Initialize stepsizes
+    if has_beta:
+        stepsizes = (gamma_init, beta_init)
+    else:
+        stepsizes = (gamma_init,)
+    
+    gamma = stepsizes[0]
+    is_vector_gamma = jnp.ndim(gamma) > 0
+    
+    all_stepsizes_vals = [stepsizes]
+    all_losses = []
+    all_times = []
+    
+    # Determine update mask for learn_beta
+    learn_beta = cfg.get('learn_beta', True)
+    if has_beta and not learn_beta:
+        update_mask = [True, False]  # Update gamma, keep beta fixed
+        log.info(f'learn_beta=False: beta will NOT be updated during optimization')
+    else:
+        update_mask = None
+    
+    # Projection function for stepsizes (handles list from AdamWMin)
+    def proj_stepsizes(x):
+        if isinstance(x, list):
+            return [jax.nn.relu(jnp.array(xi)) for xi in x]
+        return jax.nn.relu(x)
+    
+    # Initialize optimizer
+    optimizer = None
+    if optimizer_type == "adamw":
+        optimizer = AdamWMin(
+            x_params=[jnp.array(s) for s in stepsizes],
+            lr=eta_t,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=0.01,
+            update_mask=update_mask,
+        )
+    
+    # SGD iterations
+    for iter_num in range(sgd_iters):
+        gamma = stepsizes[0]
+        gamma_log = '[' + ', '.join(f'{x:.5f}' for x in gamma.tolist()) + ']' if is_vector_gamma else f'{float(gamma):.5f}'
+        if has_beta:
+            beta = stepsizes[1]
+            beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
+            log.info(f'K={K_max}, iter={iter_num}, gamma={gamma_log}, beta={beta_log}')
+        else:
+            log.info(f'K={K_max}, iter={iter_num}, gamma={gamma_log}')
+        
+        # Sample new batch
+        key, b_batch, x_opt_batch, f_opt_batch = sample_batch(key)
+        x0_batch = jnp.zeros((N_val, A_jax.shape[1]))  # Shifted problem: start at 0
+        
+        # Compute loss and gradients
+        iter_start_time = time.time()
+        loss, d_stepsizes = value_and_grad_fn(stepsizes, b_batch, x0_batch, x_opt_batch, f_opt_batch)
+        iter_time = time.time() - iter_start_time
+        
+        log.info(f'  loss: {float(loss):.6f}, iter_time: {iter_time:.3f}s')
+        
+        all_losses.append(float(loss))
+        all_times.append(iter_time)
+        
+        # SGD step
+        if optimizer_type == "vanilla_sgd":
+            if update_mask is None:
+                stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
+            else:
+                stepsizes = tuple(
+                    jax.nn.relu(s - eta_t * ds) if should_update else s 
+                    for s, ds, should_update in zip(stepsizes, d_stepsizes, update_mask)
+                )
+        elif optimizer_type == "adamw":
+            x_params = [jnp.array(s) for s in stepsizes]
+            grads_x = list(d_stepsizes)
+            x_new = optimizer.step(
+                x_params=x_params,
+                grads_x=grads_x,
+                proj_x_fn=proj_stepsizes,
+            )
+            stepsizes = tuple(x_new)
+        elif optimizer_type == "sgd_wd":
+            weight_decay = cfg.get('weight_decay', 1e-2)
+            if update_mask is None:
+                stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
+            else:
+                stepsizes = tuple(
+                    jax.nn.relu(s - eta_t * (ds + weight_decay * s)) if should_update else s 
+                    for s, ds, should_update in zip(stepsizes, d_stepsizes, update_mask)
+                )
+        else:
+            raise ValueError(f"Unknown optimizer_type: {optimizer_type}")
+        
+        all_stepsizes_vals.append(stepsizes)
+        
+        # Save progress
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses, all_times)
+        df.to_csv(csv_path, index=False)
+    
+    # Final save
+    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses, all_times)
+    gamma = stepsizes[0]
+    gamma_str = '[' + ', '.join(f'{x:.5f}' for x in gamma.tolist()) + ']' if is_vector_gamma else f'{float(gamma):.6f}'
+    log.info(f'K={K_max} complete. Final gamma={gamma_str}. Saved to {csv_path}')
+    df.to_csv(csv_path, index=False)
+
+
+# =============================================================================
+# Main Entry Point
 # =============================================================================
 
 def lasso_run(cfg):
@@ -337,6 +642,7 @@ def lasso_run(cfg):
     log.info("=" * 60)
     log.info("Starting Lasso learning experiment")
     log.info("=" * 60)
+    log.info(cfg)
     
     # Setup problem
     problem_data = setup_lasso_problem(cfg)
@@ -348,16 +654,58 @@ def lasso_run(cfg):
     log.info(f"  R = {problem_data['R']:.6f}")
     log.info(f"  lambd = {problem_data['lambd']}")
     
-    # Test sampling a batch
-    log.info(f"\nSampling test batch of N={cfg.N} problems...")
-    key = jax.random.PRNGKey(cfg.seed)
-    b_batch = sample_lasso_batch(
-        key, problem_data['A_jax'], cfg.N,
-        cfg.p_xsamp_nonzero, cfg.noise_eps
-    )
-    log.info(f"  b_batch shape: {b_batch.shape}")
+    # Extract config values
+    alg = cfg.alg
+    optimizer_type = cfg.optimizer_type
+    sgd_iters = cfg.sgd_iters
+    eta_t = cfg.eta_t
+    eps = cfg.eps
+    alpha = cfg.alpha
+    N_val = cfg.N
+    L = problem_data['L']
     
-    # TODO: Stepsize initialization and SGD loop will be added later
-    log.info("\nSetup complete. SGD loop to be implemented.")
+    log.info(f"Algorithm: {alg}, Optimizer: {optimizer_type}")
     
-    return problem_data
+    # Ensure output directory exists
+    output_dir = cfg.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Random key for sampling
+    seed = cfg.seed
+    key = jax.random.PRNGKey(seed)
+    
+    # Initial step size: 1/L
+    gamma_init_scalar = 1.0 / L
+    log.info(f"Initial step size gamma: {gamma_init_scalar}")
+    
+    # Loop over K_max values
+    for K in cfg.K_max:
+        # Determine step size initialization
+        is_vector = cfg.stepsize_type == "vector"
+        if is_vector:
+            gamma_init = jnp.full(K, gamma_init_scalar)
+        else:
+            gamma_init = jnp.array([gamma_init_scalar])  # Still array for consistency
+        
+        # Create output directory for this K
+        K_output_dir = os.path.join(output_dir, f"K_{K}")
+        os.makedirs(K_output_dir, exist_ok=True)
+        csv_path = os.path.join(K_output_dir, "progress.csv")
+        
+        # Select run function based on learning framework
+        learning_framework = cfg.learning_framework
+        
+        if learning_framework == 'lpep':
+            raise ValueError("'lpep' learning framework not yet implemented for Lasso. Use 'ldro-pep'.")
+        elif learning_framework == 'l2o':
+            raise ValueError("'l2o' learning framework not yet implemented for Lasso. Use 'ldro-pep'.")
+        else:
+            # LDRO-PEP: stochastic optimization with samples
+            run_sgd_for_K_lasso(
+                cfg, K, problem_data, key,
+                gamma_init, sgd_iters, eta_t,
+                eps, alpha, alg, optimizer_type,
+                N_val, csv_path
+            )
+    
+    log.info("=== Lasso SGD experiment complete ===")
