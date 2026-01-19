@@ -310,7 +310,7 @@ class TestAgainstClarabelCanonicalizer:
         pep_data = construct_gd_pep_data(t, mu, L, R, K_max, 'obj_val')
         
         # Generate sample trajectories
-        from learning.autodiff_setup import problem_data_to_gd_trajectories
+        from learning.trajectories_gd_fgm import problem_data_to_gd_trajectories
         import jax.numpy as jnp
         
         samples = []
@@ -336,7 +336,7 @@ class TestAgainstClarabelCanonicalizer:
             samples.append((np.array(G), np.array(F)))
         
         # Compute preconditioner
-        from learning.autodiff_setup import compute_preconditioner_from_samples
+        from learning.trajectories_gd_fgm import compute_preconditioner_from_samples
         G_batch = np.stack([s[0] for s in samples])
         F_batch = np.stack([s[1] for s in samples])
         precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average')
@@ -471,7 +471,7 @@ class TestJaxCanonicalization:
         dim = 5
         
         from learning.pep_construction import construct_gd_pep_data
-        from learning.autodiff_setup import problem_data_to_gd_trajectories
+        from learning.trajectories_gd_fgm import problem_data_to_gd_trajectories
         import jax.numpy as jnp
         
         t = 0.1 * np.ones(K_max)
@@ -495,7 +495,7 @@ class TestJaxCanonicalization:
         G_batch = np.stack([s[0] for s in samples])
         F_batch = np.stack([s[1] for s in samples])
         
-        from learning.autodiff_setup import compute_preconditioner_from_samples
+        from learning.trajectories_gd_fgm import compute_preconditioner_from_samples
         precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, 'average')
         
         return {
@@ -632,7 +632,7 @@ class TestDroClarabelSolve:
         # Import functions from quad.py for proper data generation
         from learning_experiment_classes.quad import get_Q_samples, get_z0_samples
         from learning.pep_construction import construct_gd_pep_data
-        from learning.autodiff_setup import (
+        from learning.trajectories_gd_fgm import (
             problem_data_to_gd_trajectories, compute_preconditioner_from_samples
         )
         

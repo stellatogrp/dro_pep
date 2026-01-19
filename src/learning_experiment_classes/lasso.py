@@ -22,7 +22,7 @@ from learning.pep_construction_lasso import (
     ista_pep_data_to_numpy,
 )
 from learning.adam_optimizers import AdamWMin
-from learning.autodiff_setup import (
+from learning.trajectories_gd_fgm import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )

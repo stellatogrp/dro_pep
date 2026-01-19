@@ -13,12 +13,12 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from learning.autodiff_setup import (
-    create_full_dro_exp_layer, 
+from learning.trajectories_gd_fgm import (
     problem_data_to_gd_trajectories,
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
+from learning.cvxpylayers_setup import create_full_dro_exp_layer
 from learning.pep_construction import construct_gd_pep_data
 from learning.jax_clarabel_layer import dro_clarabel_solve
 

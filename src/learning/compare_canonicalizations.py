@@ -13,7 +13,7 @@ import numpy as np
 import cvxpy as cp
 
 from learning.jax_clarabel_layer import jax_canonicalize_dro_expectation, ClarabelSolveData
-from learning.autodiff_setup import problem_data_to_gd_trajectories, compute_preconditioner_from_samples
+from learning.trajectories_gd_fgm import problem_data_to_gd_trajectories, compute_preconditioner_from_samples
 from learning.pep_construction import construct_gd_pep_data
 
 

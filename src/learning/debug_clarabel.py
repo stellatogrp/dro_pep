@@ -11,7 +11,7 @@ import numpy as np
 import scipy.sparse as spa
 
 # Import needed modules (avoid quad.py to prevent hang)
-from learning.autodiff_setup import (
+from learning.trajectories_gd_fgm import (
     problem_data_to_gd_trajectories,
     compute_preconditioner_from_samples,
 )
@@ -124,7 +124,7 @@ def test_diffcp_directly():
     # Compare with what cvxpylayers would produce
     print("\n=== Comparing with cvxpylayers internal data ===")
     import diffcp_patch  # Needed for cvxpylayers
-    from learning.autodiff_setup import create_full_dro_exp_layer
+    from learning.cvxpylayers_setup import create_full_dro_exp_layer
     
     pep_data = gd_pep_data_fn(stepsizes, mu, L, R, K_max, pep_obj)
     A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
@@ -200,7 +200,7 @@ def test_diffcp_directly():
     
     try:
         (lambd_star, s_star) = cvxpy_layer(*params_list)
-        from learning.autodiff_setup import dro_pep_obj_jax
+        from learning.trajectories_gd_fgm import dro_pep_obj_jax
         cvxpy_loss = float(dro_pep_obj_jax(eps, lambd_star, s_star))
         print(f"cvxpylayer (SCS) loss: {cvxpy_loss}")
         print(f"  lambd_star: {float(lambd_star)}")

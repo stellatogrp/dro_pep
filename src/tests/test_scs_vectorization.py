@@ -326,7 +326,7 @@ class TestSCSCanonicalization:
         import scipy.sparse as spa
         from learning.jax_scs_layer import jax_scs_canonicalize_dro_expectation
         from learning.jax_clarabel_layer import jax_canonicalize_dro_expectation
-        from learning.autodiff_setup import (
+        from learning.trajectories_gd_fgm import (
             problem_data_to_gd_trajectories,
             compute_preconditioner_from_samples,
         )
@@ -450,7 +450,7 @@ class TestSCSCanonicalization:
         import scipy.sparse as spa
         from learning.jax_scs_layer import jax_scs_canonicalize_dro_expectation
         from learning.jax_clarabel_layer import jax_canonicalize_dro_expectation
-        from learning.autodiff_setup import (
+        from learning.trajectories_gd_fgm import (
             problem_data_to_gd_trajectories,
             compute_preconditioner_from_samples,
         )
@@ -584,7 +584,7 @@ class TestSCSCanonicalization:
         Uses jax.grad on dro_scs_solve and compares to central difference.
         """
         from learning.jax_scs_layer import dro_scs_solve, jax_scs_canonicalize_dro_expectation
-        from learning.autodiff_setup import (
+        from learning.trajectories_gd_fgm import (
             problem_data_to_gd_trajectories,
             compute_preconditioner_from_samples,
         )

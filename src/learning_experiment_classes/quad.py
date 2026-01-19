@@ -15,15 +15,17 @@ from learning.pep_construction import (
     pep_data_to_numpy,
 )
 from learning.adam_optimizers import AdamWMin
-from learning.autodiff_setup import (
+from learning.trajectories_gd_fgm import (
     problem_data_to_gd_trajectories,
     problem_data_to_nesterov_fgm_trajectories,
     problem_data_to_pep_obj,
+    compute_preconditioner_from_samples,
+    dro_pep_obj_jax,
+)
+from learning.cvxpylayers_setup import (
     create_full_dro_exp_layer,
     create_full_dro_cvar_layer,
     create_full_pep_layer,
-    compute_preconditioner_from_samples,
-    dro_pep_obj_jax,
 )
 from learning.jax_scs_layer import dro_scs_solve
 from learning.silver_stepsizes import get_strongly_convex_silver_stepsizes

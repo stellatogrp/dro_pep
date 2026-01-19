@@ -4,7 +4,7 @@ n: 200
 lambd: 0.1
 
 # R: null  # null to compute from samples, or a float value
-# these below are for m: 300, n: 200 with 1000 samples
+# these below are for m: 300, n: 200 with 1000 samples, scaled up by 5% for buffer
 # m < n: R = 10.306403
 # m > n: R = 8.735880
 R_strongcvx: 9.172674
