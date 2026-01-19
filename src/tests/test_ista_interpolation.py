@@ -740,6 +740,386 @@ class TestFISTAInterpolation(unittest.TestCase):
                 f"Problem {seed}: f2 interpolation violated with max violation {max_viol_f2}")
 
 
+# ============================================================================
+# Shifted Problem Tests (x_opt = 0, f_opt = 0)
+# ============================================================================
+
+def run_shifted_ista(x0, A, b, lambd, gamma, K, x_opt, f_opt):
+    """
+    Run ISTA on a shifted problem where x_opt = 0 and f1_opt = 0.
+    
+    The shifted functions are:
+        f1_shifted(x) = 0.5 * ||A @ (x + x_opt) - b||^2 - f1_opt
+        f2_shifted(x) = lambd * ||x + x_opt||_1
+        
+    With optimal at x = 0.
+    
+    Returns:
+        x_iterates, g_iterates, h_iterates, f1_iterates, f2_iterates, problem_info
+    """
+    # f_opt is the full composite objective f1(x_opt) + f2(x_opt)
+    # We shift f1 by the full f_opt so that f1_shifted(0) + f2_shifted(0) = 0
+    
+    def f1_shifted(x):
+        # f1(x + x_opt) - f_opt
+        return 0.5 * np.linalg.norm(A @ (x + x_opt) - b) ** 2 - f_opt
+    
+    def f2_shifted(x):
+        # f2(x + x_opt)
+        return lambd * np.linalg.norm(x + x_opt, 1)
+    
+    def grad_f1_shifted(x):
+        # grad_f1(x + x_opt)
+        return A.T @ (A @ (x + x_opt) - b)
+    
+    def subgrad_f2_shifted(x):
+        # subgrad_f2(x + x_opt) = lambd * sign(x + x_opt)
+        return lambd * np.sign(x + x_opt)
+    
+    # Shifted initial point: x0_shifted = x0 - x_opt
+    x0_shifted = x0 - x_opt
+    
+    x_iterates = [x0_shifted]
+    g_iterates = [grad_f1_shifted(x0_shifted)]
+    h_iterates = [subgrad_f2_shifted(x0_shifted)]  # = lambd * sign(x0)
+    f1_iterates = [f1_shifted(x0_shifted)]
+    f2_iterates = [f2_shifted(x0_shifted)]
+    
+    x_curr = x0_shifted
+    
+    # Run ISTA
+    for k in range(K):
+        y_k = x_curr - gamma * grad_f1_shifted(x_curr)
+        # Proximal step on f2_shifted
+        # prox_{gamma * f2_shifted}(y) = arg min_z { 0.5*||z-y||^2 + gamma*lambd*||z+x_opt||_1 }
+        # = soft_threshold(y + x_opt, gamma*lambd) - x_opt
+        x_new_plus_xopt = soft_threshold(y_k + x_opt, gamma * lambd)
+        x_new = x_new_plus_xopt - x_opt
+        
+        # Subgradient: h_{k+1} = (y_k - x_new) / gamma
+        h_kp1 = (y_k - x_new) / gamma
+        
+        # Verify: h_kp1 should equal subgrad_f2_shifted(x_new) = lambd * sign(x_new + x_opt)
+        expected_h = lambd * np.sign(x_new + x_opt)
+        nonzero_mask = np.abs(x_new + x_opt) > 1e-8
+        if np.any(nonzero_mask):
+            assert np.allclose(h_kp1[nonzero_mask], expected_h[nonzero_mask], atol=1e-8), \
+                f"Subgradient mismatch at k={k}: computed h differs from expected"
+        
+        x_iterates.append(x_new)
+        g_iterates.append(grad_f1_shifted(x_new))
+        h_iterates.append(h_kp1)
+        f1_iterates.append(f1_shifted(x_new))
+        f2_iterates.append(f2_shifted(x_new))
+        
+        x_curr = x_new
+    
+    # Return problem info needed for Gram representation
+    problem_info = {'A': A, 'x_opt': x_opt, 'lambd': lambd, 'b': b}
+    
+    return x_iterates, g_iterates, h_iterates, f1_iterates, f2_iterates, problem_info
+
+
+def build_shifted_gram_representation(x_iterates, g_iterates, h_iterates, f1_iterates, f2_iterates, problem_info):
+    """
+    Build Gram representation for shifted problem where x_s = 0, f1_s = 0.
+    """
+    K = len(x_iterates) - 1
+    A = problem_info['A']
+    x_opt = problem_info['x_opt']
+    lambd = problem_info['lambd']
+    b = problem_info['b']
+    
+    # At the shifted optimal x_s = 0:
+    # g_s = grad_f1_shifted(0) = A^T(A @ x_opt - b)
+    # h_s must satisfy g_s + h_s = 0 (stationarity)
+    g_s = A.T @ (A @ x_opt - b)
+    h_s = -g_s
+    
+    # Build G_half for Gram matrix
+    G_half_columns = []
+    
+    x_s = np.zeros(x_iterates[0].shape)
+    
+    G_half_columns.append(x_iterates[0] - x_s)  # x_0 - x_s = x_0
+    G_half_columns.append(g_iterates[0])  # g_0
+    G_half_columns.append(h_iterates[0])  # h_0
+    
+    for k in range(1, K + 1):
+        G_half_columns.append(h_iterates[k])
+        G_half_columns.append(g_iterates[k])
+    
+    G_half_columns.append(g_s)
+    G_half_columns.append(h_s)
+    
+    G_half = np.column_stack(G_half_columns)
+    G = G_half.T @ G_half
+    
+    # At x_s = 0 for the shifted problem:
+    # f1_shifted(0) = f1(x_opt) - f_opt = f1(x_opt) - (f1(x_opt) + f2(x_opt)) = -f2(x_opt)
+    # f2_shifted(0) = f2(x_opt) = lambd * ||x_opt||_1
+    # Total: f1_shifted(0) + f2_shifted(0) = 0  (optimal composite objective)
+    f2_x_opt = lambd * np.linalg.norm(x_opt, 1)
+    f1_s = -f2_x_opt  # f1_shifted at optimal
+    f2_s = f2_x_opt   # f2_shifted at optimal
+    
+    F1 = np.array([f1 - f1_s for f1 in f1_iterates] + [0.0])
+    F2 = np.array([f2 - f2_s for f2 in f2_iterates] + [0.0])
+    
+    return G, F1, F2
+
+
+class TestShiftedISTAInterpolation(unittest.TestCase):
+    """Test ISTA interpolation with shifted problem (x_opt = 0, f_opt = 0)."""
+    
+    def test_shifted_ista_interpolation(self):
+        """Test that shifted ISTA still satisfies interpolation conditions."""
+        np.random.seed(42)
+        
+        m, n = 20, 10
+        A = np.random.randn(m, n) / np.sqrt(m)
+        b = np.random.randn(m)
+        lambd = 0.1
+        
+        ATA = A.T @ A
+        L = np.max(np.linalg.eigvalsh(ATA))
+        mu = np.min(np.linalg.eigvalsh(ATA)) if m >= n else 0.0
+        gamma = 1.0 / L
+        
+        # Solve original problem
+        x_opt, f_opt = solve_lasso(A, b, lambd)
+        
+        K = 3
+        x0 = np.random.randn(n) * 0.5
+        
+        # Run shifted ISTA
+        x_iters, g_iters, h_iters, f1_iters, f2_iters, problem_info = run_shifted_ista(
+            x0, A, b, lambd, gamma, K, x_opt, f_opt
+        )
+        
+        G, F1, F2 = build_shifted_gram_representation(
+            x_iters, g_iters, h_iters, f1_iters, f2_iters, problem_info
+        )
+        
+        # Build symbolic representations
+        repX_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_symbolic_reps(K, gamma)
+        
+        # Check f1 interpolation
+        A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
+            repX_f1, repG_f1, repF_f1, mu, L, K + 1
+        )
+        _, max_viol_f1, _ = check_interpolation_constraints(
+            G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
+        )
+        
+        # Check f2 interpolation
+        A_vals_f2, b_vals_f2 = convex_interp(
+            repX_f2, repG_f2, repF_f2, K + 1
+        )
+        _, max_viol_f2, _ = check_interpolation_constraints(
+            G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
+        )
+        
+        self.assertLessEqual(max_viol_f1, 1e-4,
+            f"Shifted f1 interpolation violated! Max violation: {max_viol_f1}")
+        self.assertLessEqual(max_viol_f2, 1e-4,
+            f"Shifted f2 interpolation violated! Max violation: {max_viol_f2}")
+    
+    def test_multiple_shifted_problems(self):
+        """Test shifted ISTA interpolation across multiple random problems."""
+        num_problems = 5
+        K = 2
+        
+        for seed in range(num_problems):
+            np.random.seed(seed + 200)
+            
+            m, n = 15, 8
+            A = np.random.randn(m, n) / np.sqrt(m)
+            b = np.random.randn(m)
+            lambd = 0.05
+            
+            ATA = A.T @ A
+            L = np.max(np.linalg.eigvalsh(ATA))
+            mu = np.min(np.linalg.eigvalsh(ATA)) if m >= n else 0.0
+            gamma = 1.0 / L
+            
+            x_opt, f_opt = solve_lasso(A, b, lambd)
+            x0 = np.random.randn(n) * 0.1
+            
+            x_iters, g_iters, h_iters, f1_iters, f2_iters, problem_info = run_shifted_ista(
+                x0, A, b, lambd, gamma, K, x_opt, f_opt
+            )
+            
+            G, F1, F2 = build_shifted_gram_representation(
+                x_iters, g_iters, h_iters, f1_iters, f2_iters, problem_info
+            )
+            
+            repX_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_symbolic_reps(K, gamma)
+            
+            A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
+                repX_f1, repG_f1, repF_f1, mu, L, K + 1
+            )
+            _, max_viol_f1, _ = check_interpolation_constraints(
+                G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
+            )
+            
+            A_vals_f2, b_vals_f2 = convex_interp(
+                repX_f2, repG_f2, repF_f2, K + 1
+            )
+            _, max_viol_f2, _ = check_interpolation_constraints(
+                G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
+            )
+            
+            self.assertLessEqual(max_viol_f1, 1e-4,
+                f"Problem {seed}: shifted f1 interpolation violated with max violation {max_viol_f1}")
+            self.assertLessEqual(max_viol_f2, 1e-4,
+                f"Problem {seed}: shifted f2 interpolation violated with max violation {max_viol_f2}")
+
+
+class TestShiftedFISTAInterpolation(unittest.TestCase):
+    """Test FISTA interpolation with shifted problem (x_opt = 0, f_opt = 0)."""
+    
+    def test_shifted_fista_interpolation(self):
+        """Test that shifted FISTA still satisfies interpolation conditions."""
+        np.random.seed(42)
+        
+        m, n = 20, 10
+        A = np.random.randn(m, n) / np.sqrt(m)
+        b = np.random.randn(m)
+        lambd = 0.1
+        
+        ATA = A.T @ A
+        L = np.max(np.linalg.eigvalsh(ATA))
+        mu = np.min(np.linalg.eigvalsh(ATA)) if m >= n else 0.0
+        gamma = 1.0 / L
+        
+        x_opt, f_opt = solve_lasso(A, b, lambd)
+        
+        K = 3
+        x0 = np.random.randn(n) * 0.5
+        x0_shifted = x0 - x_opt  # Shift so optimal is at 0
+        
+        # Define shifted functions for FISTA
+        # f1 is shifted by full f_opt so composite optimal is 0
+        def f1_shifted(x):
+            return 0.5 * np.linalg.norm(A @ (x + x_opt) - b) ** 2 - f_opt
+        
+        def f2_shifted(x):
+            return lambd * np.linalg.norm(x + x_opt, 1)
+        
+        def grad_f1_shifted(x):
+            return A.T @ (A @ (x + x_opt) - b)
+        
+        def subgrad_f2_shifted(x):
+            return lambd * np.sign(x + x_opt)
+        
+        # Run FISTA with shifted functions
+        x_iterates = [x0_shifted]
+        y_iterates = [x0_shifted]
+        g_iterates = [grad_f1_shifted(x0_shifted)]
+        h_iterates = [subgrad_f2_shifted(x0_shifted)]  # = lambd * sign(x0)
+        f1_y_iters = [f1_shifted(x0_shifted)]
+        f2_x_iters = [f2_shifted(x0_shifted)]
+        betas = [1.0]
+        
+        x_curr = x0_shifted
+        y_curr = x0_shifted
+        beta_curr = 1.0
+        
+        for k in range(K):
+            g_yk = grad_f1_shifted(y_curr)
+            ytilde = y_curr - gamma * g_yk
+            
+            # Proximal step
+            x_new_plus_xopt = soft_threshold(ytilde + x_opt, gamma * lambd)
+            x_new = x_new_plus_xopt - x_opt
+            h_new = (ytilde - x_new) / gamma
+            
+            # Verify subgradient
+            expected_h = lambd * np.sign(x_new + x_opt)
+            nonzero_mask = np.abs(x_new + x_opt) > 1e-8
+            if np.any(nonzero_mask):
+                assert np.allclose(h_new[nonzero_mask], expected_h[nonzero_mask], atol=1e-8), \
+                    f"FISTA subgradient mismatch at k={k}"
+            
+            beta_new = 0.5 * (1 + np.sqrt(1 + 4 * beta_curr ** 2))
+            y_new = x_new + (beta_curr - 1) / beta_new * (x_new - x_curr)
+            
+            x_iterates.append(x_new)
+            h_iterates.append(h_new)
+            f2_x_iters.append(f2_shifted(x_new))
+            betas.append(beta_new)
+            
+            if k < K - 1:
+                y_iterates.append(y_new)
+                g_iterates.append(grad_f1_shifted(y_new))
+                f1_y_iters.append(f1_shifted(y_new))
+            
+            x_curr = x_new
+            y_curr = y_new
+            beta_curr = beta_new
+        
+        # Build Gram representation for shifted FISTA with x_s = 0
+        # For shifted problem at x_s = 0:
+        # g_s = grad_f1_shifted(0) = A^T @ (A @ x_opt - b)  (NOT A^T @ (A @ 0 - b))
+        # h_s = -g_s by stationarity
+        # f1_shifted(0) = f1(x_opt) - f_opt = -f2(x_opt)
+        # f2_shifted(0) = f2(x_opt)
+        
+        K = len(x_iterates) - 1
+        
+        g_s = A.T @ (A @ x_opt - b)  # Correct: gradient at x_opt, not at 0
+        
+        # Build G_half for Gram matrix
+        G_half_columns = []
+        G_half_columns.append(x_iterates[0])  # x_0 - x_s = x_0 (since x_s = 0)
+        G_half_columns.append(g_iterates[0])  # g(y_0)
+        G_half_columns.append(h_iterates[0])  # h_0
+        
+        for k in range(1, K):
+            G_half_columns.append(h_iterates[k])  # h_k
+            G_half_columns.append(g_iterates[k])  # g(y_k)
+        
+        G_half_columns.append(h_iterates[K])  # h_K
+        G_half_columns.append(g_s)  # g_s
+        
+        G_half = np.column_stack(G_half_columns)
+        G = G_half.T @ G_half
+        
+        # Function values at shifted optimal
+        f2_x_opt = lambd * np.linalg.norm(x_opt, 1)
+        f1_s = -f2_x_opt  # f1_shifted(0) = -f2(x_opt)
+        f2_s = f2_x_opt   # f2_shifted(0) = f2(x_opt)
+        
+        F1 = np.array([f1 - f1_s for f1 in f1_y_iters] + [0.0])
+        F2 = np.array([f2 - f2_s for f2 in f2_x_iters] + [0.0])
+        
+        # Build symbolic representations
+        repY_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_fista_symbolic_reps(
+            K, gamma, betas
+        )
+        
+        # Check interpolation
+        A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
+            repY_f1, repG_f1, repF_f1, mu, L, K
+        )
+        _, max_viol_f1, _ = check_interpolation_constraints(
+            G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
+        )
+        
+        A_vals_f2, b_vals_f2 = convex_interp(
+            repX_f2, repG_f2, repF_f2, K + 1
+        )
+        _, max_viol_f2, _ = check_interpolation_constraints(
+            G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
+        )
+        
+        self.assertLessEqual(max_viol_f1, 1e-4,
+            f"Shifted FISTA f1 interpolation violated! Max violation: {max_viol_f1}")
+        self.assertLessEqual(max_viol_f2, 1e-4,
+            f"Shifted FISTA f2 interpolation violated! Max violation: {max_viol_f2}")
+
+
 if __name__ == '__main__':
     unittest.main()
 
