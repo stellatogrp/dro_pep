@@ -27,6 +27,57 @@ log = logging.getLogger(__name__)
 
 
 # =============================================================================
+# MKL Pardiso Detection (for faster linear solves)
+# =============================================================================
+
+_MKL_AVAILABLE = None  # Cached detection result
+
+def _detect_mkl_pardiso():
+    """Detect if MKL Pardiso is available in clarabel.
+    
+    Returns True if MKL Pardiso can be used as the direct solver.
+    Result is cached after first call.
+    """
+    global _MKL_AVAILABLE
+    if _MKL_AVAILABLE is not None:
+        return _MKL_AVAILABLE
+    
+    try:
+        import clarabel
+        import scipy.sparse as spa
+        import numpy as np
+        
+        # Try solving a trivial problem with MKL
+        P = spa.csc_matrix((2, 2))
+        q = np.array([1., 1.])
+        A = spa.csc_matrix([[1., 0.], [0., 1.]])
+        b = np.array([1., 1.])
+        cones = [clarabel.NonnegativeConeT(2)]
+        
+        settings = clarabel.DefaultSettings()
+        settings.verbose = False
+        settings.direct_solve_method = 'mkl'
+        
+        solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+        solver.solve()
+        _MKL_AVAILABLE = True
+        log.info("MKL Pardiso detected and will be used for Clarabel solves")
+    except Exception:
+        _MKL_AVAILABLE = False
+        # log.debug("MKL Pardiso not available, using default qdldl solver")
+        log.info("MKL Pardiso not available, using default qdldl solver")
+    
+    return _MKL_AVAILABLE
+
+def get_direct_solve_method():
+    """Get the best available direct solve method for Clarabel.
+    
+    Returns 'mkl' if MKL Pardiso is available, otherwise 'qdldl'.
+    """
+    return 'mkl' if _detect_mkl_pardiso() else 'qdldl'
+
+
+# =============================================================================
 # SCS-specific vectorization helpers (lower triangle, column-major)
 # =============================================================================
 
@@ -333,6 +384,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                     static_data.diffcp_cone_dict,
                     # solve_method='SCS',
                     solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
                     verbose=False,
                 )
                 obj = c_arr @ x
@@ -365,6 +417,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                     static_data.diffcp_cone_dict,
                     # solve_method='SCS',
                     solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
                     verbose=False,
                 )
                 obj = c_arr @ x
