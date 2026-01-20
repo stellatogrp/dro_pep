@@ -104,8 +104,9 @@ def conditional_product(common_options, conditional_groups):
 Quad_options = [
     ['alg=vanilla_gd', 'alg=nesterov_fgm'],
     ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['eps=0.1', 'eps=1.0', 'eps=0.01'],
+    ['eps=0.01', 'eps=0.1', 'eps=1.0'],
     ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
+    ['mu=0', 'mu=1'],
 ]
 
 LogReg_options = [
@@ -117,13 +118,13 @@ LogReg_options = [
 Learn_Quad_params = conditional_product(
     common_options=Quad_options,
     conditional_groups=[
-        {
-            'mu=0': ['K_max=[3,7,15]', 'K_max=[31]'],
-            'mu=1': ['K_max=[4,8,16]', 'K_max=[32]'],
-        },
+        # {
+        #     'mu=0': ['K_max=[3,7,15]', 'K_max=[31]'],
+        #     'mu=1': ['K_max=[4,8,16]', 'K_max=[32]'],
+        # },
         {
             'stepsize_type=scalar': ['vector_init=fixed'],
-            'stepsize_type=vector': ['vector_init=fixed', 'vector_init=silver'],
+            'stepsize_type=vector': ['vector_init=fixed'],
         },
     ]
 )
@@ -133,15 +134,18 @@ Lasso_options = [
     ['dro_obj=expectation', 'dro_obj=cvar'],
     ['eps=0.1', 'eps=1.0', 'eps=0.01'],
     ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
-    ['K_max=[4,8,16]', 'K_max=[32]']
 ]
 
 Learn_Lasso_params = conditional_product(
     common_options=Lasso_options,
     conditional_groups=[
         {
+            'mu=300': ['n=200'],
+            'mu=200': ['m=300'],
+        },
+        {
             'stepsize_type=scalar': ['vector_init=fixed'],
-            'stepsize_type=vector': ['vector_init=fixed', 'vector_init=silver'],
+            'stepsize_type=vector': ['vector_init=fixed'],
         },
     ]
 )
@@ -162,6 +166,7 @@ base_dir_map = {
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
+    # exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')
