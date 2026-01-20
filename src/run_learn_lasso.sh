@@ -2,10 +2,11 @@
 #SBATCH --job-name=Lasso
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=128G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=32G
+#SBATCH --constraint=intel
 #SBATCH --time=00-02:59:59
-#SBATCH --array=0-143
+#SBATCH --array=0-287
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
@@ -17,6 +18,7 @@
 # export xla_force_host_platform_device_count=1
 
 module purge
+module load intel-mkl/2024.2
 module load anaconda3/2025.12
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover

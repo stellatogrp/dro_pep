@@ -133,7 +133,7 @@ Learn_Quad_params = conditional_product(
 Lasso_options = [
     ['alg=ista', 'alg=fista'],
     ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['eps=0.1', 'eps=1.0', 'eps=0.01'],
+    ['eps=0.01', 'eps=0.1', 'eps=1.0'],
     ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
     ['K_max=[5,10,15]', 'K_max=[20]'],
 ]
