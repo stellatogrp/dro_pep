@@ -114,13 +114,15 @@ def problem_data_to_gd_trajectories(stepsizes, Q, z0, zs, fs, K_max, return_Gram
     g_iter = g_iter.at[:, 0].set(g(z0))
     f_iter = f_iter.at[0].set(f(z0))
     
+    t = stepsizes[0]
+    
     # Initial values for fori_loop
     z_curr = z0
-    
     def body_fun(k, val):
         z_iter, g_iter, f_iter, z_curr = val
         g_curr = g(z_curr)
-        z_next = z_curr - stepsizes[k] * g_curr
+        tk = t[k] if t.ndim > 0 else t
+        z_next = z_curr - tk * g_curr
         
         z_iter = z_iter.at[:, k + 1].set(z_next)
         g_iter = g_iter.at[:, k + 1].set(g(z_next))
@@ -209,7 +211,8 @@ def problem_data_to_nesterov_fgm_trajectories(stepsizes, Q, z0, zs, fs, K_max, r
         g_y = g(y_curr)
         
         # x update: x_new = y_curr - t_k * g(y_curr)
-        x_new = y_curr - t[k] * g_y
+        tk = t[k] if t.ndim > 0 else t
+        x_new = y_curr - tk * g_y
         
         # y update: y_new = x_new + beta_k * (x_new - x_curr)
         # Note: beta[k] is the momentum coefficient for step k

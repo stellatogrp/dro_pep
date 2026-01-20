@@ -1,5 +1,5 @@
 # Problem parameters
-mu: 1.
+mu: 0.
 L: 10.
 R: 1.
 dim: 200
@@ -13,14 +13,14 @@ N: 16
 seed: 50
 
 # Algorithm and optimizer type (selected by Slurm job index)
-alg: "nesterov_fgm"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
-stepsize_type: "vector" # "scalar" or "vector"
+stepsize_type: "scalar" # "scalar" or "vector"
 vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [3, 7, 15, 31]
-K_max: [4]
+K_max: [3]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
@@ -34,7 +34,7 @@ precond_type: 'average'
 learn_beta: False  # True or False depending on if beta is learnable or not
 
 # SGD training parameters
-sgd_iters: 10
+sgd_iters: 100
 eta_t: 1e-3     # learning rate for stepsizes (descent)
 weight_decay: 1e-2  # weight decay for sgd_wd
 

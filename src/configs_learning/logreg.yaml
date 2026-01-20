@@ -26,7 +26,7 @@ learning_framework: 'ldro-pep'  # Options: 'ldro-pep', 'l2o', 'lpep'
 # Algorithm and optimizer settings
 alg: 'vanilla_gd'       # Options: 'vanilla_gd', 'nesterov_fgm'
 optimizer_type: 'adamw' # Options: 'vanilla_sgd', 'adamw', 'sgd_wd'
-stepsize_type: 'vector' # Options: 'scalar', 'vector'
+stepsize_type: 'scalar' # Options: 'scalar', 'vector'
 vector_init: 'fixed'    # Options: 'fixed', 'silver'
 
 # K_max values

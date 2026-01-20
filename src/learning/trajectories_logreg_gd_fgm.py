@@ -121,7 +121,8 @@ def logreg_gd_trajectories(stepsizes, A, b, z0, x_opt, f_opt, delta, K_max, retu
     def body_fun(k, val):
         z_iter, g_iter, f_iter, z_curr = val
         g_curr = g(z_curr)
-        z_next = z_curr - t[k] * g_curr
+        tk = t[k] if t.ndim > 0 else t
+        z_next = z_curr - tk * g_curr
         
         z_iter = z_iter.at[:, k + 1].set(z_next)
         g_iter = g_iter.at[:, k + 1].set(g(z_next))
@@ -204,8 +205,13 @@ def logreg_fgm_trajectories(stepsizes, A, b, z0, x_opt, f_opt, delta, K_max, ret
         y_curr = y_iter[:, k]
         g_y = g(y_curr)
         
-        x_new = y_curr - t[k] * g_y
-        y_new = x_new + beta[k] * (x_new - x_curr)
+        # x update: x_new = y_curr - t_k * g(y_curr)
+        tk = t[k] if t.ndim > 0 else t
+        x_new = y_curr - tk * g_y
+        
+        # y update: y_new = x_new + beta_k * (x_new - x_curr)
+        betak = beta[k] if beta.ndim > 0 else beta
+        y_new = x_new + betak * (x_new - x_curr)
         
         def store_y(val):
             y_iter, g_iter, f_y_iter, x_prev, x_curr, x_new, y_new = val
