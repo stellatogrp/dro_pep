@@ -103,6 +103,9 @@ def conditional_product(common_options, conditional_groups):
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
     ['alg=vanilla_gd', 'alg=nesterov_fgm'],
+    ['dro_obj=expectation', 'dro_obj=cvar'],
+    ['eps=0.1', 'eps=1.0', 'eps=0.01'],
+    ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
 ]
 
 Lasso_options = [
@@ -119,8 +122,8 @@ Learn_Quad_params = conditional_product(
     common_options=Quad_options,
     conditional_groups=[
         {
-            'mu=0': ['K_max=[3,7,15,31]'],
-            'mu=1': ['K_max=[4,8,16,32]'],
+            'mu=0': ['K_max=[3,7,15]', 'K_max=[31]'],
+            'mu=1': ['K_max=[4,8,16]', 'K_max=[32]'],
         },
         {
             'stepsize_type=scalar': ['vector_init=fixed'],

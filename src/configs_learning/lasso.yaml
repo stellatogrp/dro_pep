@@ -49,7 +49,7 @@ precond_type: 'average'
 learn_beta: True  # True or False depending on if beta is learnable or not
 
 # SGD training parameters
-sgd_iters: 10
+sgd_iters: 100
 eta_t: 1e-3     # learning rate for stepsizes (descent)
 weight_decay: 1e-2  # weight decay for sgd_wd
 
