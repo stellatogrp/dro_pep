@@ -52,7 +52,10 @@ def rejection_sample_single(key, dim, mu, L, M):
         H = marchenko_pastur(subkey, dim, mu, L, M)
         
         eigvals = jnp.real(jnp.linalg.eigvals(H))
-        is_valid = (mu <= jnp.min(eigvals)) & (L >= jnp.max(eigvals))
+        if mu == 0:
+            is_valid = (L >= jnp.max(eigvals))
+        else:
+            is_valid = (mu <= jnp.min(eigvals)) & (L >= jnp.max(eigvals))
         return (key, H, is_valid)
 
     def cond_fun(state):
@@ -597,7 +600,9 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         
         # Compute loss and gradients w.r.t stepsizes only
         # The loss corresponds to the CURRENT stepsizes (before update)
-        iter_start_time = time.time()
+        log.info('solving SDP now')
+        # iter_start_time = time.time()
+        iter_start_time = time.perf_counter()
         if learning_framework == 'ldro-pep':
             loss, d_stepsizes = value_and_grad_fn(
                 stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
@@ -605,7 +610,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             )
         elif learning_framework == 'l2o':
             loss, d_stepsizes = value_and_grad_fn(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, cfg.pep_obj, cfg.dro_obj, alpha)
-        iter_time = time.time() - iter_start_time
+        iter_time = time.perf_counter() - iter_start_time
         
         log.info(f'  loss: {float(loss):.6f}, iter_time: {iter_time:.3f}s')
         

@@ -331,7 +331,8 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
                     A_csc, b_arr, c_arr,
                     static_data.diffcp_cone_dict,
-                    solve_method='SCS',
+                    # solve_method='SCS',
+                    solve_method='CLARABEL',
                     verbose=False,
                 )
                 obj = c_arr @ x
@@ -362,7 +363,8 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
                     A_csc, b_arr, c_arr,
                     static_data.diffcp_cone_dict,
-                    solve_method='SCS',
+                    # solve_method='SCS',
+                    solve_method='CLARABEL',
                     verbose=False,
                 )
                 obj = c_arr @ x
@@ -701,6 +703,8 @@ def dro_expectation_scs_solve(
         G_batch, F_batch,
         eps, precond_inv,
     )
+
+    log.info('canon done')
     
     # Solve with custom VJP
     obj_val = scs_solve_wrapper(static_data, A_dense, b, c)
@@ -760,6 +764,8 @@ def dro_cvar_scs_solve(
         G_batch, F_batch,
         eps, alpha, precond_inv,
     )
+
+    # log.info('canon done')
     
     # Solve with custom VJP
     obj_val = scs_solve_wrapper(static_data, A_dense, b, c)

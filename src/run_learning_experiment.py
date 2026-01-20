@@ -168,7 +168,7 @@ base_dir_map = {
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
-    exit(0)
+    # exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')
