@@ -108,10 +108,6 @@ Quad_options = [
     ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
 ]
 
-Lasso_options = [
-
-]
-
 LogReg_options = [
 
 ]
@@ -132,6 +128,24 @@ Learn_Quad_params = conditional_product(
     ]
 )
 
+Lasso_options = [
+    ['alg=ista', 'alg=fista'],
+    ['dro_obj=expectation', 'dro_obj=cvar'],
+    ['eps=0.1', 'eps=1.0', 'eps=0.01'],
+    ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
+    ['K_max=[4,8,16]', 'K_max=[32]']
+]
+
+Learn_Lasso_params = conditional_product(
+    common_options=Lasso_options,
+    conditional_groups=[
+        {
+            'stepsize_type=scalar': ['vector_init=fixed'],
+            'stepsize_type=vector': ['vector_init=fixed', 'vector_init=silver'],
+        },
+    ]
+)
+
 func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
@@ -141,12 +155,13 @@ func_driver_map = {
 base_dir_map = {
     'Quad': 'learn_dro_outputs/Quad',
     'Lasso': 'learn_dro_outputs/Lasso',
-    'LogReg': 'learn_dro_outputs/LogReg'
+    'LogReg': 'learn_dro_outputs/LogReg',
 }
 
 
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
+    print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')
@@ -192,6 +207,11 @@ def main():
                 log.error(f'job_idx {job_idx} >= len(Learn_Quad_params) {len(Learn_Quad_params)}')
                 exit(1)
             hydra_tags += Learn_Quad_params[job_idx]
+        if experiment == 'Lasso':
+            if job_idx >= len(Learn_Lasso_params):
+                log.error(f'job_idx {job_idx} >= len(Learn_Lasso_params) {len(Learn_Lasso_params)}')
+                exit(1)
+            hydra_tags += Learn_Lasso_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
     driver()
