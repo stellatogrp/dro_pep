@@ -140,8 +140,8 @@ Learn_Lasso_params = conditional_product(
     common_options=Lasso_options,
     conditional_groups=[
         {
-            'mu=300': ['n=200'],
-            'mu=200': ['m=300'],
+            'm=300': ['n=200'],
+            'm=200': ['n=300'],
         },
         {
             'stepsize_type=scalar': ['vector_init=fixed'],

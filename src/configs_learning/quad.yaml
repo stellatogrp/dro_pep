@@ -16,11 +16,11 @@ seed: 50
 alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
 stepsize_type: "vector" # "scalar" or "vector"
-vector_init: "silver" # "fixed" or "silver"
+vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
-K_max: [5, 10, 15, 20]
-# K_max: [16]
+# K_max: [5, 10, 15, 20]
+K_max: [4]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"

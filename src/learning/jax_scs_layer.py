@@ -448,6 +448,8 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             compute_grads, result_shapes,
             A_dense, b, c, x, jnp.array(d_obj)
         )
+
+        _adjoint_cache.clear()
         
         return dA, db, dc
     
