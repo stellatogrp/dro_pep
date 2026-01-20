@@ -107,6 +107,7 @@ Quad_options = [
     ['eps=0.01', 'eps=0.1', 'eps=1.0'],
     ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
     ['mu=0', 'mu=1'],
+    ['K_max=[5,10,15]', 'K_max=[20]'],
 ]
 
 LogReg_options = [
@@ -134,6 +135,7 @@ Lasso_options = [
     ['dro_obj=expectation', 'dro_obj=cvar'],
     ['eps=0.1', 'eps=1.0', 'eps=0.01'],
     ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
+    ['K_max=[5,10,15]', 'K_max=[20]'],
 ]
 
 Learn_Lasso_params = conditional_product(
@@ -166,7 +168,7 @@ base_dir_map = {
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
-    # exit(0)
+    exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')
