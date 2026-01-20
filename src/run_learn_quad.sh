@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=50G
-#SBATCH --time=00-02:59:59
+#SBATCH --mem-per-cpu=128G
+#SBATCH --time=00-01:59:59
 #SBATCH --array=0-431
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
@@ -17,7 +17,7 @@
 # export xla_force_host_platform_device_count=1
 
 module purge
-module load anaconda3/2024.10
+module load anaconda3/2025.12
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 

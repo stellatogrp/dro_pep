@@ -41,7 +41,7 @@ eps: 0.1                    # Wasserstein ball radius
 alpha: 0.1                  # CVaR confidence level
 precond_type: 'average'     # Preconditioner type
 
-learn_beta: False           # Whether to learn beta (only for nesterov_fgm)
+learn_beta: True           # Whether to learn beta (only for nesterov_fgm)
 
 # SGD training parameters
 sgd_iters: 10               # Number of SGD iterations
