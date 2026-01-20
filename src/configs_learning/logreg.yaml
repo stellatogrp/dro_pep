@@ -1,0 +1,57 @@
+# Problem parameters
+n: 50                   # Dimension of beta
+N_data: 1000            # Number of data points per problem
+p_beta_nonzero: 0.3     # Sparsity of true beta
+delta: 0.01             # L2 regularization parameter (equals mu)
+
+# Computed on-the-fly if null
+L: 6.200262             # Lipschitz constant (from A matrix)
+R: 2.896123             # Initial radius (from optimal solutions)
+
+beta_scale: 3.0         # Beta entries uniform in [-beta_scale, beta_scale]
+A_std: 4.0              # Standard deviation for A matrix entries
+eps_std: 1.0            # Standard deviation for label noise
+
+# Sample sizes
+N: 16                   # Batch size for SGD training
+R_sample_size: 100      # Number of samples for R/L computation
+
+# Random seeds
+seed: 50                # Seed for SGD randomness
+A_seed: 1000            # Seed for A matrix generation
+
+# Learning framework
+learning_framework: 'ldro-pep'  # Options: 'ldro-pep', 'l2o', 'lpep'
+
+# Algorithm and optimizer settings
+alg: 'vanilla_gd'       # Options: 'vanilla_gd', 'nesterov_fgm'
+optimizer_type: 'adamw' # Options: 'vanilla_sgd', 'adamw', 'sgd_wd'
+stepsize_type: 'vector' # Options: 'scalar', 'vector'
+vector_init: 'fixed'    # Options: 'fixed', 'silver'
+
+# K_max values
+K_max: [4]
+
+# Optimization hyperparameters
+pep_obj: 'obj_val'          # Options: 'obj_val', 'opt_dist_sq_norm', 'grad_sq_norm'
+dro_obj: 'expectation'      # Options: 'expectation', 'cvar'
+sdp_backend: 'scs'          # Options: 'scs', 'clarabel'
+dro_canon_backend: 'manual_jax'  # Options: 'manual_jax', 'cvxpylayers'
+eps: 0.1                    # Wasserstein ball radius
+alpha: 0.1                  # CVaR confidence level
+precond_type: 'average'     # Preconditioner type
+
+learn_beta: False           # Whether to learn beta (only for nesterov_fgm)
+
+# SGD training parameters
+sgd_iters: 10               # Number of SGD iterations
+eta_t: 1e-3                 # Learning rate for stepsizes
+weight_decay: 1e-2          # Weight decay for sgd_wd optimizer
+
+# MOSEK solver tolerances
+mosek_tol_dfeas: 1e-2
+mosek_tol_pfeas: 1e-2
+mosek_tol_rel_gap: 1e-2
+
+# Outputs
+output_dir: 'learn_dro_outputs'

@@ -18,6 +18,7 @@ import sys
 log = logging.getLogger(__name__)
 
 from learning_experiment_classes.lasso import lasso_run
+from learning_experiment_classes.logreg import logreg_run
 from learning_experiment_classes.quad import quad_run
 from itertools import product
 
@@ -25,6 +26,11 @@ from itertools import product
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='lasso.yaml')
 def lasso_driver(cfg):
     lasso_run(cfg)
+
+
+@hydra.main(version_base='1.2', config_path='configs_learning', config_name='logreg.yaml')
+def logreg_driver(cfg):
+    logreg_run(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='quad.yaml')
@@ -103,6 +109,10 @@ Lasso_options = [
 
 ]
 
+LogReg_options = [
+
+]
+
 # Parameter combinations for Slurm array jobs
 # Uses conditional_product to tie mu and K_max values together
 Learn_Quad_params = conditional_product(
@@ -122,11 +132,13 @@ Learn_Quad_params = conditional_product(
 func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
+    'LogReg': logreg_driver,
 }
 
 base_dir_map = {
     'Quad': 'learn_dro_outputs/Quad',
     'Lasso': 'learn_dro_outputs/Lasso',
+    'LogReg': 'learn_dro_outputs/LogReg'
 }
 
 

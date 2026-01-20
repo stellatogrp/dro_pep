@@ -17,7 +17,7 @@ def wc_chambolle_pock(tau, sigma, theta, n, verbose=1):
     # 1. Instantiate the PEPit problem
     problem = PEP()
 
-    L = 0.2
+    L = 1.0
     # 2. Define the functions f1 and f2
     # The problem is min_x { f1(x) + f2(x) }
     # f1 = problem.declare_function(ConvexFunction)
@@ -78,8 +78,8 @@ def wc_chambolle_pock(tau, sigma, theta, n, verbose=1):
 
     # 6. Define Performance Metric
     # Example: Distance of the last iterate to the optimal solution
-    # problem.set_performance_metric((x - xs)**2)
-    problem.set_performance_metric(func(y) - fs)
+    problem.set_performance_metric((x - xs)**2)
+    # problem.set_performance_metric(func(y) - fs)
 
     # 7. Solve the PEP
     pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL', verbose=verbose)

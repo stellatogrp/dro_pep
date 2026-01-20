@@ -555,6 +555,7 @@ def run_gd_for_K_lpep_lasso(cfg, K_max, problem_data, gamma_init, gd_iters, eta_
     # Track step size values for logging
     all_stepsizes_vals = [tuple(stepsizes)]
     all_losses = []
+    all_times = []
     
     # Create cvxpylayers-based PEP layer
     if has_beta:
@@ -645,6 +646,7 @@ def run_gd_for_K_lpep_lasso(cfg, K_max, problem_data, gamma_init, gd_iters, eta_
         log.info(f"  loss: {loss_val:.6f}, iter_time: {iter_time:.3f}s")
         
         all_losses.append(float(loss_val))
+        all_times.append(iter_time)
         
         # Update step sizes using AdamWMin
         stepsizes = optimizer.step(stepsizes, grads, proj_stepsizes)
@@ -652,7 +654,7 @@ def run_gd_for_K_lpep_lasso(cfg, K_max, problem_data, gamma_init, gd_iters, eta_
         all_stepsizes_vals.append(tuple(stepsizes))
         
         # Save progress
-        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses)
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses, all_times)
         df.to_csv(csv_path, index=False)
     
     log.info(f"=== lpep GD for K={K_max} complete ===")
