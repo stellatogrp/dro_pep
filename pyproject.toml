@@ -9,7 +9,7 @@ dependencies = [
     "gurobipy>=11.0.3",
     "pepit>=0.3.2",
     "clarabel",
-    "diffcp @ git+https://github.com/bstellato/diffcp.git@fix-clarabel-psd-permutation",
+    "diffcp @ git+https://github.com/cvxgrp/diffcp.git@master",
     "jax",
     "scipy",
 ]
