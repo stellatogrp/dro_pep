@@ -379,19 +379,19 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             c_arr = np.asarray(c_np)
             A_csc = spa.csc_matrix(A_arr)
             try:
-                # x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
-                #     A_csc, b_arr, c_arr,
-                #     static_data.diffcp_cone_dict,
-                #     solve_method='CLARABEL',
-                #     direct_solve_method=get_direct_solve_method(),
-                #     verbose=False,
-                # )
                 x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
                     A_csc, b_arr, c_arr,
                     static_data.diffcp_cone_dict,
-                    solve_method='SCS',
+                    solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
                     verbose=False,
                 )
+                # x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
+                #     A_csc, b_arr, c_arr,
+                #     static_data.diffcp_cone_dict,
+                #     solve_method='SCS',
+                #     verbose=False,
+                # )
                 obj = c_arr @ x
                 # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
@@ -417,19 +417,19 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             c_arr = np.asarray(c_np)
             A_csc = spa.csc_matrix(A_arr)
             try:
-                # x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
-                #     A_csc, b_arr, c_arr,
-                #     static_data.diffcp_cone_dict,
-                #     solve_method='CLARABEL',
-                #     # direct_solve_method=get_direct_solve_method(),
-                #     verbose=False,
-                # )
                 x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
                     A_csc, b_arr, c_arr,
                     static_data.diffcp_cone_dict,
-                    solve_method='SCS',
+                    solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
                     verbose=False,
                 )
+                # x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
+                #     A_csc, b_arr, c_arr,
+                #     static_data.diffcp_cone_dict,
+                #     solve_method='SCS',
+                #     verbose=False,
+                # )
                 obj = c_arr @ x
                 # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv

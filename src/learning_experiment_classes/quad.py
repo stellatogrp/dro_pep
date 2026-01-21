@@ -270,7 +270,7 @@ def quad_run(cfg):
     
     # Initialize t: 1/L if mu=0, else 2/(mu+L)
     if mu_val == 0:
-        t_init_scalar = 1.0 / L_val
+        t_init_scalar = 1.5 / L_val
     else:
         t_init_scalar = 2.0 / (mu_val + L_val)
     log.info(f"Initial step size t: {t_init_scalar}")
@@ -307,7 +307,7 @@ def quad_run(cfg):
         # Determine t_init based on algorithm
         if alg == 'nesterov_fgm':
             # Nesterov FGM uses t = 1/L (scalar or vector of same value)
-            t_init = jnp.full(K, 1 / L_val) if is_vector else 1 / L_val
+            t_init = jnp.full(K, 1.5 / L_val) if is_vector else 1.5 / L_val
         elif is_vector:
             if cfg.vector_init == "fixed":
                 t_init = jnp.full(K, t_init_scalar)
