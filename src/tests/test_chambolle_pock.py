@@ -1,93 +1,82 @@
 from PEPit import PEP
-from PEPit.functions import ConvexFunction, SmoothStronglyConvexFunction, ConvexIndicatorFunction, SmoothConvexLipschitzFunction
+from PEPit.functions import ConvexFunction, ConvexLipschitzFunction
 from PEPit.primitive_steps import proximal_step
 
-
-def wc_chambolle_pock(tau, sigma, theta, n, verbose=1):
+def wc_chambolle_pock_last_iterate(tau, sigma, theta, n, M=1, verbose=1):
     """
-    Worst-case analysis of the Chambolle-Pock algorithm (PDHG) with L=Id.
+    Worst-case analysis of Chambolle-Pock (PDHG) for the last iterate.
     
-    Args:
-        tau (float): Primal step size
-        sigma (float): Dual step size
-        theta (float): Extrapolation parameter (typically 1.0)
-        n (int): Number of iterations
+    Metric: Distance to the saddle point (Lyapunov function).
+    Formulation: min_x max_y L(x, y) = f1(x) + M * <x, y> - h(y)
     """
-    
-    # 1. Instantiate the PEPit problem
     problem = PEP()
 
-    L = 1.0
-    # 2. Define the functions f1 and f2
-    # The problem is min_x { f1(x) + f2(x) }
-    # f1 = problem.declare_function(ConvexFunction)
-    # f2 = problem.declare_function(ConvexFunction)
+    # 1. Define the Lagrangian Components
+    # We reformulate min_x (f1(x) + f2(x)) as min_x max_y (f1(x) + M * <x,y> - f2*(y))
+    # Let h(y) = f2*(y). 
+    f1 = problem.declare_function(ConvexFunction)
+    h  = problem.declare_function(ConvexFunction) 
 
-    f1 = problem.declare_function(SmoothStronglyConvexFunction, mu=0.1, L=L)
-    f2 = problem.declare_function(SmoothStronglyConvexFunction, mu=0.1, L=L)
-
-    # 3. Define the optimal point (saddle point setup)
-    # For worst-case analysis of PDHG, we often look at the duality gap or distance to solution.
-    # Here we set up a reference optimal point xs.
-    func = f1 + f2
-    xs = func.stationary_point()
-    fs = func(xs)
+    # 2. Define the Optimal Saddle Point (xs, ys)
+    # The optimality conditions for the Lagrangian L(x, y) are:
+    #   0 \in \partial_x L(xs, ys)  =>  -M * ys \in \partial f1(xs)
+    #   0 \in \partial_y L(xs, ys)  =>   M * xs \in \partial h(ys)
+    xs = problem.set_initial_point()
+    ys = problem.set_initial_point()
     
-    # 4. Initialize the algorithm
-    # x0 is the starting primal point, y0 is the starting dual point
+    # Enforce these conditions in PEPit
+    # f1.add_point(xs, g=-ys, f=f1.value(xs))
+    # h.add_point(ys, g=xs,  f=h.value(ys))
+    f1.add_point((xs, -M * ys, f1.value(xs)))
+    h.add_point((ys, M * xs, h.value(ys)))
+
+    # 3. Initialize the Algorithm
     x0 = problem.set_initial_point()
     y0 = problem.set_initial_point()
     
-    # Initial condition: bounded distance to solution (standard setup)
-    # You might want to bound both primal and dual distances.
-    problem.set_initial_condition((x0 - xs) ** 2 <= 1)
-    problem.set_initial_condition((y0 - xs) ** 2 <= 1)
-    
-    # 5. Run the Algorithm Loop
+    # Constrain initial distance to the saddle point
+    # We use the standard Euclidean norm for simplicity, though PDHG 
+    # is naturally contractive in the norm ||z||_M where M depends on tau/sigma.
+    problem.set_initial_condition((x0 - xs)**2 + (y0 - ys)**2 <= 1)
+
+    # 4. Run the Algorithm (No Averaging)
     x = x0
     y = y0
-    x_prev = x0 
 
-    for _ in range(n):
+    for k in range(n):
         # --- Primal Step ---
-        # x_{k+1} = prox_{tau * f1} (x_k - tau * y_k)
-        x_new, _, _ = proximal_step(x - tau * y, f1, tau)
+        # x_{k+1} = prox_{tau f1}(x_k - tau * y_k)
+        x_new, _, _ = proximal_step(x - tau * M * y, f1, tau)
         
-        # --- Extrapolation Step ---
+        # --- Extrapolation ---
         # x_bar_{k+1} = x_{k+1} + theta * (x_{k+1} - x_k)
         x_bar = x_new + theta * (x_new - x)
         
         # --- Dual Step ---
-        # y_{k+1} = prox_{sigma * f2^*} (y_k + sigma * x_bar)
-        # We use Moreau Identity: prox_{s*f*}(v) = v - s * prox_{f/s}(v/s)
-        # Here s = sigma.
-        z = y + sigma * x_bar
-        
-        # Compute prox_{f2/sigma}(z/sigma)
-        # Note: proximal_step(u, f, gamma) computes argmin f(w) + 1/(2*gamma)||w-u||^2
-        # We need argmin (1/sigma)*f2(w) + 1/2||w - z/sigma||^2
-        # This is equivalent to proximal_step with gamma = 1/sigma
-        p, _, _ = proximal_step(z / sigma, f2, 1 / sigma)
-        
-        y_new = z - sigma * p
-        
-        # Update variables for next iteration
-        x_prev = x
+        # y_{k+1} = prox_{sigma f2^*}(y_k + sigma * x_bar)
+        # Note: prox_{sigma f2^*} is exactly prox_{sigma h}
+        y_new, _, _ = proximal_step(y + sigma * M * x_bar, h, sigma)
+
+        # Update
         x = x_new
         y = y_new
 
-    # 6. Define Performance Metric
-    # Example: Distance of the last iterate to the optimal solution
-    problem.set_performance_metric((x - xs)**2)
-    # problem.set_performance_metric(func(y) - fs)
-
-    # 7. Solve the PEP
-    pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL', verbose=verbose)
+    L_primal_view = f1.value(x) + M * (x * ys) - h.value(ys)
     
-    return pepit_tau
+    # Term 2: L(xs, y_avg) = f1(xs) + <xs, y_avg> - h(y_avg)
+    L_dual_view   = f1.value(xs) + M * (xs * y) - h.value(y)
+    
+    gap = L_primal_view - L_dual_view
+    
+    problem.set_performance_metric(gap)
 
-# Example usage:
-# tau * sigma * L^2 <= 1 (with L=1, theta=1) -> tau * sigma <= 1
+    pepit_result = problem.solve(verbose=verbose)
+    
+    return pepit_result
+
 if __name__ == "__main__":
-    wc = wc_chambolle_pock(tau=0.1, sigma=0.1, theta=1.0, n=2)
-    print(f"Worst-case performance: {wc}")
+    # Example: N=1 step. If result <= 1, the algorithm is non-expansive (stable).
+    # If result < 1, it is strictly contractive.
+    # Standard PDHG condition: tau * sigma * M ** 2 <= 1 (often < 1 for strict convergence)
+    wc_dist = wc_chambolle_pock_last_iterate(tau=0.01, sigma=0.01, theta=1.0, n=10, M=10)
+    print(f"Worst-case Squared Distance to Saddle Point: {wc_dist}")
