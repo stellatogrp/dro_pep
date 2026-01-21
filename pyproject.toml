@@ -8,11 +8,21 @@ dependencies = [
     "cvxpy>=1.5.3",
     "gurobipy>=11.0.3",
     "pepit>=0.3.2",
+    "clarabel",
+    "diffcp @ git+https://github.com/bstellato/diffcp.git@fix-clarabel-psd-permutation",
+    "jax",
+    "scipy",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [tool.uv]
 dev-dependencies = [
