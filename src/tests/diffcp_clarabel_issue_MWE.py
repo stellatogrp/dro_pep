@@ -37,7 +37,7 @@ def main():
 
     obj = cp.Minimize(cp.trace(X) + np.ones(2) @ y)
     prob = cp.Problem(obj, constraints)
-    res = prob.solve(solver=cp.SCS)
+    res = prob.solve(solver=cp.CLARABEL)
     print('from cvxpy:', res)
     # print(X.value, y.value)
 
