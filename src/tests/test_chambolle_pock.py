@@ -78,5 +78,5 @@ if __name__ == "__main__":
     # Example: N=1 step. If result <= 1, the algorithm is non-expansive (stable).
     # If result < 1, it is strictly contractive.
     # Standard PDHG condition: tau * sigma * M ** 2 <= 1 (often < 1 for strict convergence)
-    wc_dist = wc_chambolle_pock_last_iterate(tau=0.01, sigma=0.01, theta=1.0, n=10, M=10)
+    wc_dist = wc_chambolle_pock_last_iterate(tau=0.01, sigma=0.01, theta=1.0, n=15, M=10)
     print(f"Worst-case Squared Distance to Saddle Point: {wc_dist}")

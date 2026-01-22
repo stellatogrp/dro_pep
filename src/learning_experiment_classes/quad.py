@@ -845,3 +845,88 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         t_str = f'{float(t):.6f}'
     log.info(f'K={K_max} complete. Final t={t_str}. Saved to {csv_path}')
     df.to_csv(csv_path, index=False)
+
+
+def quad_out_of_sample_run(cfg):
+    """
+    Generate and save out-of-sample test problems for quadratic functions.
+    
+    Samples cfg.out_of_sample_N problems, each parameterized by a matrix Q 
+    and initial iterate z0. Stores results as compressed numpy arrays that 
+    can be loaded and indexed later for consistent evaluation across algorithms.
+    
+    Output files:
+        - Q_samples.npz: Contains 'Q' array of shape (out_of_sample_N, M, M)
+        - z0_samples.npz: Contains 'z0' array of shape (out_of_sample_N, M)
+    
+    Each file can be loaded with:
+        data = np.load('Q_samples.npz')
+        Q_i = data['Q'][i]  # Get i-th Q matrix
+    """
+    log.info(cfg)
+    
+    # Extract config values
+    d_val = cfg.dim
+    mu_val = cfg.mu
+    L_val = cfg.L
+    R_val = cfg.R
+    N_oos = cfg.out_of_sample_N
+    seed = cfg.out_of_sample_seed
+    
+    # Compute matrix width for Marchenko-Pastur (same as in quad_run)
+    r_val = (np.sqrt(L_val) - np.sqrt(mu_val))**2 / (np.sqrt(L_val) + np.sqrt(mu_val))**2
+    M_val = int(np.round(r_val * d_val))
+    log.info(f"Precomputed matrix width M: {M_val}")
+    log.info(f"Generating {N_oos} out-of-sample problems with seed {seed}")
+    
+    # Hydra sets the working directory to the run directory
+    # Save directly there (no extra subdirectory)
+    
+    # Set random key for reproducible sampling
+    key = jax.random.PRNGKey(seed)
+    
+    # Split keys for Q and z0 sampling
+    key, k1, k2 = jax.random.split(key, 3)
+    Q_subkeys = jax.random.split(k1, N_oos)
+    z0_subkeys = jax.random.split(k2, N_oos)
+    
+    # Sample Q matrices and z0 vectors
+    log.info("Sampling Q matrices...")
+    Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
+    log.info(f"Q_batch shape: {Q_batch.shape}")
+    
+    log.info("Sampling z0 vectors...")
+    z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
+    log.info(f"z0_batch shape: {z0_batch.shape}")
+    
+    # Convert from JAX arrays to NumPy arrays
+    Q_np = np.array(Q_batch)
+    z0_np = np.array(z0_batch)
+    
+    # Save as compressed numpy files (directly in Hydra run directory)
+    Q_path = "Q_samples.npz"
+    z0_path = "z0_samples.npz"
+    
+    np.savez_compressed(Q_path, Q=Q_np)
+    np.savez_compressed(z0_path, z0=z0_np)
+    
+    log.info(f"Saved Q samples to {Q_path}")
+    log.info(f"Saved z0 samples to {z0_path}")
+    
+    # Also save metadata for reference
+    metadata = {
+        'out_of_sample_N': N_oos,
+        'out_of_sample_seed': seed,
+        'dim': d_val,
+        'mu': mu_val,
+        'L': L_val,
+        'R': R_val,
+        'M': M_val,
+        'Q_shape': Q_np.shape,
+        'z0_shape': z0_np.shape,
+    }
+    metadata_path = "out_of_sample_metadata.npz"
+    np.savez_compressed(metadata_path, **metadata)
+    log.info(f"Saved metadata to {metadata_path}")
+    
+    log.info("=== Out-of-sample generation complete ===")

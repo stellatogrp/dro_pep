@@ -1,5 +1,5 @@
 # Problem parameters
-mu: 0.
+mu: 1.
 L: 10.
 R: 10.
 dim: 300
@@ -45,3 +45,5 @@ mosek_tol_rel_gap: 1e-2
 
 # Outputs
 output_dir: "learn_dro_outputs"
+out_of_sample_N: 1000
+out_of_sample_seed: 1234

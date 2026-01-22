@@ -30,7 +30,8 @@ stepsize_type: 'scalar' # Options: 'scalar', 'vector'
 vector_init: 'fixed'    # Options: 'fixed', 'silver'
 
 # K_max values
-K_max: [4]
+K_max: [5, 10, 15, 20]
+# K_max: [4]
 
 # Optimization hyperparameters
 pep_obj: 'obj_val'          # Options: 'obj_val', 'opt_dist_sq_norm', 'grad_sq_norm'
@@ -44,7 +45,7 @@ precond_type: 'average'     # Preconditioner type
 learn_beta: True           # Whether to learn beta (only for nesterov_fgm)
 
 # SGD training parameters
-sgd_iters: 10               # Number of SGD iterations
+sgd_iters: 100               # Number of SGD iterations
 eta_t: 1e-3                 # Learning rate for stepsizes
 weight_decay: 1e-2          # Weight decay for sgd_wd optimizer
 
