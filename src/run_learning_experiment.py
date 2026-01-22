@@ -104,10 +104,10 @@ def conditional_product(common_options, conditional_groups):
 Quad_options = [
     ['alg=vanilla_gd', 'alg=nesterov_fgm'],
     ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0'],
-    ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
-    ['mu=0', 'mu=1'],
-    ['K_max=[5,10,15]', 'K_max=[20]'],
+    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=10.0'],
+    ['alpha=0.1'],
+    ['mu=0'],
+    ['K_max=[5,10]', 'K_max=[15]'],
 ]
 
 LogReg_options = [
@@ -125,7 +125,7 @@ Learn_Quad_params = conditional_product(
         # },
         {
             'stepsize_type=scalar': ['vector_init=fixed'],
-            'stepsize_type=vector': ['vector_init=fixed'],
+            'stepsize_type=vector': ['vector_init=fixed', 'vector_init=silver'],
         },
     ]
 )
