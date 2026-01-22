@@ -1020,3 +1020,7 @@ def lasso_run(cfg):
             )
     
     log.info("=== Lasso SGD experiment complete ===")
+
+
+def lasso_out_of_sample_run(cfg):
+    pass
