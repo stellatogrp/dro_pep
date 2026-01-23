@@ -51,7 +51,7 @@ def generate_A(seed, m, n):
     A = A / col_norms
     return A
 
-def generate_single_b_jax(key, A, p_xsamp_nonzero):
+def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std):
     """
     Generate a single b vector: b = A @ x_samp + noise.
     
@@ -65,14 +65,17 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero):
         b: (m,) vector
     """
     m, n = A.shape
-    key1, key2 = jax.random.split(key, 2)
+    key1, key2, key3 = jax.random.split(key, 3)
     
     # Generate sparse x sample
     x_samp = jax.random.normal(key1, (n,))
     x_mask = jax.random.bernoulli(key2, p=p_xsamp_nonzero, shape=(n,)).astype(jnp.float64)
+
     x_samp = x_samp * x_mask
+    noise = b_noise_std * jax.random.normal(key3, (m,))
+    b = A @ x_samp + noise
     
-    return A @ x_samp
+    return b
 
 
 def compute_lasso_params(A):
@@ -84,7 +87,7 @@ def compute_lasso_params(A):
     return float(L), float(mu)
 
 
-def generate_batch_b_jax(key, A, N, p_xsamp_nonzero):
+def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std):
     """
     Generate a batch of b vectors.
     
@@ -99,7 +102,8 @@ def generate_batch_b_jax(key, A, N, p_xsamp_nonzero):
     """
     keys = jax.random.split(key, N)
     generate_one = partial(generate_single_b_jax, A=A, 
-                           p_xsamp_nonzero=p_xsamp_nonzero)
+                           p_xsamp_nonzero=p_xsamp_nonzero,
+                           b_noise_std=b_noise_std)
     b_batch = jax.vmap(generate_one)(keys)
     return b_batch
 
@@ -255,9 +259,9 @@ def setup_lasso_problem(cfg):
     return problem_data
 
 
-def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, lambd):
+def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, b_noise_std, lambd):
     # Generate b vectors
-    b_batch = generate_batch_b_jax(key, A_jax, N, p_xsamp_nonzero)
+    b_batch = generate_batch_b_jax(key, A_jax, N, p_xsamp_nonzero, b_noise_std)
     
     # Solve Lasso to get x_opt, f_opt for each sample
     b_batch_np = np.array(b_batch)
@@ -408,7 +412,7 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         batch_key, next_key = jax.random.split(sample_key)
         b_batch, x_opt_batch, f_opt_batch = sample_lasso_batch(
             batch_key, A_jax, A_np, N_val,
-            cfg.p_xsamp_nonzero, lambd
+            cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd
         )
         return next_key, b_batch, x_opt_batch, f_opt_batch
     
@@ -646,7 +650,7 @@ def lasso_run(cfg):
             precond_key, key = jax.random.split(key)
             b_batch_precond, x_opt_batch_precond, f_opt_batch_precond = sample_lasso_batch(
                 precond_key, A_jax, A_np, precond_sample_size,
-                cfg.p_xsamp_nonzero, lambd
+                cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd
             )
             x0_batch_precond = jnp.zeros((precond_sample_size, A_jax.shape[1]))
             
@@ -683,6 +687,7 @@ def lasso_run(cfg):
                 G_batch_precond, F_batch_precond, precond_type=precond_type
             )
             log.info(f"Preconditioner computed (type={precond_type})")
+            log.info(precond_inv)
         else:
             raise ValueError(f"Unknown learning_framework: {learning_framework}")
         
