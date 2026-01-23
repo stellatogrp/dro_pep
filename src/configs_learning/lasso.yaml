@@ -6,7 +6,7 @@ lambd: 0.4
 R_nonstrongcvx: 7.5958 # 1.1 * 6.905287
 
 # Sample sizes
-N: 10                 # Batch size for SGD training
+N: 15                 # Batch size for SGD training
 precond_sample_size: 100
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
@@ -33,7 +33,7 @@ vector_init: "fixed" # "fixed" or "silver"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
-K_max: [15]
+K_max: [5]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"

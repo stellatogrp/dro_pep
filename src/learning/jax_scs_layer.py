@@ -118,6 +118,8 @@ def _detect_mkl_pardiso():
         import clarabel
         import scipy.sparse as spa
         import numpy as np
+
+        log.info('solving trivial problem to see if MKL exists')
         
         # Try solving a trivial problem with MKL
         P = spa.csc_matrix((2, 2))
@@ -483,6 +485,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
     def _solve_fwd(A_dense, b, c):
         # Solve using diffcp and cache solution + adjoint
         def solve_impl(A_np, b_np, c_np):
+            log.info('solve_impl starting (inside pure_callback)...')
             # Explicitly convert to numpy arrays
             A_arr = np.asarray(A_np)
             b_arr = np.asarray(b_np)
@@ -509,6 +512,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 _adjoint_cache['y'] = y
                 _adjoint_cache['s'] = s
                 _adjoint_cache['valid'] = True
+                log.info(f'diffcp solve succeeded, obj={obj:.6f}')
             except Exception as e:
                 log.warning(f"diffcp solve failed in fwd: {e}")
                 x = np.zeros(c_arr.shape[0])

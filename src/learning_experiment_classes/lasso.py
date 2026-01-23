@@ -412,15 +412,19 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         x0_batch = jnp.zeros((N_val, A_jax.shape[1]))  # Shifted problem: start at 0
         
         # Compute loss and gradients
+        log.info('calling value_and_grad_fn...')
         loss, d_stepsizes = value_and_grad_fn(stepsizes, b_batch, x0_batch, x_opt_batch, f_opt_batch)
-        log.info('solving SDP and getting gradients...') # log here to prevent buffer insues with timing
-        log.info(d_stepsizes)
+        log.info('value_and_grad_fn returned, materializing results...')
+        # Force materialization of JAX arrays
+        loss_val = float(loss)
+        d_stepsizes_materialized = tuple(jnp.array(ds) for ds in d_stepsizes)
+        log.info(f'results materialized, loss={loss_val:.6f}')
+        log.info(f'd_stepsizes: {d_stepsizes_materialized}')
         
-        log.info(f'  loss: {float(loss):.6f}')
         iter_time = time.perf_counter() - iter_start_time
         log.info(f'  iter_time (finding optimal sols + solving SDP): {iter_time:.3f}s')
         
-        all_losses.append(float(loss))
+        all_losses.append(loss_val)
         all_times.append(iter_time)
 
         # SGD step
