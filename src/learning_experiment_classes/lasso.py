@@ -109,56 +109,147 @@ def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std):
 
 
 # =============================================================================
-# Lasso Solution (using CVXPY - not JIT compatible)
+# Lasso Solution (using CVXPY with DPP for fast re-solves)
 # =============================================================================
 
+class LassoProblemDPP:
+    """
+    DPP-parametrized Lasso problem for fast batch solving.
+
+    Creates the problem structure once, then updates parameters and re-solves
+    without rebuilding the problem each time.
+    """
+
+    def __init__(self, A_np, lambd):
+        """
+        Initialize the parametrized Lasso problem.
+
+        Args:
+            A_np: (m, n) numpy array - fixed design matrix
+            lambd: L1 regularization parameter
+        """
+        m, n = A_np.shape
+        self.A = A_np
+        self.lambd = lambd
+
+        # Create CVXPY parameter for b (will be updated for each solve)
+        self.b_param = cp.Parameter(m)
+
+        # Create variable
+        self.x = cp.Variable(n)
+
+        # Build objective: 0.5 * ||Ax - b||^2 + lambd * ||x||_1
+        self.obj = 0.5 * cp.sum_squares(self.A @ self.x - self.b_param) + lambd * cp.norm(self.x, 1)
+
+        # Create problem (done once)
+        self.prob = cp.Problem(cp.Minimize(self.obj))
+
+    def solve(self, b_np):
+        """
+        Solve Lasso for a given b vector.
+
+        Args:
+            b_np: (m,) numpy array
+
+        Returns:
+            x_opt: (n,) optimal solution
+            f_opt: optimal objective value
+        """
+        # Update parameter value
+        self.b_param.value = b_np
+
+        # Solve (reuses problem structure)
+        self.prob.solve(solver='CLARABEL')
+
+        return self.x.value, self.prob.value
+
+    def solve_batch(self, b_batch_np):
+        """
+        Solve batch of Lasso problems efficiently.
+
+        Args:
+            b_batch_np: (N, m) numpy array of b vectors
+
+        Returns:
+            x_opt_batch: (N, n) array of optimal solutions
+            f_opt_batch: (N,) array of optimal objective values
+            R_max: Maximum radius across all samples
+        """
+        N = b_batch_np.shape[0]
+        n = self.A.shape[1]
+
+        x_opt_batch = np.zeros((N, n))
+        f_opt_batch = np.zeros(N)
+        R_max = 0.0
+
+        for i in range(N):
+            x_opt, f_opt = self.solve(b_batch_np[i])
+            x_opt_batch[i] = x_opt
+            f_opt_batch[i] = f_opt
+            R = np.linalg.norm(x_opt)
+            R_max = max(R_max, R)
+
+        return x_opt_batch, f_opt_batch, R_max
+
+
 def solve_lasso_cvxpy(A_np, b_np, lambd):
+    """Legacy function for single Lasso solve (creates new problem each time)."""
     n = A_np.shape[1]
     x = cp.Variable(n)
     obj = 0.5 * cp.sum_squares(A_np @ x - b_np) + lambd * cp.norm(x, 1)
     prob = cp.Problem(cp.Minimize(obj))
     prob.solve(solver='CLARABEL')
-    
+
     x_opt = x.value
     f_opt = prob.value
-    
+
     return x_opt, f_opt
 
 
-def solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd):
+def solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd, lasso_dpp=None):
     """
     Solve batch of Lasso problems.
-    
+
     Args:
         A_np: (m, n) numpy array
         b_batch_np: (N, m) numpy array of b vectors
         lambd: L1 regularization parameter
-        
+        lasso_dpp: Optional pre-created LassoProblemDPP instance for speed
+
     Returns:
         x_opt_batch: (N, n) array of optimal solutions
         f_opt_batch: (N,) array of optimal objective values
         R_max: Maximum radius across all samples
     """
+    if lasso_dpp is not None:
+        # Fast path: use pre-created DPP problem
+        return lasso_dpp.solve_batch(b_batch_np)
+
+    # Slow path: create new problem for each sample (legacy behavior)
     N = b_batch_np.shape[0]
     n = A_np.shape[1]
-    
+
     x_opt_batch = np.zeros((N, n))
     f_opt_batch = np.zeros(N)
     R_max = 0.0
-    
+
     for i in range(N):
         x_opt, f_opt = solve_lasso_cvxpy(A_np, b_batch_np[i], lambd)
         x_opt_batch[i] = x_opt
         f_opt_batch[i] = f_opt
         R = np.linalg.norm(x_opt)
         R_max = max(R_max, R)
-    
+
     return x_opt_batch, f_opt_batch, R_max
 
 
-def compute_sample_radius(cfg, A_np):
+def compute_sample_radius(cfg, A_np, lasso_dpp=None):
     log.info(f"Computing R from {cfg.R_sample_size} samples...")
-    
+
+    # Create DPP problem if not provided
+    if lasso_dpp is None:
+        lasso_dpp = LassoProblemDPP(A_np, cfg.lambd)
+
     # Generate b samples using the b_seed
     key = jax.random.PRNGKey(cfg.R_seed)
     b_batch = generate_batch_b_jax(
@@ -166,10 +257,10 @@ def compute_sample_radius(cfg, A_np):
         cfg.p_xsamp_nonzero
     )
     b_batch_np = np.array(b_batch)
-    
-    # Solve all Lasso problems
-    _, _, R_max = solve_batch_lasso_cvxpy(A_np, b_batch_np, cfg.lambd)
-    
+
+    # Solve all Lasso problems using DPP
+    _, _, R_max = solve_batch_lasso_cvxpy(A_np, b_batch_np, cfg.lambd, lasso_dpp=lasso_dpp)
+
     log.info(f"Computed R = {R_max:.6f}")
     return R_max
 
@@ -259,20 +350,155 @@ def setup_lasso_problem(cfg):
     return problem_data
 
 
-def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, b_noise_std, lambd):
+def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, b_noise_std, lambd, lasso_dpp=None):
     # Generate b vectors
     b_batch = generate_batch_b_jax(key, A_jax, N, p_xsamp_nonzero, b_noise_std)
-    
+
     # Solve Lasso to get x_opt, f_opt for each sample
     b_batch_np = np.array(b_batch)
-    x_opt_batch_np, f_opt_batch_np, _ = solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd)
-    
+    x_opt_batch_np, f_opt_batch_np, _ = solve_batch_lasso_cvxpy(
+        A_np, b_batch_np, lambd, lasso_dpp=lasso_dpp
+    )
+
     return b_batch, jnp.array(x_opt_batch_np), jnp.array(f_opt_batch_np)
+
+
+def compute_dead_zone_fraction(traj_fn, stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max):
+    """
+    Count fraction of components in soft-threshold dead zone per iteration.
+
+    This diagnostic function helps identify if gradients are uniform due to
+    too many trajectory components falling into the soft-threshold dead zone
+    (where |v| < gamma * lambd and gradients are zero).
+
+    Args:
+        traj_fn: Trajectory function (ISTA or FISTA)
+        stepsizes: Step sizes (gamma array for ISTA, or (gamma, beta) for FISTA)
+        A, b: Problem data
+        x0: Initial point (shifted coordinates)
+        x_opt: Optimal point
+        f_opt: Optimal value
+        lambd: L1 regularization parameter
+        K_max: Number of iterations
+
+    Returns:
+        List of dead zone fractions for each iteration k = 0, ..., K_max-1
+    """
+    # Get the gamma values
+    if isinstance(stepsizes, tuple):
+        gamma = stepsizes[0]  # FISTA case
+    else:
+        gamma = stepsizes  # ISTA case
+
+    result = traj_fn(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=False)
+    x_iter = result[0]  # (n, K+1) in shifted coordinates
+
+    dead_fractions = []
+    for k in range(K_max):
+        # Get x_k in original coordinates
+        x_k = x_iter[:, k] + x_opt
+        # Compute gradient at x_k
+        g_k = A.T @ (A @ x_k - b)
+        # Compute pre-proximal point y_k
+        y_k = x_k - gamma[k] * g_k
+        # Check dead zone: |y_k| < gamma * lambd
+        threshold = gamma[k] * lambd
+        in_dead_zone = jnp.abs(y_k) < threshold
+        dead_fractions.append(float(jnp.mean(in_dead_zone)))
+
+    return dead_fractions
 
 
 # =============================================================================
 # L2O Pipeline (Learning to Optimize without DRO)
 # =============================================================================
+
+@partial(jax.jit, static_argnames=['traj_fn', 'K_max', 'loss_type', 'decay_rate'])
+def lasso_trajectory_loss(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn,
+                          loss_type='final', decay_rate=0.9):
+    """
+    Compute loss from ISTA/FISTA trajectory with different loss formulations.
+
+    This function provides multiple loss formulations to address the uniform
+    gradient problem in L2O for Lasso.
+
+    Args:
+        stepsizes: Step sizes (gamma array for ISTA, or (gamma, beta) for FISTA)
+        A, b: Problem data
+        x0: Initial point (shifted coordinates, so x0 = 0)
+        x_opt, f_opt: Optimal point and value
+        lambd: L1 regularization parameter
+        K_max: Number of iterations
+        traj_fn: Trajectory function (ISTA or FISTA)
+        loss_type: Loss formulation type:
+            - 'final': Only final iterate loss (original, causes uniform gradients)
+            - 'cumulative': Sum of losses at all iterates (gives each gamma_k influence)
+            - 'weighted': Exponentially weighted sum (emphasizes later iterations)
+            - 'per_step': Loss improvement per step (directly ties gamma_k to step k)
+        decay_rate: For 'weighted' loss, the exponential decay rate (0 < decay < 1)
+
+    Returns:
+        Scalar loss value
+    """
+    # Run trajectory
+    traj_result = traj_fn(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max,
+                          return_Gram_representation=False)
+    x_iter = traj_result[0]  # Shape (n, K+1), columns are x_0, ..., x_K in shifted coords
+
+    def compute_obj_at_k(k):
+        """Compute f(x_k) - f_opt for iterate k."""
+        x_k_shifted = x_iter[:, k]
+        x_k = x_k_shifted + x_opt
+        f1_xk = 0.5 * jnp.sum((A @ x_k - b) ** 2)
+        f2_xk = lambd * jnp.sum(jnp.abs(x_k))
+        return f1_xk + f2_xk - f_opt
+
+    def compute_dist_at_k(k):
+        """Compute ||x_k - x_opt||^2 for iterate k."""
+        x_k_shifted = x_iter[:, k]
+        return jnp.sum(x_k_shifted ** 2)  # x_k_shifted = x_k - x_opt
+
+    if loss_type == 'final':
+        # Original: only final iterate (causes uniform gradients)
+        return compute_obj_at_k(K_max)
+
+    elif loss_type == 'cumulative':
+        # Sum of losses at all iterates: gives each gamma_k direct influence
+        # gamma_k affects x_{k+1}, x_{k+2}, ..., x_K
+        # This creates a "cascade" effect where early gammas affect more terms
+        losses = jnp.array([compute_obj_at_k(k) for k in range(1, K_max + 1)])
+        return jnp.mean(losses)
+
+    elif loss_type == 'weighted':
+        # Exponentially weighted: later iterations weighted more
+        # w_k = decay^(K-k), so w_K = 1, w_{K-1} = decay, etc.
+        losses = jnp.array([compute_obj_at_k(k) for k in range(1, K_max + 1)])
+        weights = jnp.array([decay_rate ** (K_max - k) for k in range(1, K_max + 1)])
+        weights = weights / jnp.sum(weights)  # Normalize
+        return jnp.sum(weights * losses)
+
+    elif loss_type == 'per_step':
+        # Loss improvement per step: directly ties gamma_k to its effect
+        # loss_k = (f(x_k) - f(x_{k+1})) measures how much step k improved
+        # We minimize negative improvement (maximize improvement)
+        improvements = []
+        for k in range(K_max):
+            loss_k = compute_obj_at_k(k)
+            loss_kp1 = compute_obj_at_k(k + 1)
+            # Improvement should be positive; we want to maximize it
+            improvements.append(loss_k - loss_kp1)
+        # Return negative mean improvement (so minimizing = maximizing improvement)
+        # Plus final loss to ensure we reach optimum
+        return compute_obj_at_k(K_max) - 0.1 * jnp.mean(jnp.array(improvements))
+
+    elif loss_type == 'distance_cumulative':
+        # Cumulative distance to optimal (often smoother than objective)
+        dists = jnp.array([compute_dist_at_k(k) for k in range(1, K_max + 1)])
+        return jnp.mean(dists)
+
+    else:
+        raise ValueError(f"Unknown loss_type: {loss_type}")
+
 
 @partial(jax.jit, static_argnames=['traj_fn', 'pep_obj', 'K_max'])
 def lasso_pep_obj_from_trajectory(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn, pep_obj):
@@ -319,13 +545,14 @@ def lasso_pep_obj_from_trajectory(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_ma
         raise ValueError(f"Unknown pep_obj: {pep_obj}")
 
 
-def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch, 
+def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch,
                        lambd, K_max, traj_fn, pep_obj, risk_type, alpha=0.1):
     """
     L2O pipeline for Lasso: compute PEP objectives without DRO SDP.
-    
+
     Computes PEP objectives for each sample in the batch and returns a risk measure.
-    
+    Uses the standard final-iterate loss f(x_K) - f_opt.
+
     Args:
         stepsizes: Step size parameters (gamma,) or (gamma, beta)
         A: Fixed A matrix
@@ -339,7 +566,7 @@ def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch
         pep_obj: PEP objective type
         risk_type: 'expectation' or 'cvar'
         alpha: CVaR confidence level
-    
+
     Returns:
         Scalar loss value
     """
@@ -351,7 +578,7 @@ def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch
         in_axes=(0, 0, 0, 0)
     )
     pep_objs = batch_pep_obj_func(b_batch, x0_batch, x_opt_batch, f_opt_batch)
-    
+
     if risk_type == 'expectation':
         return jnp.mean(pep_objs)
     elif risk_type == 'cvar':
@@ -362,6 +589,104 @@ def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch
         return jnp.mean(sorted_objs[:k])
     else:
         raise ValueError(f"Unknown risk_type: {risk_type}")
+
+
+def l2o_lasso_pipeline_v2(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch,
+                          lambd, K_max, traj_fn, loss_type, risk_type, alpha=0.1, decay_rate=0.9):
+    """
+    Improved L2O pipeline with alternative loss formulations for better gradients.
+
+    This version addresses the uniform gradient problem by using loss formulations
+    that give each step size gamma_k more direct influence on the loss.
+
+    Args:
+        stepsizes: Step size parameters (gamma,) or (gamma, beta)
+        A: Fixed A matrix
+        b_batch: Batch of b vectors (N, m)
+        x0_batch: Batch of initial points (N, n)
+        x_opt_batch: Batch of optimal points (N, n)
+        f_opt_batch: Batch of optimal values (N,)
+        lambd: L1 regularization
+        K_max: Number of iterations
+        traj_fn: Trajectory function
+        loss_type: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
+        risk_type: 'expectation' or 'cvar'
+        alpha: CVaR confidence level
+        decay_rate: For 'weighted' loss type
+
+    Returns:
+        Scalar loss value
+    """
+    # vmap over the batch
+    batch_loss_func = jax.vmap(
+        lambda b, x0, x_opt, f_opt: lasso_trajectory_loss(
+            stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn,
+            loss_type=loss_type, decay_rate=decay_rate
+        ),
+        in_axes=(0, 0, 0, 0)
+    )
+    losses = batch_loss_func(b_batch, x0_batch, x_opt_batch, f_opt_batch)
+
+    if risk_type == 'expectation':
+        return jnp.mean(losses)
+    elif risk_type == 'cvar':
+        N = losses.shape[0]
+        k = max(int(np.ceil(alpha * N)), 1)
+        sorted_losses = jnp.sort(losses)[::-1]
+        return jnp.mean(sorted_losses[:k])
+    else:
+        raise ValueError(f"Unknown risk_type: {risk_type}")
+
+
+def compute_silver_stepsizes(L, K):
+    """
+    Compute silver step sizes for gradient descent.
+
+    The silver step sizes are known to be optimal for gradient descent on
+    smooth convex functions and provide a good differentiated initialization.
+
+    Based on: "The Silver Stepsize Schedule" (Altschuler & Parrilo, 2023)
+
+    Args:
+        L: Smoothness constant
+        K: Number of iterations
+
+    Returns:
+        Array of K step sizes
+    """
+    # Silver ratio
+    rho = 1 + np.sqrt(2)
+
+    # Silver step sizes: gamma_k = (1/L) * (rho^k - rho^{-k}) / (rho^k + rho^{-k})
+    # This creates a schedule that starts small and increases
+    stepsizes = []
+    for k in range(1, K + 1):
+        rho_k = rho ** k
+        rho_neg_k = rho ** (-k)
+        gamma_k = (1.0 / L) * (rho_k - rho_neg_k) / (rho_k + rho_neg_k)
+        stepsizes.append(gamma_k)
+
+    return jnp.array(stepsizes)
+
+
+def compute_geometric_stepsizes(L, K, start_factor=0.5, end_factor=1.5):
+    """
+    Compute geometrically spaced step sizes.
+
+    Creates a differentiated step size schedule by geometric interpolation.
+
+    Args:
+        L: Smoothness constant
+        K: Number of iterations
+        start_factor: Multiplier for first step size (relative to 1/L)
+        end_factor: Multiplier for last step size (relative to 1/L)
+
+    Returns:
+        Array of K step sizes
+    """
+    base = 1.0 / L
+    factors = np.geomspace(start_factor, end_factor, K)
+    return jnp.array(factors * base)
 
 
 def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, eta_t,
@@ -406,13 +731,18 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
             t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
             betas_t.append(t_new)
         beta_init = jnp.array(betas_t)  # Raw t_k sequence of length K+1
-    
+
+    # Create DPP-parametrized Lasso problem for fast batch solving
+    # This avoids rebuilding the CVXPY problem at each SGD iteration
+    lasso_dpp = LassoProblemDPP(A_np, lambd)
+    log.info("Created DPP-parametrized Lasso problem for fast batch solving")
+
     # Helper to sample a batch of Lasso problems
     def sample_batch(sample_key):
         batch_key, next_key = jax.random.split(sample_key)
         b_batch, x_opt_batch, f_opt_batch = sample_lasso_batch(
             batch_key, A_jax, A_np, N_val,
-            cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd
+            cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd, lasso_dpp=lasso_dpp
         )
         return next_key, b_batch, x_opt_batch, f_opt_batch
     
@@ -453,19 +783,38 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
 
     elif learning_framework == 'l2o':
         # L2O pipeline: compute PEP objectives directly without DRO SDP
-        def lasso_l2o_wrapper(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
-            """L2O pipeline wrapper for Lasso."""
-            # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
-            if has_beta:
-                traj_stepsizes = stepsizes_tuple
-            else:
-                traj_stepsizes = stepsizes_tuple[0]
-            
-            return l2o_lasso_pipeline(
-                traj_stepsizes, A_jax, b_batch, x0_batch, x_opt_batch, f_opt_batch,
-                lambd, K_max, traj_fn, cfg.pep_obj, risk_type, alpha
-            )
-        
+        # Use improved loss formulation if specified
+        l2o_loss_type = cfg.get('l2o_loss_type', 'final')
+        decay_rate = cfg.get('l2o_decay_rate', 0.9)
+        log.info(f"L2O loss type: {l2o_loss_type}")
+
+        if l2o_loss_type == 'final':
+            # Original loss (only final iterate)
+            def lasso_l2o_wrapper(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
+                """L2O pipeline wrapper for Lasso."""
+                if has_beta:
+                    traj_stepsizes = stepsizes_tuple
+                else:
+                    traj_stepsizes = stepsizes_tuple[0]
+
+                return l2o_lasso_pipeline(
+                    traj_stepsizes, A_jax, b_batch, x0_batch, x_opt_batch, f_opt_batch,
+                    lambd, K_max, traj_fn, cfg.pep_obj, risk_type, alpha
+                )
+        else:
+            # Use improved loss formulation (cumulative, weighted, per_step, etc.)
+            def lasso_l2o_wrapper(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
+                """L2O pipeline wrapper with improved loss for better gradients."""
+                if has_beta:
+                    traj_stepsizes = stepsizes_tuple
+                else:
+                    traj_stepsizes = stepsizes_tuple[0]
+
+                return l2o_lasso_pipeline_v2(
+                    traj_stepsizes, A_jax, b_batch, x0_batch, x_opt_batch, f_opt_batch,
+                    lambd, K_max, traj_fn, l2o_loss_type, risk_type, alpha, decay_rate
+                )
+
         value_and_grad_fn = jax.value_and_grad(lasso_l2o_wrapper, argnums=0)
 
     if has_beta:
@@ -532,7 +881,39 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         d_stepsizes_materialized = tuple(jnp.array(ds) for ds in d_stepsizes)
         log.info(f'results materialized, loss={loss_val:.6f}')
         log.info(f'd_stepsizes: {d_stepsizes_materialized}')
-        
+
+        # Debug logging for gradient analysis
+        if cfg.get('debug_gradients', False):
+            grad_gamma = d_stepsizes[0]
+            grad_magnitudes = jnp.abs(grad_gamma)
+            max_grad = jnp.max(grad_magnitudes)
+            min_grad = jnp.min(grad_magnitudes)
+            ratio = max_grad / (min_grad + 1e-12)
+            log.info(f'[DEBUG] Per-k gradient magnitudes: {[f"{float(g):.4e}" for g in grad_magnitudes]}')
+            log.info(f'[DEBUG] Gradient max/min ratio: {float(ratio):.4f}')
+            log.info(f'[DEBUG] Gradient std: {float(jnp.std(grad_magnitudes)):.6e}')
+            log.info(f'[DEBUG] Gradient mean: {float(jnp.mean(grad_magnitudes)):.6e}')
+            # Warn if gradients are too uniform
+            if float(ratio) < 2.0:
+                log.warning(f'[DEBUG] Gradients are too uniform (ratio={float(ratio):.2f} < 2.0). '
+                           f'This may indicate soft-threshold dead zone issues.')
+
+            # Compute and log dead zone fractions for first sample
+            if has_beta:
+                traj_stepsizes_debug = stepsizes
+            else:
+                traj_stepsizes_debug = stepsizes[0]
+            dead_fracs = compute_dead_zone_fraction(
+                traj_fn, traj_stepsizes_debug, A_jax, b_batch[0], x0_batch[0],
+                x_opt_batch[0], f_opt_batch[0], lambd, K_max
+            )
+            avg_dead = sum(dead_fracs) / len(dead_fracs)
+            log.info(f'[DEBUG] Dead zone fractions per k: {[f"{d:.3f}" for d in dead_fracs]}')
+            log.info(f'[DEBUG] Average dead zone fraction: {avg_dead:.3f}')
+            if avg_dead > 0.5:
+                log.warning(f'[DEBUG] High dead zone fraction ({avg_dead:.1%}) - '
+                           f'many components have zero gradient through soft-threshold.')
+
         iter_time = time.perf_counter() - iter_start_time
         log.info(f'  iter_time (finding optimal sols + solving SDP): {iter_time:.3f}s')
         
@@ -620,8 +1001,35 @@ def lasso_run(cfg):
     for K in cfg.K_max:
         # Determine step size initialization
         is_vector = cfg.stepsize_type == "vector"
+        vector_init = cfg.get('vector_init', 'fixed')
+
         if is_vector:
-            gamma_init = jnp.full(K, gamma_init_scalar)
+            if vector_init == 'fixed':
+                # Uniform initialization (original)
+                gamma_init = jnp.full(K, gamma_init_scalar)
+                log.info(f"Using fixed uniform initialization: gamma_k = {gamma_init_scalar:.6f}")
+            elif vector_init == 'silver':
+                # Silver step sizes (known-good differentiated schedule)
+                gamma_init = compute_silver_stepsizes(L, K)
+                log.info(f"Using silver step size initialization: {[f'{g:.6f}' for g in gamma_init]}")
+            elif vector_init == 'geometric':
+                # Geometric interpolation
+                start_factor = cfg.get('geometric_start', 0.5)
+                end_factor = cfg.get('geometric_end', 1.5)
+                gamma_init = compute_geometric_stepsizes(L, K, start_factor, end_factor)
+                log.info(f"Using geometric initialization [{start_factor}-{end_factor}]: {[f'{g:.6f}' for g in gamma_init]}")
+            elif vector_init == 'increasing':
+                # Linearly increasing step sizes
+                factors = jnp.linspace(0.5, 1.5, K)
+                gamma_init = factors / L
+                log.info(f"Using increasing initialization: {[f'{g:.6f}' for g in gamma_init]}")
+            elif vector_init == 'decreasing':
+                # Linearly decreasing step sizes
+                factors = jnp.linspace(1.5, 0.5, K)
+                gamma_init = factors / L
+                log.info(f"Using decreasing initialization: {[f'{g:.6f}' for g in gamma_init]}")
+            else:
+                raise ValueError(f"Unknown vector_init: {vector_init}")
         else:
             gamma_init = jnp.array([gamma_init_scalar])  # Still array for consistency
         
