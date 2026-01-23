@@ -266,6 +266,100 @@ def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, lambd):
     return b_batch, jnp.array(x_opt_batch_np), jnp.array(f_opt_batch_np)
 
 
+# =============================================================================
+# L2O Pipeline (Learning to Optimize without DRO)
+# =============================================================================
+
+@partial(jax.jit, static_argnames=['traj_fn', 'pep_obj', 'K_max'])
+def lasso_pep_obj_from_trajectory(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn, pep_obj):
+    """
+    Compute PEP objective directly from ISTA/FISTA trajectory without SDP.
+    
+    For Lasso, the composite objective is:
+        f(x) = f1(x) + f2(x) = 0.5*||Ax - b||^2 + lambd*||x||_1
+    
+    Args:
+        stepsizes: Step sizes (gamma,) for ISTA or (gamma, beta) for FISTA
+        A, b: Problem data
+        x0: Initial point (shifted, so x0 = 0)
+        x_opt, f_opt: Optimal point and value
+        lambd: L1 regularization
+        K_max: Number of iterations
+        traj_fn: Trajectory function (ISTA or FISTA)
+        pep_obj: 'obj_val', 'opt_dist_sq_norm', or 'grad_sq_norm'
+    
+    Returns:
+        Scalar PEP objective value
+    """
+    # Run trajectory (returns without Gram representation)
+    traj_result = traj_fn(stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, return_Gram_representation=False)
+    
+    # Extract final iterate (x_K is in shifted coordinates, so x_K + x_opt is actual)
+    x_iter = traj_result[0]  # Shape (n, K+1), columns are x_0, ..., x_K in shifted coords
+    x_K_shifted = x_iter[:, -1]  # Final iterate in shifted coordinates
+    x_K = x_K_shifted + x_opt    # Actual final iterate
+    
+    if pep_obj == 'obj_val':
+        # Compute actual objective at x_K
+        f1_xK = 0.5 * jnp.sum((A @ x_K - b) ** 2)
+        f2_xK = lambd * jnp.sum(jnp.abs(x_K))
+        return f1_xK + f2_xK - f_opt
+    elif pep_obj == 'opt_dist_sq_norm':
+        return jnp.sum((x_K - x_opt) ** 2)
+    elif pep_obj == 'grad_sq_norm':
+        # Composite gradient: g_f1(x_K) + h_f2(x_K) where h is a subgradient
+        g_f1 = A.T @ (A @ x_K - b)
+        h_f2 = lambd * jnp.sign(x_K)  # Subgradient
+        return jnp.sum((g_f1 + h_f2) ** 2)
+    else:
+        raise ValueError(f"Unknown pep_obj: {pep_obj}")
+
+
+def l2o_lasso_pipeline(stepsizes, A, b_batch, x0_batch, x_opt_batch, f_opt_batch, 
+                       lambd, K_max, traj_fn, pep_obj, risk_type, alpha=0.1):
+    """
+    L2O pipeline for Lasso: compute PEP objectives without DRO SDP.
+    
+    Computes PEP objectives for each sample in the batch and returns a risk measure.
+    
+    Args:
+        stepsizes: Step size parameters (gamma,) or (gamma, beta)
+        A: Fixed A matrix
+        b_batch: Batch of b vectors (N, m)
+        x0_batch: Batch of initial points (N, n)
+        x_opt_batch: Batch of optimal points (N, n)
+        f_opt_batch: Batch of optimal values (N,)
+        lambd: L1 regularization
+        K_max: Number of iterations
+        traj_fn: Trajectory function
+        pep_obj: PEP objective type
+        risk_type: 'expectation' or 'cvar'
+        alpha: CVaR confidence level
+    
+    Returns:
+        Scalar loss value
+    """
+    # vmap over the batch
+    batch_pep_obj_func = jax.vmap(
+        lambda b, x0, x_opt, f_opt: lasso_pep_obj_from_trajectory(
+            stepsizes, A, b, x0, x_opt, f_opt, lambd, K_max, traj_fn, pep_obj
+        ),
+        in_axes=(0, 0, 0, 0)
+    )
+    pep_objs = batch_pep_obj_func(b_batch, x0_batch, x_opt_batch, f_opt_batch)
+    
+    if risk_type == 'expectation':
+        return jnp.mean(pep_objs)
+    elif risk_type == 'cvar':
+        # CVaR: expectation of the top alpha fraction of values
+        N = pep_objs.shape[0]
+        k = max(int(np.ceil(alpha * N)), 1)
+        sorted_objs = jnp.sort(pep_objs)[::-1]  # Sort descending
+        return jnp.mean(sorted_objs[:k])
+    else:
+        raise ValueError(f"Unknown risk_type: {risk_type}")
+
+
 def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, eta_t,
                          eps, alpha, alg, optimizer_type, N_val, csv_path, precond_inv):
     log.info(f"=== Running SGD for K={K_max}, alg={alg} ===")
@@ -354,7 +448,21 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         value_and_grad_fn = jax.value_and_grad(lasso_dro_pipeline, argnums=0)
 
     elif learning_framework == 'l2o':
-        pass
+        # L2O pipeline: compute PEP objectives directly without DRO SDP
+        def lasso_l2o_wrapper(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
+            """L2O pipeline wrapper for Lasso."""
+            # ISTA expects gamma array directly, FISTA expects (gamma, beta) tuple
+            if has_beta:
+                traj_stepsizes = stepsizes_tuple
+            else:
+                traj_stepsizes = stepsizes_tuple[0]
+            
+            return l2o_lasso_pipeline(
+                traj_stepsizes, A_jax, b_batch, x0_batch, x_opt_batch, f_opt_batch,
+                lambd, K_max, traj_fn, cfg.pep_obj, risk_type, alpha
+            )
+        
+        value_and_grad_fn = jax.value_and_grad(lasso_l2o_wrapper, argnums=0)
 
     if has_beta:
         stepsizes = (gamma_init, beta_init)
@@ -527,9 +635,11 @@ def lasso_run(cfg):
             #     alg, csv_path
             # )
             raise NotImplementedError
-        else:
-            # LDRO-PEP or L2O: stochastic optimization with samples
-            # Precompute preconditioner using a large sample batch (fixed for entire SGD)
+        elif learning_framework == 'l2o':
+            # L2O doesn't need the preconditioner
+            precond_inv = None
+        elif learning_framework == 'ldro-pep':
+            # LDRO-PEP: precompute preconditioner using a large sample batch
             precond_sample_size = cfg.get('precond_sample_size', 100)
             log.info(f"Precomputing preconditioner using {precond_sample_size} samples...")
             
@@ -573,13 +683,16 @@ def lasso_run(cfg):
                 G_batch_precond, F_batch_precond, precond_type=precond_type
             )
             log.info(f"Preconditioner computed (type={precond_type})")
-            
-            run_sgd_for_K_lasso(
-                cfg, K, problem_data, key,
-                gamma_init, sgd_iters, eta_t,
-                eps, alpha, alg, optimizer_type,
-                N_val, csv_path, precond_inv
-            )
+        else:
+            raise ValueError(f"Unknown learning_framework: {learning_framework}")
+        
+        # Run SGD for both L2O and ldro-pep
+        run_sgd_for_K_lasso(
+            cfg, K, problem_data, key,
+            gamma_init, sgd_iters, eta_t,
+            eps, alpha, alg, optimizer_type,
+            N_val, csv_path, precond_inv
+        )
     
     log.info("=== Lasso SGD experiment complete ===")
 
