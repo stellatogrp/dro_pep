@@ -3,7 +3,7 @@ m: 250
 n: 500
 lambd: 0.4
 
-R_nonstrongcvx: 7.5958 # 1.1 * 6.905287
+R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
 
 # Sample sizes
 N: 20                # Batch size for SGD training
@@ -19,11 +19,12 @@ R_seed: 3000
 A_out_of_dist_seed: 4000
 
 p_xsamp_nonzero: 0.1   # Probability of non-zero entries in x samples
+b_noise_std: 1e-2
 
 z0_type: 'zero'
 
 # Type of learning framework
-learning_framework: 'l2o'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Algorithm and optimizer type (selected by Slurm job index)
 alg: "ista"            # ista or fista
@@ -45,7 +46,7 @@ alpha: 0.1
 precond_type: 'average'
 
 # SGD training parameters
-sgd_iters: 100
+sgd_iters: 200
 eta_t: 1e-3     # learning rate for stepsizes (descent)
 weight_decay: 1e-3  # weight decay for sgd_wd
 
