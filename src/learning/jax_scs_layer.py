@@ -26,7 +26,7 @@ import logging
 log = logging.getLogger(__name__)
 
 
-@partial(jax.jit, static_argnames=['precond_type'])
+# @partial(jax.jit, static_argnames=['precond_type'])
 def compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average'):
     """Compute preconditioning factors from sample Gram matrices.
     
@@ -56,9 +56,8 @@ def compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average'
         return (jnp.ones(dimG), jnp.ones(dimF))
     
     # Compute sqrt of diagonals of each G matrix: shape (N, dimG)
-    # Use vmap to extract diagonals efficiently
     G_diags = jax.vmap(jnp.diag)(G_batch)  # (N, dimG)
-    G_diag_sqrt = jnp.sqrt(jnp.maximum(G_diags, 1e-10))  # Avoid sqrt of negative
+    G_diag_sqrt = jnp.sqrt(jnp.maximum(G_diags, 0.0))  # (N, dimG)
     
     # F_batch is already (N, dimF)
     F_vals = F_batch
@@ -66,30 +65,31 @@ def compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average'
     if precond_type == 'average':
         avg_G = jnp.mean(G_diag_sqrt, axis=0)  # (dimG,)
         avg_F = jnp.mean(F_vals, axis=0)       # (dimF,)
-        precond_G = 1.0 / jnp.maximum(avg_G, 1e-10)
-        precond_F = 1.0 / jnp.sqrt(jnp.maximum(avg_F, 1e-10))
     elif precond_type == 'max':
-        max_G = jnp.max(G_diag_sqrt, axis=0)
-        max_F = jnp.max(F_vals, axis=0)
-        precond_G = 1.0 / jnp.maximum(max_G, 1e-10)
-        precond_F = 1.0 / jnp.sqrt(jnp.maximum(max_F, 1e-10))
+        avg_G = jnp.max(G_diag_sqrt, axis=0)
+        avg_F = jnp.max(F_vals, axis=0)
     elif precond_type == 'min':
-        min_G = jnp.min(G_diag_sqrt, axis=0)
-        min_F = jnp.min(F_vals, axis=0)
-        precond_G = 1.0 / jnp.maximum(min_G, 1e-10)
-        precond_F = 1.0 / jnp.sqrt(jnp.maximum(min_F, 1e-10))
+        avg_G = jnp.min(G_diag_sqrt, axis=0)
+        avg_F = jnp.min(F_vals, axis=0)
     else:
-        # This branch won't be traced due to static_argnames, but needed for type checking
-        precond_G = jnp.ones(dimG)
-        precond_F = jnp.ones(dimF)
+        avg_G = jnp.ones(dimG)
+        avg_F = jnp.ones(dimF)
+    
+    # Replace zeros with 1 before inverting
+    avg_G = jnp.where(avg_G == 0, 1.0, avg_G)
+    avg_F = jnp.where(avg_F == 0, 1.0, avg_F)
+    
+    # Compute preconditioner: (1/avg, 1/sqrt(avg))
+    precond_G = 1.0 / avg_G
+    precond_F = 1.0 / jnp.sqrt(avg_F)
+    
+    # Handle NaN/inf by replacing with 1
+    precond_G = jnp.where(jnp.isnan(precond_G) | jnp.isinf(precond_G), 1.0, precond_G)
+    precond_F = jnp.where(jnp.isnan(precond_F) | jnp.isinf(precond_F), 1.0, precond_F)
     
     # Apply scaling factors
     precond_G = precond_G * dimG
     precond_F = precond_F * jnp.sqrt(dimF)
-    
-    # Handle NaN/inf values by clipping
-    precond_G = jnp.clip(precond_G, 1e-10, 1e10)
-    precond_F = jnp.clip(precond_F, 1e-10, 1e10)
     
     # Return inverse preconditioner
     precond_inv_G = 1.0 / precond_G
@@ -915,8 +915,8 @@ def dro_scs_solve(
     G_batch, F_batch,
     # Parameters
     eps,
-    # Preconditioner type
-    precond_type='average',
+    # Precomputed preconditioner (compute once before SGD starts)
+    precond_inv,
     # Risk measure selection
     risk_type='expectation',
     alpha=0.1,
@@ -932,15 +932,13 @@ def dro_scs_solve(
         G_batch: (N, S_mat, S_mat) Gram matrices
         F_batch: (N, V) function values
         eps: Wasserstein radius
-        precond_inv: (G_precond_inv, F_precond_inv) preconditioner
+        precond_inv: (G_precond_inv, F_precond_inv) precomputed preconditioner
         risk_type: 'expectation' or 'cvar'
         alpha: CVaR confidence level (only used when risk_type='cvar')
     
     Returns:
         obj_val: Optimal DRO objective value (scalar, differentiable)
     """
-    precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type=precond_type)
-
     if risk_type == 'expectation':
         return dro_expectation_scs_solve(
             A_obj, b_obj, A_vals, b_vals, c_vals,

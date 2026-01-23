@@ -6,7 +6,8 @@ lambd: 0.4
 R_nonstrongcvx: 7.5958 # 1.1 * 6.905287
 
 # Sample sizes
-N: 20                   # Batch size for SGD training
+N: 10                 # Batch size for SGD training
+precond_sample_size: 100
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
 # Random seeds
@@ -46,7 +47,7 @@ precond_type: 'average'
 # SGD training parameters
 sgd_iters: 100
 eta_t: 1e-3     # learning rate for stepsizes (descent)
-weight_decay: 1e-2  # weight decay for sgd_wd
+weight_decay: 1e-3  # weight decay for sgd_wd
 
 # Outputs
 output_dir: "learn_dro_outputs"

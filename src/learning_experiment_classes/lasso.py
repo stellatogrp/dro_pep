@@ -24,7 +24,7 @@ from learning.trajectories_ista_fista import (
     problem_data_to_ista_trajectories,
     problem_data_to_fista_trajectories,
 )
-from learning.jax_scs_layer import dro_scs_solve
+from learning.jax_scs_layer import dro_scs_solve, compute_preconditioner_from_samples
 
 jax.config.update("jax_enable_x64", True)
 jnp.set_printoptions(precision=6, suppress=True)
@@ -267,7 +267,7 @@ def sample_lasso_batch(key, A_jax, A_np, N, p_xsamp_nonzero, lambd):
 
 
 def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, eta_t,
-                         eps, alpha, alg, optimizer_type, N_val, csv_path):
+                         eps, alpha, alg, optimizer_type, N_val, csv_path, precond_inv):
     log.info(f"=== Running SGD for K={K_max}, alg={alg} ===")
     
     # Extract problem data
@@ -346,7 +346,7 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
             return dro_scs_solve(
                 A_obj, b_obj, A_vals, b_vals, c_vals,
                 G_batch, F_batch,
-                eps, precond_type=cfg.precond_type,
+                eps, precond_inv,
                 risk_type=risk_type,
                 alpha=alpha,
             )
@@ -382,13 +382,14 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         return jax.nn.relu(x)
 
     optimizer = None
+    weight_decay = cfg.get('weight_decay', 1e-2)
     if optimizer_type == "adamw":
         optimizer = AdamWMin(
             x_params=[jnp.array(s) for s in stepsizes],
             lr=eta_t,
             betas=(0.9, 0.999),
             eps=1e-8,
-            weight_decay=0.01,
+            weight_decay=weight_decay,
             update_mask=update_mask,
         )
     
@@ -441,7 +442,6 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
             )
             stepsizes = tuple(x_new)
         elif optimizer_type == "sgd_wd":
-            weight_decay = cfg.get('weight_decay', 1e-2)
             if update_mask is None:
                 stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
             else:
@@ -482,6 +482,11 @@ def lasso_run(cfg):
     alpha = cfg.alpha
     N_val = cfg.N
     L = problem_data['L']
+    mu = problem_data['mu']
+    R = problem_data['R']
+    lambd = problem_data['lambd']
+    A_jax = problem_data['A_jax']
+    A_np = problem_data['A_np']
     
     log.info(f"Algorithm: {alg}, Optimizer: {optimizer_type}")
 
@@ -520,11 +525,57 @@ def lasso_run(cfg):
             raise NotImplementedError
         else:
             # LDRO-PEP or L2O: stochastic optimization with samples
+            # Precompute preconditioner using a large sample batch (fixed for entire SGD)
+            precond_sample_size = cfg.get('precond_sample_size', 100)
+            log.info(f"Precomputing preconditioner using {precond_sample_size} samples...")
+            
+            precond_key, key = jax.random.split(key)
+            b_batch_precond, x_opt_batch_precond, f_opt_batch_precond = sample_lasso_batch(
+                precond_key, A_jax, A_np, precond_sample_size,
+                cfg.p_xsamp_nonzero, lambd
+            )
+            x0_batch_precond = jnp.zeros((precond_sample_size, A_jax.shape[1]))
+            
+            # Compute G_batch and F_batch using initial stepsizes
+            if alg == 'ista':
+                traj_fn = problem_data_to_ista_trajectories
+                traj_stepsizes = gamma_init
+            elif alg == 'fista':
+                traj_fn = problem_data_to_fista_trajectories
+                # Initialize beta for FISTA
+                betas_t = [1.0]
+                for k in range(K):
+                    t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
+                    betas_t.append(t_new)
+                beta_init = jnp.array(betas_t)
+                traj_stepsizes = (gamma_init, beta_init)
+            else:
+                raise ValueError(f"Unknown algorithm: {alg}")
+            
+            batch_GF_fn = jax.vmap(
+                lambda b, x0, x_opt, f_opt: traj_fn(
+                    traj_stepsizes, A_jax, b, x0, x_opt, f_opt, lambd, K, 
+                    return_Gram_representation=True
+                ),
+                in_axes=(0, 0, 0, 0)
+            )
+            G_batch_precond, F_batch_precond = batch_GF_fn(
+                b_batch_precond, x0_batch_precond, x_opt_batch_precond, f_opt_batch_precond
+            )
+            
+            # Compute preconditioner (fixed for all SGD iterations)
+            precond_type = cfg.get('precond_type', 'average')
+            precond_inv = compute_preconditioner_from_samples(
+                G_batch_precond, F_batch_precond, precond_type=precond_type
+            )
+            log.info(f"Preconditioner computed (type={precond_type})")
+            
             run_sgd_for_K_lasso(
                 cfg, K, problem_data, key,
                 gamma_init, sgd_iters, eta_t,
                 eps, alpha, alg, optimizer_type,
-                N_val, csv_path
+                N_val, csv_path, precond_inv
             )
     
     log.info("=== Lasso SGD experiment complete ===")
+
