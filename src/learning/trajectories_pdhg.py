@@ -1,252 +1,331 @@
+"""
+PDHG (Chambolle-Pock) trajectory computation for DRO-PEP optimization on Linear Programs.
+
+This module contains trajectory computation functions for the Primal-Dual Hybrid Gradient
+(PDHG) algorithm on LP problems, with shifted functions so x_opt = 0, y_opt = 0.
+
+The LP problem is:
+    min_x  c^T x
+    s.t.   G x >= h      (m1 inequality constraints)
+           A x = b       (m2 equality constraints)
+           l <= x <= u   (box constraints)
+
+Lagrangian: L(x, y) = c^T x + y^T (q - K x)  where K = [G; A], q = [h; b], y = [λ; μ]
+
+Saddle point formulation:
+    min_x max_y  f1(x) + <-K^T y, x> + q^T y  = f1(x) - y^T K x + q^T y
+
+where:
+    f1(x) = c^T x + indicator_{[l,u]}(x)   (convex, primal function)
+    h(y) = -q^T y + indicator_{Y}(y)       (convex, dual function where Y = {y: y[:m1] >= 0})
+
+PDHG Algorithm:
+    For k = 0, ..., K-1:
+        x_{k+1} = proj_{[l,u]}(x_k - τ (c - K^T y_k))
+        x_bar_{k+1} = x_{k+1} + θ (x_{k+1} - x_k)
+        y_{k+1} = proj_Y(y_k + σ (q - K x_bar_{k+1}))
+
+For the DRO-PEP framework, we shift so the optimal saddle point is at origin:
+    x_shifted = x - x_opt
+    y_shifted = y - y_opt
+"""
+
 import jax
 import jax.numpy as jnp
-from jax import lax
+import logging
 from functools import partial
 
-@partial(jax.jit, static_argnames=['K_max', 'return_Gram_representation'])
-def problem_data_to_pdhg_trajectories(tau, sigma, theta, 
-                                      c, A, b, C, d, 
-                                      x0, y0, x_opt, y_opt, 
-                                      K_max,
-                                      return_Gram_representation=True):
+log = logging.getLogger(__name__)
+
+
+def proj_box(v, l, u):
+    """Project v onto box [l, u]."""
+    return jnp.minimum(u, jnp.maximum(v, l))
+
+
+def proj_nonneg_first_m1(v, m1):
+    """Project first m1 components to non-negative, leave rest unchanged."""
+    v_ineq = jax.nn.relu(v[:m1])
+    v_eq = v[m1:]
+    return jnp.concatenate([v_ineq, v_eq])
+
+
+@partial(jax.jit, static_argnames=['K_max', 'm1', 'return_Gram_representation'])
+def problem_data_to_pdhg_trajectories(stepsizes, c, K, q, l, u, x0, y0, x_opt, y_opt, f_opt,
+                                       K_max, m1, return_Gram_representation=True):
     """
-    Compute PDHG trajectories on a Linear Program with shifted functions.
-    
-    The problem is shifted so the optimal saddle point is at (0, 0).
-    The main loop operates on the shifted variables (x_shifted, y_shifted).
-    
+    Compute PDHG trajectories on shifted LP problem and return Gram representation.
+
+    The shifted problem has optimal saddle point at (x, y) = (0, 0):
+        f1_shifted(x) = c^T (x + x_opt) + indicator_{[l-x_opt, u-x_opt]}(x)
+        h_shifted(y) = -q^T (y + y_opt) + indicator constraints
+
+    The LP matrices K, q, c are NOT shifted - only the variables.
+
+    The Gram representation for PDHG with K iterations has:
+        Gram basis (dimG = 2K + 6):
+            [delta_x0, delta_y0, xs, ys, gf1_0, gh_0, gf1_1, gh_1, ..., gf1_K, gh_K]
+        where:
+            delta_x0 = x_0 - x_s (in shifted coords, x_s = 0)
+            delta_y0 = y_0 - y_s (in shifted coords, y_s = 0)
+            xs, ys = 0 (saddle point in shifted coordinates)
+            gf1_k = subgradient of f1 at x_k
+            gh_k = subgradient of h at y_k
+
+        Function values:
+            F1: (K+2,) [f1(x_0) - f1_s, ..., f1(x_K) - f1_s, 0]
+            F_h: (K+2,) [h(y_0) - h_s, ..., h(y_K) - h_s, 0]
+
+    The primal and dual vectors are embedded into R^{n+m}:
+        - Primal vectors: [v; 0_m]
+        - Dual vectors: [0_n; v]
+
     Args:
-        tau, sigma, theta: Algorithm parameters
-        c, A, b, C, d: LP problem data (min c'x s.t. Ax=b, Cx<=d)
-        x0, y0: Initial points in ORIGINAL coordinates
-        x_opt, y_opt: Optimal points (used for shifting)
-        K_max: Number of iterations
-        return_Gram_representation: If True, returns (G, F). Else returns raw trajectories.
-    
+        stepsizes: Tuple (tau, sigma, theta) where:
+            - tau: Primal step size (scalar or array of K_max)
+            - sigma: Dual step size (scalar or array of K_max)
+            - theta: Extrapolation parameter (scalar or array of K_max)
+        c: (n,) cost vector
+        K: (m, n) constraint matrix [G; A] stacked
+        q: (m,) RHS vector [h; b] stacked
+        l: (n,) lower bounds
+        u: (n,) upper bounds
+        x0: (n,) initial primal point in ORIGINAL coordinates
+        y0: (m,) initial dual point in ORIGINAL coordinates
+        x_opt: (n,) optimal primal point
+        y_opt: (m,) optimal dual point
+        f_opt: Optimal Lagrangian value (c^T x_opt + q^T y_opt - y_opt^T K x_opt)
+        K_max: Number of PDHG iterations
+        m1: Number of inequality constraints (y[:m1] >= 0)
+        return_Gram_representation: If True, return (G, F) Gram representation.
+            Else: raw trajectories
+
     Returns:
-        If return_Gram_representation=True:
-            G: (2K+6, 2K+6) Gram matrix
-            F: (2K+4,) Concatenated function values
-        If return_Gram_representation=False:
-            x_iter: (n, K+1) Shifted primal iterates
-            y_iter: (m, K+1) Shifted dual iterates
-            gf1_iter: (dim_embed, K+1) Shifted f1 gradients
-            gh_iter: (dim_embed, K+1) Shifted h subgradients
-            f1_iter: (K+1,) Shifted f1 values
-            h_iter: (K+1,) Shifted h values
+        If return_Gram_representation:
+            G: (dimG, dimG) Gram matrix where dimG = 2K + 6
+            F: (2K+4,) concatenated function values [F1, F_h]
+        Else:
+            x_iter, y_iter, gf1_iter, gh_iter, f1_iter, fh_iter
     """
-    
+    tau_raw, sigma_raw, theta_raw = stepsizes
     n = c.shape[0]
-    m1 = b.shape[0] if b is not None else 0
-    m2 = d.shape[0] if d is not None else 0
-    m = m1 + m2
-    
-    # Common dimension for Gram embedding
-    dim_embed = jnp.maximum(n, m)
-    
-    # --- 1. Shifted Function Definitions ---
-    
-    # Pre-compute optimal values for valid shifting
-    f1_opt = jnp.dot(c, x_opt)
-    
-    def compute_h_raw(y):
-        # h(y) = <y, rhs> for valid y
-        val = 0.0
-        if m1 > 0: val = val + jnp.dot(y[:m1], b)
-        if m2 > 0: val = val + jnp.dot(y[m1:], d)
-        return val
+    m = K.shape[0]
+    m2 = m - m1  # Number of equality constraints
 
-    h_opt = compute_h_raw(y_opt)
+    # Broadcast step sizes to vectors if scalar
+    tau = jnp.broadcast_to(tau_raw, (K_max,))
+    sigma = jnp.broadcast_to(sigma_raw, (K_max,))
+    theta = jnp.broadcast_to(theta_raw, (K_max,))
 
-    # Shifted Values
-    def f1_shifted(x_s):
-        # f1(x_s + x_opt) - f1_opt = c'(x_s + x_opt) - c'x_opt = c'x_s
-        return jnp.dot(c, x_s)
-    
-    def h_shifted(y_s):
-        # h(y_s + y_opt) - h_opt
-        return compute_h_raw(y_s + y_opt) - h_opt
+    # Shifted box constraints: [l - x_opt, u - x_opt]
+    l_shifted = l - x_opt
+    u_shifted = u - x_opt
 
-    # Shifted Linear Operator Helpers
-    def apply_K(x_s):
-        # K(x_s) - no shift needed for linear operator K acting on difference
-        parts = []
-        if m1 > 0: parts.append(A @ x_s)
-        if m2 > 0: parts.append(C @ x_s)
-        return jnp.concatenate(parts) if parts else jnp.array([])
-
-    def apply_K_T(y_s):
-        # K^T(y_s)
-        res = jnp.zeros(n)
-        if m1 > 0: res = res + A.T @ y_s[:m1]
-        if m2 > 0: res = res + C.T @ y_s[m1:]
-        return res
-
-    # --- 2. Proximal and Gradient Helpers (Shifted) ---
-
-    def prox_f1_step_shifted(x_s, y_s):
-        """
-        Computes x_{k+1}_shifted using current shifted variables.
-        Standard update: x_new = x - tau * (K'y + c)
-        Shifted update:
-            x_new_s + x* = x_s + x* - tau * (K'(y_s + y*) + c)
-            x_new_s = x_s - tau * (K'y_s + (K'y* + c))
-        """
-        # Term (K'y* + c) is the gradient of Lagrangian at optimality (should be 0 for LP subspace)
-        grad_L_x_opt = apply_K_T(y_opt) + c
-        
-        # Update
-        step = apply_K_T(y_s) + grad_L_x_opt
-        return x_s - tau * step
-
-    def prox_h_step_shifted(y_s, x_bar_s):
-        """
-        Computes y_{k+1}_shifted using shifted variables.
-        y_new = prox_{sigma h} (y + sigma K x_bar)
-        """
-        # 1. Recover original intermediate point
-        y_prev_orig = y_s + y_opt
-        x_bar_orig  = x_bar_s + x_opt
-        
-        # Argument to prox
-        Kx_bar = apply_K(x_bar_orig) 
-        v_orig = y_prev_orig + sigma * Kx_bar
-        
-        # 2. Apply Prox (Component-wise)
-        nu_new = jnp.array([])
-        lam_new = jnp.array([])
-        
-        if m1 > 0:
-            # Prox of linear <nu, b>: shift by -sigma*b
-            nu_temp = v_orig[:m1]
-            nu_new = nu_temp - sigma * b
-            
-        if m2 > 0:
-            # Prox of <lam, d> + I(lam>=0): shift by -sigma*d then project
-            lam_temp = v_orig[m1:]
-            lam_new = jnp.maximum(0.0, lam_temp - sigma * d)
-            
-        y_new_orig = jnp.concatenate([nu_new, lam_new])
-        
-        # 3. Shift back
-        return y_new_orig - y_opt
-
-    # --- 3. Padding Helpers ---
-    def pad(v):
-        return jnp.pad(v, (0, dim_embed - v.shape[0]), mode='constant')
-
-    # --- 4. Main Loop ---
-    
-    # Initialize shifted variables
+    # Shifted initial points
     x0_shifted = x0 - x_opt
     y0_shifted = y0 - y_opt
-    
-    # Initial Storage (Step 0)
-    col_x0 = pad(x0_shifted)
-    col_y0 = pad(y0_shifted)
-    
-    # Gradient at 0 
-    gf1_0 = pad(c) 
-    
-    # Subgradient of h at y0: explicit [b; d]
-    rhs_parts = []
-    if m1 > 0: rhs_parts.append(b)
-    if m2 > 0: rhs_parts.append(d)
-    rhs_vec = jnp.concatenate(rhs_parts) if rhs_parts else jnp.zeros(0)
-    gh_0 = pad(rhs_vec)
-    
-    f1_0_val = f1_shifted(x0_shifted)
-    h_0_val  = h_shifted(y0_shifted)
-    
-    # Loop State: (x_s, y_s)
-    init_state = (x0_shifted, y0_shifted)
 
-    def pdhg_scan_step(state, _):
-        x_s, y_s = state
-        
-        # 1. Primal Step (Shifted)
-        x_new_s = prox_f1_step_shifted(x_s, y_s)
-        
-        # Back-calculate Implicit Gradient gf1_{k+1}
-        # x_{k+1} = x_k - tau * K^T y_k - tau * gf1
-        gf1_s = (x_s - x_new_s) / tau - apply_K_T(y_s)
-        
-        # 2. Extrapolation
-        x_bar_s = x_new_s + theta * (x_new_s - x_s)
-        
-        # 3. Dual Step (Shifted)
-        y_new_s = prox_h_step_shifted(y_s, x_bar_s)
-        
-        # Back-calculate Implicit Gradient gh_{k+1}
-        # y_{k+1} = y_k + sigma * K x_bar - sigma * gh
-        gh_s = (y_s + sigma * apply_K(x_bar_s) - y_new_s) / sigma
-        
-        # 4. Values
-        f1_v = f1_shifted(x_new_s)
-        h_v  = h_shifted(y_new_s)
-        
-        # 5. Output tuple (including raw trajectories for else block)
-        # We output everything needed for both Gram construction AND raw return
-        scan_out = (pad(gf1_s), pad(gh_s), f1_v, h_v, x_new_s, y_new_s)
-        
-        return (x_new_s, y_new_s), scan_out
+    # Shifted functions
+    # f1_shifted(x) = c^T (x + x_opt) + indicator_{[l_shifted, u_shifted]}(x)
+    #               = c^T x + c^T x_opt + indicator
+    # At x = 0 (optimal): f1_shifted(0) = c^T x_opt + indicator(0 in [l_s, u_s])
+    #
+    # h_shifted(y) = -q^T (y + y_opt) + indicator_Y(y + y_opt)
+    #              = -q^T y - q^T y_opt + indicator
+    # At y = 0: h_shifted(0) = -q^T y_opt + indicator(y_opt in Y)
 
-    # Run Scan
-    final_state, scan_res = lax.scan(pdhg_scan_step, init_state, None, length=K_max)
-    
-    # Unpack Scan Results
-    gf1_seq, gh_seq, f1_seq, h_seq, x_seq, y_seq = scan_res
-    
-    if return_Gram_representation:
-        # --- Assemble G Matrix ---
-        # Columns: [x0_s, y0_s, xs(=0), ys(=0), gf1_0, gh_0, gf1_1, gh_1, ...]
-        
-        col_xs = jnp.zeros((dim_embed, 1))
-        col_ys = jnp.zeros((dim_embed, 1))
-        
-        fixed_cols = [
-            col_x0.reshape(-1, 1),
-            col_y0.reshape(-1, 1),
-            col_xs, 
-            col_ys,
-            gf1_0.reshape(-1, 1),
-            gh_0.reshape(-1, 1)
-        ]
-        
-        # Stack sequence columns
-        seq_cols_list = []
-        for k in range(K_max):
-            seq_cols_list.append(gf1_seq[k].reshape(-1, 1))
-            seq_cols_list.append(gh_seq[k].reshape(-1, 1))
-            
-        all_cols = jnp.concatenate(fixed_cols + seq_cols_list, axis=1) # (dim, 2K+6)
-        G = all_cols.T @ all_cols # (2K+6, 2K+6)
-        
-        # --- Assemble F Vector ---
-        # F1: [f1(x0), ..., f1(xK), f1(xs)=0]
-        # Fh: [h(y0), ..., h(yK), h(ys)=0]
-        
-        F1 = jnp.concatenate([jnp.array([f1_0_val]), f1_seq, jnp.array([0.0])])
-        Fh = jnp.concatenate([jnp.array([h_0_val]), h_seq, jnp.array([0.0])])
-        
-        F = jnp.concatenate([F1, Fh])
-        
-        return G, F
-        
-    else:
-        # Return all raw trajectories (concatenating step 0 with steps 1..K)
-        
-        # x_iter: (dim, K+1)
-        # Note: x_seq is (K, n), we transpose to (n, K) then concat
-        x_iter = jnp.concatenate([x0_shifted[:, None], x_seq.T], axis=1)
-        y_iter = jnp.concatenate([y0_shifted[:, None], y_seq.T], axis=1)
-        
-        # gf1_iter: (dim_embed, K+1) - using padded versions
-        gf1_iter = jnp.concatenate([gf1_0[:, None], gf1_seq.T], axis=1)
-        gh_iter  = jnp.concatenate([gh_0[:, None],  gh_seq.T],  axis=1)
-        
-        # f1_iter: (K+1,)
-        f1_iter = jnp.concatenate([jnp.array([f1_0_val]), f1_seq])
-        h_iter  = jnp.concatenate([jnp.array([h_0_val]), h_seq])
-        
-        return x_iter, y_iter, gf1_iter, gh_iter, f1_iter, h_iter
+    def f1_shifted(x):
+        """f1(x + x_opt) in shifted coordinates."""
+        return jnp.dot(c, x + x_opt)
+
+    def h_shifted(y):
+        """h(y + y_opt) in shifted coordinates."""
+        return -jnp.dot(q, y + y_opt)
+
+    # Storage for K+1 iterates
+    x_iter = jnp.zeros((n, K_max + 1))
+    y_iter = jnp.zeros((m, K_max + 1))
+    gf1_iter = jnp.zeros((n, K_max + 1))  # subgradients of f1 at x_k
+    gh_iter = jnp.zeros((m, K_max + 1))   # subgradients of h at y_k
+    f1_iter = jnp.zeros(K_max + 1)
+    fh_iter = jnp.zeros(K_max + 1)
+
+    # Initial point
+    x_iter = x_iter.at[:, 0].set(x0_shifted)
+    y_iter = y_iter.at[:, 0].set(y0_shifted)
+    f1_iter = f1_iter.at[0].set(f1_shifted(x0_shifted))
+    fh_iter = fh_iter.at[0].set(h_shifted(y0_shifted))
+
+    # Initial subgradients
+    # gf1_0: subgradient of f1 at x_0 (in shifted coords, x_0 + x_opt is the actual point)
+    # For f1(x) = c^T x + indicator_{[l,u]}(x), a valid subgradient in interior is c
+    # On boundary, we add normal cone. For initial point, we just use c.
+    gf1_iter = gf1_iter.at[:, 0].set(c)
+
+    # gh_0: subgradient of h at y_0
+    # For h(y) = -q^T y + indicator_Y(y), a valid subgradient is -q (in interior)
+    gh_iter = gh_iter.at[:, 0].set(-q)
+
+    x_curr = x0_shifted
+    y_curr = y0_shifted
+
+    def pdhg_step(k, val):
+        x_iter, y_iter, gf1_iter, gh_iter, f1_iter, fh_iter, x_curr, y_curr = val
+
+        tau_k = tau[k]
+        sigma_k = sigma[k]
+        theta_k = theta[k]
+
+        # Primal update: x_{k+1} = proj_{[l_s, u_s]}(x_k - tau * (c - K^T y_k))
+        # In shifted coords with shifted y: y_actual = y_shifted + y_opt
+        # The PDHG update for f1(x) = c^T x + indicator_{[l,u]}(x):
+        #   prox_{τf1}(v) = proj_{[l,u]}(v - τc)
+        # So: x_{k+1} = proj(x_k + τ K^T y_k - τc)  [v = x_k + τ K^T y_k]
+        #
+        # Subgradient formula: gf1 = (v - x_new) / τ where v is input to prox (before -τc)
+        y_actual = y_curr + y_opt
+        v_prox = x_curr + tau_k * (K.T @ y_actual)  # Input to prox (before -τc)
+        v_proj = v_prox - tau_k * c  # Input to projection
+        x_new = proj_box(v_proj, l_shifted, u_shifted)
+
+        # Subgradient of f1 at x_{k+1} from prox optimality
+        # For f1(x) = c^T x + indicator, ∂f1(x) = c + N_{[l,u]}(x)
+        # gf1_{k+1} = (v_prox - x_new) / tau_k ∈ ∂f1(x_new)
+        gf1_new = (v_prox - x_new) / tau_k
+
+        # Extrapolation
+        x_bar = x_new + theta_k * (x_new - x_curr)
+
+        # Dual update: y_{k+1} = proj_Y(y_k + sigma * (q - K x_bar))
+        # In shifted coords: x_bar_actual = x_bar + x_opt
+        v_y = y_curr + sigma_k * (q - K @ (x_bar + x_opt))
+        # Project: y_shifted + y_opt should satisfy constraints
+        # So we project v_y + y_opt to Y, then subtract y_opt
+        y_new_actual = proj_nonneg_first_m1(v_y + y_opt, m1)
+        y_new = y_new_actual - y_opt
+
+        # Subgradient of h at y_{k+1} from projection optimality
+        # gh_{k+1} = -q + normal_cone_element
+        # The normal cone element is (v_y - y_new) / sigma_k for the constrained components
+        normal_cone = (v_y - y_new) / sigma_k
+        gh_new = -q + normal_cone
+
+        # Store
+        x_iter = x_iter.at[:, k + 1].set(x_new)
+        y_iter = y_iter.at[:, k + 1].set(y_new)
+        gf1_iter = gf1_iter.at[:, k + 1].set(gf1_new)
+        gh_iter = gh_iter.at[:, k + 1].set(gh_new)
+        f1_iter = f1_iter.at[k + 1].set(f1_shifted(x_new))
+        fh_iter = fh_iter.at[k + 1].set(h_shifted(y_new))
+
+        return (x_iter, y_iter, gf1_iter, gh_iter, f1_iter, fh_iter, x_new, y_new)
+
+    result = jax.lax.fori_loop(
+        0, K_max, pdhg_step,
+        (x_iter, y_iter, gf1_iter, gh_iter, f1_iter, fh_iter, x_curr, y_curr)
+    )
+    x_iter, y_iter, gf1_iter, gh_iter, f1_iter, fh_iter, _, _ = result
+
+    if not return_Gram_representation:
+        return x_iter, y_iter, gf1_iter, gh_iter, f1_iter, fh_iter
+
+    # Build Gram representation
+    # Gram basis (dimG = 2K + 6):
+    # [delta_x0, delta_y0, xs, ys, gf1_0, gh_0, gf1_1, gh_1, ..., gf1_K, gh_K]
+    #
+    # Embedding: primal vectors as [v; 0_m], dual vectors as [0_n; v]
+
+    embedded_dim = n + m
+    dimG = 2 * K_max + 6
+
+    G_half = jnp.zeros((embedded_dim, dimG))
+
+    # delta_x0 = x_0 - x_s = x_0 (since x_s = 0 in shifted coords)
+    G_half = G_half.at[:n, 0].set(x_iter[:, 0])
+
+    # delta_y0 = y_0 - y_s = y_0
+    G_half = G_half.at[n:, 1].set(y_iter[:, 0])
+
+    # xs = 0 (saddle point in shifted coords) - column 2 is zeros
+    # ys = 0 - column 3 is zeros
+
+    # gf1_k and gh_k for k = 0, 1, ..., K
+    for k in range(K_max + 1):
+        # gf1_k at index 4 + 2*k
+        G_half = G_half.at[:n, 4 + 2 * k].set(gf1_iter[:, k])
+        # gh_k at index 5 + 2*k
+        G_half = G_half.at[n:, 5 + 2 * k].set(gh_iter[:, k])
+
+    G = G_half.T @ G_half
+
+    # Function values
+    # f1_s = f1_shifted(0) = c^T x_opt
+    # h_s = h_shifted(0) = -q^T y_opt
+    f1_s = jnp.dot(c, x_opt)
+    h_s = -jnp.dot(q, y_opt)
+
+    # F1: [f1(x_0) - f1_s, ..., f1(x_K) - f1_s, 0] (K+2 values)
+    F1 = jnp.concatenate([f1_iter - f1_s, jnp.array([0.0])])
+
+    # F_h: [h(y_0) - h_s, ..., h(y_K) - h_s, 0] (K+2 values)
+    F_h = jnp.concatenate([fh_iter - h_s, jnp.array([0.0])])
+
+    # Combined F = [F1, F_h]
+    F = jnp.concatenate([F1, F_h])
+
+    return G, F
+
+
+@partial(jax.jit, static_argnames=['K_max', 'm1'])
+def problem_data_to_pdhg_trajectories_raw(stepsizes, c, K, q, l, u, x0, y0, x_opt, y_opt, f_opt,
+                                           K_max, m1):
+    """
+    Compute raw PDHG trajectories without Gram representation.
+
+    Convenience wrapper that always returns raw trajectories.
+    """
+    return problem_data_to_pdhg_trajectories(
+        stepsizes, c, K, q, l, u, x0, y0, x_opt, y_opt, f_opt,
+        K_max, m1, return_Gram_representation=False
+    )
+
+
+def compute_pdhg_stepsizes_from_K(K_matrix):
+    """
+    Compute default PDHG step sizes from constraint matrix K.
+
+    For convergence, we need tau * sigma * ||K||^2 < 1.
+    We use tau = sigma = 0.9 / ||K||_2.
+
+    Args:
+        K_matrix: (m, n) constraint matrix
+
+    Returns:
+        tau, sigma, theta: Default step sizes
+    """
+    K_norm = jnp.linalg.norm(K_matrix, ord=2)
+    tau = 0.9 / K_norm
+    sigma = 0.9 / K_norm
+    theta = 1.0
+    return tau, sigma, theta
+
+
+def build_lp_matrices(G_ineq, h_ineq, A_eq, b_eq):
+    """
+    Stack inequality and equality constraint matrices for PDHG.
+
+    Args:
+        G_ineq: (m1, n) inequality constraint matrix (Gx >= h)
+        h_ineq: (m1,) inequality RHS
+        A_eq: (m2, n) equality constraint matrix (Ax = b)
+        b_eq: (m2,) equality RHS
+
+    Returns:
+        K: (m1 + m2, n) stacked constraint matrix
+        q: (m1 + m2,) stacked RHS
+        m1: Number of inequality constraints
+    """
+    K = jnp.vstack([G_ineq, A_eq])
+    q = jnp.concatenate([h_ineq, b_eq])
+    m1 = G_ineq.shape[0]
+    return K, q, m1

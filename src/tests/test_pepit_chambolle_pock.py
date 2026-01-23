@@ -1,117 +1,172 @@
+"""
+Comparison tests between custom PEP construction and PEPit for Chambolle-Pock.
+
+These tests verify that our JAX-compatible PEP construction produces the same
+SDP objective values as PEPit's Chambolle-Pock with gap objective.
+"""
+
 import unittest
 import numpy as np
 import jax
 import jax.numpy as jnp
+import cvxpy as cp
 
 jax.config.update('jax_enable_x64', True)
 
-from PEPit import PEP
-from PEPit.functions import SmoothStronglyConvexFunction, ConvexFunction
-from PEPit.primitive_steps import proximal_step
-
-from learning.interpolation_conditions import (
-    smooth_strongly_convex_interp,
-    convex_interp,
+from tests.test_chambolle_pock import wc_chambolle_pock_last_iterate
+from learning.pep_construction_chambolle_pock import (
+    construct_chambolle_pock_pep_data,
+    chambolle_pock_pep_data_to_numpy,
 )
 
-def run_pepit_proximal_gradient(tau, sigma, K):
+
+def solve_chambolle_pock_pep(tau, sigma, theta, M, R, K):
     """
-    Run PEPit's proximal gradient example and return the optimal value.
-    
-    Args:
-        L: Smoothness parameter for f1
-        mu: Strong convexity parameter for f1
-        gamma: Step size
-        n: Number of iterations
+    Solve the PEP for Chambolle-Pock using custom construction.
     
     Returns:
-        pepit_tau: Worst-case value from PEPit
+        optimal_value: The optimal gap objective value
     """
-    # Instantiate PEP
-    problem = PEP()
+    pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K)
+    pep_data_np = chambolle_pock_pep_data_to_numpy(pep_data)
     
-  # Declare a convex and a smooth convex function.
-    func1 = problem.declare_function(ConvexFunction)
-    func2 = problem.declare_function(SmoothStronglyConvexFunction, mu=0.1, L=1)
-    # Define the function to optimize as the sum of func1 and func2
-    func = func1 + func2
-
-    # Start by defining its unique optimal point xs = x_* and its function value fs = F(x_*)
-    xs = func.stationary_point()
-    fs = func(xs)
-
-    # Then define the starting point x0 of the algorithm and its function value f0
-    x0 = problem.set_initial_point()
-
-    # Compute n steps of the Douglas-Rachford splitting starting from x0
-    x = [x0 for _ in range(K)]
-    w = [x0 for _ in range(K + 1)]
-
-    alpha = 1
-    theta = 1
-    for i in range(K):
-        x[i], _, _ = proximal_step(w[i], func2, alpha)
-        y, _, fy = proximal_step(2 * x[i] - w[i], func1, alpha)
-        w[i + 1] = w[i] + theta * (y - x[i])
-
-    # Set the initial constraint that is the distance between x0 and xs = x_*
-    problem.set_initial_condition((x[0] - xs) ** 2 <= 1)
-
-    # Set the performance metric to the final distance to the optimum in function values
-    # problem.set_performance_metric((func2(y) + fy) - fs)
-    problem.set_performance_metric((func2(y) + fy) - fs)
+    (A_obj, b_obj, A_vals, b_vals, c_vals,
+     PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes) = pep_data_np
     
-    # Solve the PEP
-    pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL', verbose=0)
+    dimG = A_obj.shape[0]
+    dimF = b_obj.shape[0]
     
-    return pepit_tau
+    # Variables
+    G = cp.Variable((dimG, dimG), symmetric=True)
+    F = cp.Variable(dimF)
+    
+    constraints = [G >> 0]
+    
+    # Interpolation constraints
+    for i in range(A_vals.shape[0]):
+        constraints.append(cp.trace(A_vals[i] @ G) + b_vals[i] @ F + c_vals[i] <= 0)
+    
+    # Objective
+    objective = cp.trace(A_obj @ G) + b_obj @ F
+    
+    prob = cp.Problem(cp.Maximize(objective), constraints)
+    prob.solve(solver='CLARABEL', verbose=False)
+    
+    return prob.value
 
 
-class TestChambollePackPEPit(unittest.TestCase):
-    """Test Chambolle-Pock algorithm using PEPit with convex functions."""
+class TestChambollePockPEPitComparison(unittest.TestCase):
+    """Tests comparing custom PEP construction with PEPit Chambolle-Pock."""
     
-    def setUp(self):
-        """Set up test parameters."""
-        self.tau = 0.01
-        self.sigma = 0.01
+    def test_gap_objective_n1(self):
+        """Test gap objective with n=1 iteration."""
+        tau = 0.1
+        sigma = 0.1
+        theta = 1.0
+        M = 1.0
+        R = 1.0
+        n = 1
+        
+        # Run PEPit
+        pepit_gap = wc_chambolle_pock_last_iterate(
+            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+        )
+        
+        # Run our implementation
+        custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
+        
+        np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
+            err_msg=f"Mismatch for n={n}: custom={custom_gap}, pepit={pepit_gap}")
     
-    def test_chambolle_pock_K1(self):
-        """Test Chambolle-Pock with K=1 iteration."""
-        result = run_pepit_proximal_gradient(self.tau, self.sigma, K=1)
-        print(f"\nK=1: PEPit result = {result}")
-        # Check if result is finite (not unbounded)
-        if result is not None and np.isfinite(result):
-            self.assertGreaterEqual(result, 0)
-        else:
-            print("  -> Problem may be unbounded")
+    def test_gap_objective_n2(self):
+        """Test gap objective with n=2 iterations."""
+        tau = 0.1
+        sigma = 0.1
+        theta = 1.0
+        M = 1.0
+        R = 1.0
+        n = 2
+        
+        pepit_gap = wc_chambolle_pock_last_iterate(
+            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+        )
+        
+        custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
+        
+        np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
+            err_msg=f"Mismatch for n={n}: custom={custom_gap}, pepit={pepit_gap}")
     
-    def test_chambolle_pock_K2(self):
-        """Test Chambolle-Pock with K=2 iterations."""
-        result = run_pepit_proximal_gradient(self.tau, self.sigma, K=2)
-        print(f"\nK=2: PEPit result = {result}")
-        if result is not None and np.isfinite(result):
-            self.assertGreaterEqual(result, 0)
-        else:
-            print("  -> Problem may be unbounded")
+    def test_gap_objective_n3(self):
+        """Test gap objective with n=3 iterations."""
+        tau = 0.1
+        sigma = 0.1
+        theta = 1.0
+        M = 1.0
+        R = 1.0
+        n = 3
+        
+        pepit_gap = wc_chambolle_pock_last_iterate(
+            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+        )
+        
+        custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
+        
+        np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
+            err_msg=f"Mismatch for n={n}: custom={custom_gap}, pepit={pepit_gap}")
     
-    def test_chambolle_pock_K3(self):
-        """Test Chambolle-Pock with K=3 iterations."""
-        result = run_pepit_proximal_gradient(self.tau, self.sigma, K=3)
-        print(f"\nK=3: PEPit result = {result}")
-        if result is not None and np.isfinite(result):
-            self.assertGreaterEqual(result, 0)
-        else:
-            print("  -> Problem may be unbounded")
+    def test_different_step_sizes(self):
+        """Test with different tau and sigma."""
+        tau = 0.05
+        sigma = 0.2
+        theta = 1.0
+        M = 1.0
+        R = 1.0
+        n = 2
+        
+        pepit_gap = wc_chambolle_pock_last_iterate(
+            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+        )
+        
+        custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
+        
+        np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
+            err_msg=f"Mismatch: custom={custom_gap}, pepit={pepit_gap}")
     
-    def test_chambolle_pock_K5(self):
-        """Test Chambolle-Pock with K=5 iterations."""
-        result = run_pepit_proximal_gradient(self.tau, self.sigma, K=5)
-        print(f"\nK=5: PEPit result = {result}")
-        if result is not None and np.isfinite(result):
-            self.assertGreaterEqual(result, 0)
-        else:
-            print("  -> Problem may be unbounded")
+    def test_larger_M(self):
+        """Test with larger coupling constant M."""
+        tau = 0.01
+        sigma = 0.01
+        theta = 1.0
+        M = 10.0
+        R = 1.0
+        n = 2
+        
+        pepit_gap = wc_chambolle_pock_last_iterate(
+            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+        )
+        
+        custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
+        
+        np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
+            err_msg=f"Mismatch: custom={custom_gap}, pepit={pepit_gap}")
+    
+    def test_gram_matrix_dimension(self):
+        """Verify Gram matrix dimension is 2K + 6."""
+        for K in [1, 2, 3, 5]:
+            tau = 0.1
+            sigma = 0.1
+            theta = 1.0
+            M = 1.0
+            R = 1.0
+            
+            pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K)
+            A_obj = pep_data[0]
+            dimG = A_obj.shape[0]
+            
+            expected_dimG = 2 * K + 6
+            self.assertEqual(dimG, expected_dimG,
+                f"dimG mismatch for K={K}: got {dimG}, expected {expected_dimG}")
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main()
