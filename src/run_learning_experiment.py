@@ -131,24 +131,26 @@ Learn_Quad_params = conditional_product(
 )
 
 Lasso_options = [
-    ['alg=ista', 'alg=fista'],
+    ['alg=ista'],
+    ['N=20'],
     ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0'],
-    ['alpha=0.05', 'alpha=0.1', 'alpha=0.15'],
-    ['K_max=[5,10,15]', 'K_max=[20]'],
+    ['alpha=0.1'],
+    ['sgd_iters=200'],
+    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=10.0'],
+    ['K_max=[10]', 'K_max=[15]'],
 ]
 
 Learn_Lasso_params = conditional_product(
     common_options=Lasso_options,
     conditional_groups=[
-        {
-            'm=300': ['n=200'],
-            'm=200': ['n=300'],
-        },
-        {
-            'stepsize_type=scalar': ['vector_init=fixed'],
-            'stepsize_type=vector': ['vector_init=fixed'],
-        },
+        # {
+        #     'm=300': ['n=200'],
+        #     'm=200': ['n=300'],
+        # },
+        # {
+        #     'stepsize_type=scalar': ['vector_init=fixed'],
+        #     'stepsize_type=vector': ['vector_init=fixed'],
+        # },
     ]
 )
 
@@ -168,7 +170,6 @@ base_dir_map = {
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
-    # exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')

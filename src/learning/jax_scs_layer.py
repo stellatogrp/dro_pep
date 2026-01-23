@@ -26,6 +26,78 @@ import logging
 log = logging.getLogger(__name__)
 
 
+@partial(jax.jit, static_argnames=['precond_type'])
+def compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average'):
+    """Compute preconditioning factors from sample Gram matrices.
+    
+    Computes inverse preconditioning factors used to scale the DRO constraints
+    based on sample statistics. This improves numerical conditioning.
+    
+    This is a JAX-traceable version that can be JIT compiled and differentiated.
+    
+    Args:
+        G_batch: Batch of Gram matrices (N, dimG, dimG)
+        F_batch: Batch of function value vectors (N, dimF)
+        precond_type: Type of preconditioning:
+            - 'average': Use average of sample diagonals (default)
+            - 'max': Use maximum values
+            - 'min': Use minimum values
+            - 'identity': No preconditioning
+    
+    Returns:
+        precond_inv: Tuple (precond_inv_G, precond_inv_F) of inverse preconditioning factors
+            - precond_inv_G: (dimG,) array for Gram matrix scaling
+            - precond_inv_F: (dimF,) array for function value scaling
+    """
+    dimG = G_batch.shape[1]
+    dimF = F_batch.shape[1]
+    
+    if precond_type == 'identity':
+        return (jnp.ones(dimG), jnp.ones(dimF))
+    
+    # Compute sqrt of diagonals of each G matrix: shape (N, dimG)
+    # Use vmap to extract diagonals efficiently
+    G_diags = jax.vmap(jnp.diag)(G_batch)  # (N, dimG)
+    G_diag_sqrt = jnp.sqrt(jnp.maximum(G_diags, 1e-10))  # Avoid sqrt of negative
+    
+    # F_batch is already (N, dimF)
+    F_vals = F_batch
+    
+    if precond_type == 'average':
+        avg_G = jnp.mean(G_diag_sqrt, axis=0)  # (dimG,)
+        avg_F = jnp.mean(F_vals, axis=0)       # (dimF,)
+        precond_G = 1.0 / jnp.maximum(avg_G, 1e-10)
+        precond_F = 1.0 / jnp.sqrt(jnp.maximum(avg_F, 1e-10))
+    elif precond_type == 'max':
+        max_G = jnp.max(G_diag_sqrt, axis=0)
+        max_F = jnp.max(F_vals, axis=0)
+        precond_G = 1.0 / jnp.maximum(max_G, 1e-10)
+        precond_F = 1.0 / jnp.sqrt(jnp.maximum(max_F, 1e-10))
+    elif precond_type == 'min':
+        min_G = jnp.min(G_diag_sqrt, axis=0)
+        min_F = jnp.min(F_vals, axis=0)
+        precond_G = 1.0 / jnp.maximum(min_G, 1e-10)
+        precond_F = 1.0 / jnp.sqrt(jnp.maximum(min_F, 1e-10))
+    else:
+        # This branch won't be traced due to static_argnames, but needed for type checking
+        precond_G = jnp.ones(dimG)
+        precond_F = jnp.ones(dimF)
+    
+    # Apply scaling factors
+    precond_G = precond_G * dimG
+    precond_F = precond_F * jnp.sqrt(dimF)
+    
+    # Handle NaN/inf values by clipping
+    precond_G = jnp.clip(precond_G, 1e-10, 1e10)
+    precond_F = jnp.clip(precond_F, 1e-10, 1e10)
+    
+    # Return inverse preconditioner
+    precond_inv_G = 1.0 / precond_G
+    precond_inv_F = 1.0 / precond_F
+    
+    return (precond_inv_G, precond_inv_F)
+
+
 # =============================================================================
 # MKL Pardiso Detection (for faster linear solves)
 # =============================================================================
@@ -842,7 +914,9 @@ def dro_scs_solve(
     # Sample data
     G_batch, F_batch,
     # Parameters
-    eps, precond_inv,
+    eps,
+    # Preconditioner type
+    precond_type='average',
     # Risk measure selection
     risk_type='expectation',
     alpha=0.1,
@@ -865,6 +939,8 @@ def dro_scs_solve(
     Returns:
         obj_val: Optimal DRO objective value (scalar, differentiable)
     """
+    precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type=precond_type)
+
     if risk_type == 'expectation':
         return dro_expectation_scs_solve(
             A_obj, b_obj, A_vals, b_vals, c_vals,
