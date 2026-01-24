@@ -602,15 +602,31 @@ class TestPDHGInterpolation(unittest.TestCase):
         self.assertTrue(np.all(eigvals >= -1e-10),
             f"G should be PSD, but has eigenvalue {np.min(eigvals)}")
 
-        # Check xs and ys columns are zero (columns 2 and 3)
-        # In shifted coordinates, x_s = 0 and y_s = 0
-        # So G[:, 2] and G[:, 3] should be close to zero
-        # (within numerical precision of inner products)
+        # Columns 2 and 3 represent xs and ys (actual optimal values, not shifted zeros)
+        # The PEP uses symbolic relationship gf1_s = -M * ys, which requires
+        # xs and ys to be the actual optimal values for constraints to work.
+        #
+        # With the modified bilinear form W = [[I, -K^T/M], [-K/M, I]]:
+        # - <xs, xs> = x_opt^T @ x_opt (primal-primal is standard inner product)
+        # - <ys, ys> = y_opt^T @ y_opt (dual-dual is standard inner product)
+        # - <xs, ys> = -x_opt^T K^T y_opt / M (primal-dual uses K coupling)
         G_np = np.array(G)
-        np.testing.assert_allclose(G_np[:, 2], 0, atol=1e-10,
-            err_msg="xs column should be zero")
-        np.testing.assert_allclose(G_np[:, 3], 0, atol=1e-10,
-            err_msg="ys column should be zero")
+
+        # Check that G[2,2] = ||x_opt||^2 (approximately)
+        expected_xs_norm_sq = np.dot(self.x_opt, self.x_opt)
+        np.testing.assert_allclose(G_np[2, 2], expected_xs_norm_sq, rtol=1e-6,
+            err_msg=f"G[2,2] should be ||x_opt||^2 = {expected_xs_norm_sq}")
+
+        # Check that G[3,3] = ||y_opt||^2 (approximately)
+        expected_ys_norm_sq = np.dot(self.y_opt, self.y_opt)
+        np.testing.assert_allclose(G_np[3, 3], expected_ys_norm_sq, rtol=1e-6,
+            err_msg=f"G[3,3] should be ||y_opt||^2 = {expected_ys_norm_sq}")
+
+        # Check cross term: G[2,3] = -x_opt^T K^T y_opt / M
+        M = np.linalg.norm(self.K_mat, ord=2)
+        expected_xs_ys = -np.dot(self.x_opt, self.K_mat.T @ self.y_opt) / M
+        np.testing.assert_allclose(G_np[2, 3], expected_xs_ys, rtol=1e-6,
+            err_msg=f"G[2,3] should be -x_opt^T K^T y_opt / M = {expected_xs_ys}")
 
     def test_f1_interpolation_via_gram(self):
         """Test f1 interpolation using Gram representation and convex_interp."""

@@ -12,12 +12,12 @@ from functools import partial
 from tqdm import trange
 
 from learning.pep_construction_chambolle_pock import (
-    construct_chambolle_pock_pep_data,
+    construct_chambolle_pock_pep_data_decoupled,
     chambolle_pock_pep_data_to_numpy,
 )
 from learning.adam_optimizers import AdamWMin
 from learning.trajectories_pdhg import (
-    problem_data_to_pdhg_trajectories,
+    problem_data_to_pdhg_trajectories_decoupled,
 )
 from learning.jax_scs_layer import dro_scs_solve, compute_preconditioner_from_samples
 
@@ -376,11 +376,16 @@ def build_stepsizes_df_pdlp(all_stepsizes_vals, K_max, is_vector, all_losses=Non
         padded_times = all_times + [np.nan] * (len(all_stepsizes_vals) - len(all_times))
         data['iter_time'] = padded_times
 
-    # Add tau, sigma, theta values
+    # Add tau, sigma, theta values (grouped by parameter type)
     if is_vector:
+        # All taus together
         for k in range(K_max):
             data[f'tau_{k}'] = [float(ss[0][k]) for ss in all_stepsizes_vals]
+        # All sigmas together
+        for k in range(K_max):
             data[f'sigma_{k}'] = [float(ss[1][k]) for ss in all_stepsizes_vals]
+        # All thetas together
+        for k in range(K_max):
             data[f'theta_{k}'] = [float(ss[2][k]) for ss in all_stepsizes_vals]
     else:
         # Scalar case
@@ -492,11 +497,11 @@ def run_sgd_for_K_pdlp(cfg, K_max, key, stepsizes_init, sgd_iters, eta_t,
             make_D_q_vmap = jax.vmap(make_D_q)
             D_batch, q_batch = make_D_q_vmap(Aineq_batch, bineq_batch, Aeq_batch, beq_batch)
 
-            # Compute trajectories for all samples
+            # Compute trajectories for all samples (using decoupled representation)
             def traj_fn_single(c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt):
-                return problem_data_to_pdhg_trajectories(
+                return problem_data_to_pdhg_trajectories_decoupled(
                     stepsizes_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt,
-                    K_max=K_max, m1=m1, return_Gram_representation=True
+                    K_max=K_max, m1=m1, M=M
                 )
 
             batch_GF_fn = jax.vmap(traj_fn_single, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
@@ -505,8 +510,8 @@ def run_sgd_for_K_pdlp(cfg, K_max, key, stepsizes_init, sgd_iters, eta_t,
                 x0_batch, y0_batch, x_opt_batch, y_opt_batch, f_opt_batch
             )
 
-            # Compute PEP constraint matrices (depend on stepsizes)
-            pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max)
+            # Compute PEP constraint matrices (depend on stepsizes) - using decoupled version
+            pep_data = construct_chambolle_pock_pep_data_decoupled(tau, sigma, theta, M, R, K_max)
             A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
 
             return dro_scs_solve(
@@ -767,9 +772,9 @@ def pdlp_run(cfg):
                 # Stack D and q
                 D = jnp.vstack([A_ineq, A_eq])
                 q = jnp.concatenate([b_ineq, b_eq])
-                return problem_data_to_pdhg_trajectories(
+                return problem_data_to_pdhg_trajectories_decoupled(
                     stepsizes_precond_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt,
-                    K_max=cfg.K_max[0], m1=m1, return_Gram_representation=True
+                    K_max=cfg.K_max[0], m1=m1, M=Dnorm_max
                 )
             
             extractor_vmap = jax.vmap(
@@ -841,6 +846,7 @@ def pdlp_run(cfg):
         stepsizes_init = (tau_init, sigma_init, theta_init)
 
         # Run SGD
+        R_max *= 1.2
         run_sgd_for_K_pdlp(
             cfg, K, key,
             stepsizes_init, sgd_iters, eta_t,

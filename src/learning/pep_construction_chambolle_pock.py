@@ -205,10 +205,10 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
 def chambolle_pock_pep_data_to_numpy(pep_data):
     """Convert JAX arrays in Chambolle-Pock pep_data to numpy arrays."""
     import numpy as np
-    
+
     (A_obj, b_obj, A_vals, b_vals, c_vals,
      PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes) = pep_data
-    
+
     return (
         np.asarray(A_obj),
         np.asarray(b_obj),
@@ -220,3 +220,167 @@ def chambolle_pock_pep_data_to_numpy(pep_data):
         [np.asarray(c) for c in PSD_c_vals],
         PSD_shapes
     )
+
+
+@partial(jax.jit, static_argnames=['K_max'])
+def construct_chambolle_pock_pep_data_decoupled(tau, sigma, theta, M, R, K_max):
+    """
+    Construct DECOUPLED PEP constraint matrices for Chambolle-Pock.
+
+    This version separates primal and dual blocks so that interpolation constraints
+    only use same-block inner products. This avoids the fundamental mismatch between
+    abstract PEP (same Hilbert space for x, y) and LP trajectories (x ∈ R^n, y ∈ R^m).
+
+    Args:
+        tau: Primal step size (scalar or vector of length K_max)
+        sigma: Dual step size (scalar or vector of length K_max)
+        theta: Extrapolation parameter (scalar or vector of length K_max)
+        M: Coupling matrix norm (scalar)
+        R: Initial radius bound (||x0 - xs||^2 + ||y0 - ys||^2 <= R^2)
+        K_max: Number of Chambolle-Pock iterations
+
+    Returns:
+        pep_data: Tuple (A_obj, b_obj, A_vals, b_vals, c_vals,
+                        PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
+
+    Representation structure:
+        Gram basis (dimG = 4K + 8):
+            Primal block (2K+4 vectors):
+                [delta_x0, delta_x1, ..., delta_xK, xs, gf1_0, gf1_1, ..., gf1_K, gf1_s]
+            Dual block (2K+4 vectors):
+                [delta_y0, delta_y1, ..., delta_yK, ys, gh_0, gh_1, ..., gh_K, gh_s]
+
+        Function values:
+            dimF1 = K + 2: f1 values at [x_0, x_1, ..., x_K, xs]
+            dimF_h = K + 2: h values at [y_0, y_1, ..., y_K, ys]
+
+    Key property:
+        - f1 interpolation uses only primal-primal inner products
+        - h interpolation uses only dual-dual inner products
+        - Cross-terms only appear in the gap objective
+    """
+    # Dimensions
+    n_points = K_max + 1  # x_0, ..., x_K and y_0, ..., y_K
+    n_points_with_opt = K_max + 2  # includes saddle point
+
+    # Primal block: delta_x0, ..., delta_xK, xs, gf1_0, ..., gf1_K, gf1_s
+    # That's (K+1) delta_x + 1 xs + (K+2) gf1 = 2K + 4 primal vectors
+    dim_primal = 2 * K_max + 4
+    dim_dual = 2 * K_max + 4
+    dimG = dim_primal + dim_dual  # = 4K + 8
+
+    dimF1 = K_max + 2
+    dimF_h = K_max + 2
+
+    eyeG = jnp.eye(dimG)
+    eyeF1 = jnp.eye(dimF1)
+    eyeF_h = jnp.eye(dimF_h)
+
+    # Index helpers for primal block
+    def idx_delta_x(k):
+        """Index of delta_xk = x_k - xs in Gram basis (k = 0, ..., K)."""
+        return k
+
+    idx_xs = K_max + 1  # Index of xs
+
+    def idx_gf1(k):
+        """Index of gf1_k in Gram basis (k = 0, ..., K)."""
+        return K_max + 2 + k
+
+    idx_gf1_s = 2 * K_max + 3  # Index of gf1_s (subgradient at saddle)
+
+    # Index helpers for dual block (offset by dim_primal)
+    def idx_delta_y(k):
+        """Index of delta_yk = y_k - ys in Gram basis (k = 0, ..., K)."""
+        return dim_primal + k
+
+    idx_ys = dim_primal + K_max + 1  # Index of ys
+
+    def idx_gh(k):
+        """Index of gh_k in Gram basis (k = 0, ..., K)."""
+        return dim_primal + K_max + 2 + k
+
+    idx_gh_s = dim_primal + 2 * K_max + 3  # Index of gh_s (subgradient at saddle)
+
+    # Initialize representations for f1 (primal-only) and h (dual-only)
+    repX_f1 = jnp.zeros((n_points_with_opt, dimG))  # x positions relative to xs
+    repG_f1 = jnp.zeros((n_points_with_opt, dimG))  # gf1 subgradients
+    repF_f1 = jnp.zeros((n_points_with_opt, dimF1)) # f1 function values
+
+    repY_h = jnp.zeros((n_points_with_opt, dimG))   # y positions relative to ys
+    repG_h = jnp.zeros((n_points_with_opt, dimG))   # gh subgradients
+    repF_h = jnp.zeros((n_points_with_opt, dimF_h)) # h function values
+
+    # Fill in representations for k = 0, ..., K
+    # For f1 interpolation at x_k:
+    #   - x_k - xs is represented by basis vector e_{delta_xk}
+    #   - gf1_k is represented by basis vector e_{gf1_k}
+    for k in range(n_points):
+        repX_f1 = repX_f1.at[k].set(eyeG[idx_delta_x(k), :])
+        repG_f1 = repG_f1.at[k].set(eyeG[idx_gf1(k), :])
+        repF_f1 = repF_f1.at[k].set(eyeF1[k, :])
+
+        repY_h = repY_h.at[k].set(eyeG[idx_delta_y(k), :])
+        repG_h = repG_h.at[k].set(eyeG[idx_gh(k), :])
+        repF_h = repF_h.at[k].set(eyeF_h[k, :])
+
+    # Saddle point (index n_points = K+1):
+    # x_s - x_s = 0 (zero representation)
+    # gf1_s = -M * ys (from optimality condition)
+    # f1(xs) = 0 (by normalization)
+    repX_f1 = repX_f1.at[n_points].set(jnp.zeros(dimG))
+    repG_f1 = repG_f1.at[n_points].set(-M * eyeG[idx_ys, :])  # gf1_s = -M * ys
+    repF_f1 = repF_f1.at[n_points].set(jnp.zeros(dimF1))
+
+    repY_h = repY_h.at[n_points].set(jnp.zeros(dimG))
+    repG_h = repG_h.at[n_points].set(M * eyeG[idx_xs, :])  # gh_s = M * xs
+    repF_h = repF_h.at[n_points].set(jnp.zeros(dimF_h))
+
+    # Compute interpolation conditions
+    # These only use same-block inner products since:
+    # - repX_f1 and repG_f1 only have non-zero entries in primal indices
+    # - repY_h and repG_h only have non-zero entries in dual indices
+    A_vals_f1, b_vals_f1 = convex_interp(repX_f1, repG_f1, repF_f1, n_points)
+    A_vals_h, b_vals_h = convex_interp(repY_h, repG_h, repF_h, n_points)
+
+    # Combine constraints with F = [F1, F_h]
+    dimF = dimF1 + dimF_h
+
+    b_vals_f1_combined = jnp.concatenate([b_vals_f1, jnp.zeros((b_vals_f1.shape[0], dimF_h))], axis=1)
+    b_vals_h_combined = jnp.concatenate([jnp.zeros((b_vals_h.shape[0], dimF1)), b_vals_h], axis=1)
+
+    A_vals = jnp.concatenate([A_vals_f1, A_vals_h], axis=0)
+    b_vals = jnp.concatenate([b_vals_f1_combined, b_vals_h_combined], axis=0)
+    c_vals = jnp.zeros(A_vals.shape[0])
+
+    # Initial condition: ||x_0 - xs||^2 + ||y_0 - ys||^2 <= R^2
+    delta_x0 = eyeG[idx_delta_x(0), :]
+    delta_y0 = eyeG[idx_delta_y(0), :]
+    A_init = jnp.outer(delta_x0, delta_x0) + jnp.outer(delta_y0, delta_y0)
+    b_init = jnp.zeros(dimF)
+    c_init = -R ** 2
+
+    A_vals = jnp.concatenate([A_vals, A_init[None, :, :]], axis=0)
+    b_vals = jnp.concatenate([b_vals, b_init[None, :]], axis=0)
+    c_vals = jnp.concatenate([c_vals, jnp.array([c_init])], axis=0)
+
+    # Gap objective: gap = (f1(xK) - f1(xs)) + (h(yK) - h(ys)) + M<xK-xs, ys> - M<xs, yK-ys>
+    # The cross-terms M<xK-xs, ys> and M<xs, yK-ys> involve primal-dual inner products
+    delta_xK = eyeG[idx_delta_x(K_max), :]
+    delta_yK = eyeG[idx_delta_y(K_max), :]
+    ys_vec = eyeG[idx_ys, :]
+    xs_vec = eyeG[idx_xs, :]
+
+    # <delta_xK, ys> symmetric outer product
+    A_gap_1 = 0.5 * M * (jnp.outer(delta_xK, ys_vec) + jnp.outer(ys_vec, delta_xK))
+    # -<xs, delta_yK> symmetric outer product
+    A_gap_2 = -0.5 * M * (jnp.outer(xs_vec, delta_yK) + jnp.outer(delta_yK, xs_vec))
+    A_obj = A_gap_1 + A_gap_2
+
+    fK_f1 = repF_f1[K_max, :]
+    fK_h = repF_h[K_max, :]
+    b_obj = jnp.concatenate([fK_f1, fK_h])
+
+    pep_data = (A_obj, b_obj, A_vals, b_vals, c_vals, [], [], [], [])
+
+    return pep_data

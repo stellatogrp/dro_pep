@@ -160,6 +160,20 @@ Learn_Lasso_params = conditional_product(
     ]
 )
 
+PDLP_options = [
+    ['N=20'],
+    ['dro_obj=expectation', 'dro_obj=cvar'],
+    ['alpha=0.1'],
+    ['sgd_iters=200'],
+    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=10.0'],
+    ['K_max=[5]', 'K_max=[10]'],
+]
+
+Learn_PDLP_params = conditional_product(
+    common_options=PDLP_options,
+    conditional_groups=[],
+)
+
 func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
@@ -178,6 +192,8 @@ base_dir_map = {
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
+    print('len of Learn_PDLP_params:', len(Learn_PDLP_params))
+    exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')
@@ -228,6 +244,11 @@ def main():
                 log.error(f'job_idx {job_idx} >= len(Learn_Lasso_params) {len(Learn_Lasso_params)}')
                 exit(1)
             hydra_tags += Learn_Lasso_params[job_idx]
+        if experiment == 'PDLP':
+            if job_idx >= len(Learn_PDLP_params):
+                log.error(f'job_idx {job_idx} >= len(Learn_PDLP_params) {len(Learn_PDLP_params)}')
+                exit(1)
+            hydra_tags += Learn_PDLP_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
     driver()
