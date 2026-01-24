@@ -1,0 +1,58 @@
+n_facilities: 5
+n_customers: 20
+
+fixed_costs:
+  l: 1.0
+  u: 2.0
+
+demands:
+  l: 0.5
+  u: 1.5
+
+transportation_costs:
+  l: 0.1
+  u: 1.0
+
+base_capacity:
+  base: 2.0
+  scaling: 1.5
+
+warmstart: False
+
+learning_framework: 'ldro-pep' # 'ldro-pep' or 'l2o' or 'lpep'
+
+# Step size configuration
+stepsize_type: "vector"  # "scalar" or "vector"
+vector_init: "fixed"     # "fixed" (TODO: add silver-like schedules for PDHG)
+
+# Which step sizes to learn (PDHG has tau, sigma, theta)
+learn_tau: True
+learn_sigma: True
+learn_theta: True  # Often fixed to 1.0
+
+N: 5
+precond_sample_size: 100
+
+# K_max loop inside quad_run (per-K CSV logging)
+# K_max: [5, 10, 15, 20]
+K_max: [5]
+
+sgd_seed: 500
+
+# Optimization hyperparameters
+# pep_obj: "lagrangian_gap" pdlp only uses this
+dro_obj: "expectation"  # "expectation" or "cvar"
+sdp_backend: "diffcp"
+dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'average'
+
+# SGD training parameters
+optimizer_type: "adamw"
+sgd_iters: 1xw0
+eta_t: 1e-3     # learning rate for stepsizes (descent)
+weight_decay: 1e-3  # weight decay for sgd_wd
+
+# Outputs
+output_dir: "learn_dro_outputs"

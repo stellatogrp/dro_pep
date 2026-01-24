@@ -24,7 +24,7 @@ b_noise_std: 1e-2
 z0_type: 'zero'
 
 # Type of learning framework
-learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'l2o'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Algorithm and optimizer type (selected by Slurm job index)
 alg: "ista"            # ista or fista
@@ -35,7 +35,7 @@ vector_init: "fixed" # "fixed", "silver", "geometric", "increasing", "decreasing
 # L2O loss type (ONLY affects learning_framework='l2o', NOT 'ldro-pep')
 # 'final': Standard final iterate loss f(x_K) - f_opt
 # 'cumulative': Sum of losses at all iterates (better gradient diversity)
-l2o_loss_type: "final"
+l2o_loss_type: "cumulative"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]

@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 from learning_experiment_classes.lasso import lasso_run
 from learning_experiment_classes.logreg import logreg_run
+from learning_experiment_classes.pdlp import pdlp_run
 from learning_experiment_classes.quad import quad_run
 from itertools import product
 
@@ -31,6 +32,11 @@ def lasso_driver(cfg):
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='logreg.yaml')
 def logreg_driver(cfg):
     logreg_run(cfg)
+
+
+@hydra.main(version_base='1.2', config_path='configs_learning', config_name='pdlp.yaml')
+def pdlp_driver(cfg):
+    pdlp_run(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='quad.yaml')
@@ -158,12 +164,14 @@ func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
     'LogReg': logreg_driver,
+    'PDLP': pdlp_driver,
 }
 
 base_dir_map = {
     'Quad': 'learn_dro_outputs/Quad',
     'Lasso': 'learn_dro_outputs/Lasso',
     'LogReg': 'learn_dro_outputs/LogReg',
+    'PDLP': 'learn_dro_outputs/PDLP'
 }
 
 
