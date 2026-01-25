@@ -1,7 +1,7 @@
 # Problem parameters
 mu: 1.
 L: 10.
-R: 10.
+R: 20.
 dim: 300
 
 # type of learning framework
@@ -13,7 +13,7 @@ N: 16
 seed: 50
 
 # Algorithm and optimizer type (selected by Slurm job index)
-alg: "nesterov_fgm"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
 optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
 stepsize_type: "vector" # "scalar" or "vector"
 vector_init: "fixed" # "fixed" or "silver"

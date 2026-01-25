@@ -406,7 +406,8 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     # Projection function for stepsizes (ensure nonnegativity)
     def proj_stepsizes(stepsizes):
         """Project stepsizes to be nonnegative using relu."""
-        return [jax.nn.relu(s) for s in stepsizes]
+        # return [jax.nn.relu(s) for s in stepsizes]
+        return [jnp.maximum(s, 1e-6) for s in stepsizes]
     
     # Sample functions
     def sample_batch(key):
