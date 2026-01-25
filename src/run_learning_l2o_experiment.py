@@ -102,14 +102,14 @@ def conditional_product(common_options, conditional_groups):
 
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
-    ['alg=vanilla_gd', 'alg=nesterov_fgm'],
+    ['alg=vanilla_gd'],
+    ['pep_obj=obj_val', 'pep_obj=opt_dist_sq_norm'],
     ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['mu=0', 'mu=1'],
-    ['stepsize_type=scalar', 'stepsize_type=vector'],
     ['alpha=0.1'],
-    ['K_max=[5,10,15,20]'],
-    ['learning_framework=l2o'],
-    ['sgd_iters=100'],
+    ['mu=1'],
+    ['N=20'],
+    ['sgd_iters=500'],
+    ['K_max=[10]', 'K_max=[15]'],
 ]
 
 LogReg_options = [

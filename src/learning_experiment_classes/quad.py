@@ -27,7 +27,7 @@ from learning.cvxpylayers_setup import (
     create_full_dro_cvar_layer,
     create_full_pep_layer,
 )
-from learning.jax_scs_layer import dro_scs_solve
+from learning.jax_scs_layer import dro_scs_solve, wc_pep_scs_solve
 from learning.silver_stepsizes import get_strongly_convex_silver_stepsizes
 from learning.acceleration_stepsizes import (
     jax_get_nesterov_fgm_beta_sequence,
@@ -205,11 +205,105 @@ def full_SCS_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
     return loss
 
 
+@partial(jax.jit, static_argnames=['traj_fn', 'K_max', 'pep_obj', 'loss_type', 'decay_rate'])
+def quad_trajectory_loss(stepsizes, Q, z0, zs, fs, K_max, traj_fn, pep_obj,
+                         loss_type='final', decay_rate=0.9):
+    """
+    Compute loss from GD/FGM trajectory with different loss formulations.
+
+    This function provides multiple loss formulations to address gradient
+    issues in L2O for quadratic problems.
+
+    Args:
+        stepsizes: Step sizes (t,) for GD or (t, beta) for FGM
+        Q: Quadratic matrix
+        z0: Initial point (shifted coordinates, so z0 = 0)
+        zs, fs: Optimal point and value
+        K_max: Number of iterations
+        traj_fn: Trajectory function (GD or FGM)
+        pep_obj: 'obj_val', 'opt_dist_sq_norm', or 'grad_sq_norm'
+        loss_type: Loss formulation type:
+            - 'final': Only final iterate loss (original, may cause uniform gradients)
+            - 'cumulative': Sum of losses at all iterates (gives each t_k influence)
+            - 'weighted': Exponentially weighted sum (emphasizes later iterations)
+            - 'per_step': Loss improvement per step (directly ties t_k to step k)
+            - 'distance_cumulative': Cumulative distance to optimal (often smoother)
+        decay_rate: For 'weighted' loss, the exponential decay rate (0 < decay < 1)
+
+    Returns:
+        Scalar loss value
+    """
+    # Run trajectory
+    traj_result = traj_fn(stepsizes, Q, z0, zs, fs, K_max, return_Gram_representation=False)
+    z_iter = traj_result[0]  # Shape (d, K+1), columns are z_0, ..., z_K in shifted coords
+
+    def compute_metric_at_k(k):
+        """Compute the metric (based on pep_obj) at iterate k."""
+        z_k_shifted = z_iter[:, k]
+        z_k = z_k_shifted + zs
+
+        if pep_obj == 'obj_val':
+            # Objective value: f(z_k) - fs
+            f_zk = 0.5 * jnp.dot(z_k, Q @ z_k)
+            return f_zk - fs
+        elif pep_obj == 'opt_dist_sq_norm':
+            # Squared distance to optimum: ||z_k - zs||^2
+            return jnp.sum(z_k_shifted ** 2)  # z_k_shifted = z_k - zs
+        elif pep_obj == 'grad_sq_norm':
+            # Squared gradient norm: ||∇f(z_k)||^2 = ||Q @ z_k||^2
+            grad = Q @ z_k
+            return jnp.sum(grad ** 2)
+        else:
+            raise ValueError(f"Unknown pep_obj: {pep_obj}")
+
+    if loss_type == 'final':
+        # Original: only final iterate (may cause uniform gradients)
+        return compute_metric_at_k(K_max)
+
+    elif loss_type == 'cumulative':
+        # Sum of losses at all iterates: gives each t_k direct influence
+        # t_k affects z_{k+1}, z_{k+2}, ..., z_K
+        # This creates a "cascade" effect where early t values affect more terms
+        losses = jnp.array([compute_metric_at_k(k) for k in range(1, K_max + 1)])
+        return jnp.mean(losses)
+
+    elif loss_type == 'weighted':
+        # Exponentially weighted: later iterations weighted more
+        # w_k = decay^(K-k), so w_K = 1, w_{K-1} = decay, etc.
+        losses = jnp.array([compute_metric_at_k(k) for k in range(1, K_max + 1)])
+        weights = jnp.array([decay_rate ** (K_max - k) for k in range(1, K_max + 1)])
+        weights = weights / jnp.sum(weights)  # Normalize
+        return jnp.sum(weights * losses)
+
+    elif loss_type == 'per_step':
+        # Loss improvement per step: directly ties t_k to its effect
+        # loss_k = (metric(z_k) - metric(z_{k+1})) measures how much step k improved
+        # We minimize negative improvement (maximize improvement)
+        improvements = []
+        for k in range(K_max):
+            loss_k = compute_metric_at_k(k)
+            loss_kp1 = compute_metric_at_k(k + 1)
+            # Improvement should be positive; we want to maximize it
+            improvements.append(loss_k - loss_kp1)
+        # Return negative mean improvement (so minimizing = maximizing improvement)
+        # Plus final loss to ensure we reach optimum
+        return compute_metric_at_k(K_max) - 0.1 * jnp.mean(jnp.array(improvements))
+
+    elif loss_type == 'distance_cumulative':
+        # Cumulative distance to optimal (always uses opt_dist_sq_norm regardless of pep_obj)
+        dists = jnp.array([jnp.sum(z_iter[:, k] ** 2) for k in range(1, K_max + 1)])
+        return jnp.mean(dists)
+
+    else:
+        raise ValueError(f"Unknown loss_type: {loss_type}")
+
+
 def l2o_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, pep_obj, risk_type, alpha=0.1):
     """Pipeline for learning-to-optimize without DRO SDP.
-    
+
     Computes PEP objectives for each sample in the batch and returns a risk measure.
-    
+    Uses the standard final-iterate loss f(z_K) - fs.
+
     Args:
         stepsizes: Step size parameters (tuple)
         Q_batch: Batch of Q matrices (N, dim, dim)
@@ -221,7 +315,7 @@ def l2o_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_f
         pep_obj: PEP objective type ('obj_val', 'grad_sq_norm', 'opt_dist_sq_norm')
         risk_type: Risk measure type ('expectation' or 'cvar')
         alpha: CVaR confidence level (only used if risk_type='cvar')
-    
+
     Returns:
         Scalar loss value (mean or CVaR of PEP objectives)
     """
@@ -233,7 +327,7 @@ def l2o_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_f
         in_axes=(0, 0, 0, 0)
     )
     pep_objs = batch_pep_obj_func(Q_batch, z0_batch, zs_batch, fs_batch)
-    
+
     if risk_type == 'expectation':
         return jnp.mean(pep_objs)
     elif risk_type == 'cvar':
@@ -243,6 +337,52 @@ def l2o_pipeline(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_f
         k = max(int(np.ceil(alpha * N)), 1)  # Use numpy, not jax (static computation)
         sorted_objs = jnp.sort(pep_objs)[::-1]  # Sort descending
         return jnp.mean(sorted_objs[:k])
+    else:
+        raise ValueError(f"Unknown risk_type: {risk_type}")
+
+
+def l2o_pipeline_v2(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn,
+                    pep_obj, loss_type, risk_type, alpha=0.1, decay_rate=0.9):
+    """
+    Improved L2O pipeline with alternative loss formulations for better gradients.
+
+    This version addresses potential uniform gradient problems by using loss
+    formulations that give each step size t_k more direct influence on the loss.
+
+    Args:
+        stepsizes: Step size parameters (tuple)
+        Q_batch: Batch of Q matrices (N, dim, dim)
+        z0_batch: Batch of initial points (N, dim)
+        zs_batch: Batch of optimal points (N, dim)
+        fs_batch: Batch of optimal function values (N,)
+        K_max: Number of algorithm iterations
+        traj_fn: Trajectory function
+        pep_obj: 'obj_val', 'opt_dist_sq_norm', or 'grad_sq_norm'
+        loss_type: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
+        risk_type: 'expectation' or 'cvar'
+        alpha: CVaR confidence level
+        decay_rate: For 'weighted' loss type
+
+    Returns:
+        Scalar loss value
+    """
+    # vmap over the batch
+    batch_loss_func = jax.vmap(
+        lambda Q, z0, zs, fs: quad_trajectory_loss(
+            stepsizes, Q, z0, zs, fs, K_max, traj_fn, pep_obj,
+            loss_type=loss_type, decay_rate=decay_rate
+        ),
+        in_axes=(0, 0, 0, 0)
+    )
+    losses = batch_loss_func(Q_batch, z0_batch, zs_batch, fs_batch)
+
+    if risk_type == 'expectation':
+        return jnp.mean(losses)
+    elif risk_type == 'cvar':
+        N = losses.shape[0]
+        k = max(int(np.ceil(alpha * N)), 1)
+        sorted_losses = jnp.sort(losses)[::-1]
+        return jnp.mean(sorted_losses[:k])
     else:
         raise ValueError(f"Unknown risk_type: {risk_type}")
 
@@ -542,7 +682,33 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             raise ValueError(f"Unknown dro_canon_backend: {dro_canon_backend}. Must be 'manual_jax' or 'cvxpylayers'.")
         
     elif learning_framework == 'l2o':
-        value_and_grad_fn = jax.value_and_grad(l2o_pipeline, argnums=0)
+        # L2O pipeline: compute PEP objectives directly without DRO SDP
+        # Use improved loss formulation if specified
+        l2o_loss_type = cfg.get('l2o_loss_type', 'final')
+        decay_rate = cfg.get('l2o_decay_rate', 0.9)
+        log.info(f"L2O loss type: {l2o_loss_type}")
+
+        # Determine risk type string
+        risk_type = 'cvar' if cfg.dro_obj == 'cvar' else 'expectation'
+
+        if l2o_loss_type == 'final':
+            # Original loss (only final iterate)
+            def quad_l2o_wrapper(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, pep_obj, dro_obj, alpha):
+                """L2O pipeline wrapper for quadratic problems."""
+                return l2o_pipeline(
+                    stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                    K_max, traj_fn, pep_obj, risk_type, alpha
+                )
+        else:
+            # Use improved loss formulation (cumulative, weighted, per_step, etc.)
+            def quad_l2o_wrapper(stepsizes, Q_batch, z0_batch, zs_batch, fs_batch, K_max, traj_fn, pep_obj, dro_obj, alpha):
+                """L2O pipeline wrapper with improved loss for better gradients."""
+                return l2o_pipeline_v2(
+                    stepsizes, Q_batch, z0_batch, zs_batch, fs_batch,
+                    K_max, traj_fn, pep_obj, l2o_loss_type, risk_type, alpha, decay_rate
+                )
+
+        value_and_grad_fn = jax.value_and_grad(quad_l2o_wrapper, argnums=0)
         full_dro_layer = None  # Not used for l2o
         pep_data_fn = None  # Not used for l2o
     else:
@@ -669,14 +835,14 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
     df.to_csv(csv_path, index=False)
 
 
-def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t, 
+def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
                       mu_val, L_val, R_val, alg, csv_path):
     """
     Run gradient descent for learning PEP (lpep) - no samples, no min-max.
-    
+
     Optimizes step sizes to minimize the standard (worst-case) PEP objective
-    using SCS solver with cvxpylayers for differentiation.
-    
+    using SCS solver with wc_pep_scs_solve for differentiation.
+
     Args:
         cfg: Configuration object
         K_max: Number of algorithm iterations
@@ -688,26 +854,10 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         csv_path: Path to save progress CSV
     """
     log.info(f"=== Running lpep GD for K={K_max} ===")
-    
-    # Validate backend
-    sdp_backend = cfg.get('sdp_backend', 'scs')
-    if sdp_backend != 'scs':
-        raise ValueError(f"Only 'scs' backend is supported for lpep. Got: {sdp_backend}")
-    
-    # Select PEP data construction function based on algorithm
-    if alg == 'vanilla_gd':
-        pep_data_fn = lambda t, mu, L, R, K, pep_obj: construct_gd_pep_data(t, mu, L, R, K, pep_obj)
-    elif alg == 'nesterov_fgm':
-        pep_data_fn = lambda stepsizes, mu, L, R, K, pep_obj: construct_fgm_pep_data(
-            stepsizes[0], stepsizes[1], mu, L, R, K, pep_obj
-        )
-    else:
-        log.error(f"Algorithm '{alg}' is not implemented.")
-        raise ValueError(f"Unknown algorithm: {alg}")
-    
+
     # Initialize stepsizes based on algorithm and stepsize_type
     is_vector_t = cfg.stepsize_type == 'vector'
-    
+
     if alg == 'vanilla_gd':
         # Just step size t
         if is_vector_t:
@@ -729,51 +879,33 @@ def run_gd_for_K_lpep(cfg, K_max, t_init, gd_iters, eta_t,
         beta_init = jax_get_nesterov_fgm_beta_sequence(mu_val, L_val, K_max)
         stepsizes = [t, beta_init]
         has_beta = True
-    
+    else:
+        log.error(f"Algorithm '{alg}' is not implemented.")
+        raise ValueError(f"Unknown algorithm: {alg}")
+
     # Track step size values for logging
     all_stepsizes_vals = [tuple(stepsizes)]
     all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
-    
-    # Create SCS-based PEP layer
-    # Get problem dimensions from initial PEP data
-    if alg == 'vanilla_gd':
-        t = stepsizes[0]
-        pep_data = construct_gd_pep_data(t, mu_val, L_val, R_val, K_max, cfg.pep_obj)
-    else:
-        t, beta = stepsizes[0], stepsizes[1]
-        pep_data = construct_fgm_pep_data(t, beta, mu_val, L_val, R_val, K_max, cfg.pep_obj)
-    
-    A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
-    M = A_vals.shape[0]
-    mat_shape = (A_obj.shape[0], A_obj.shape[1])
-    vec_shape = (b_obj.shape[0],)
-    pep_layer = create_full_pep_layer(M, mat_shape, vec_shape)
-    log.info(f"Using SCS backend for lpep (M={M}, mat_shape={mat_shape}, vec_shape={vec_shape})")
-    
+
+    log.info(f"Using wc_pep_scs_solve for lpep optimization")
+
     # Define the PEP loss function (differentiable w.r.t. stepsizes)
     def pep_loss_fn(stepsizes_list):
-        """Compute PEP worst-case bound for given stepsizes."""
+        """Compute PEP worst-case bound for given stepsizes using wc_pep_scs_solve."""
         if alg == 'vanilla_gd':
             t = stepsizes_list[0]
             pep_data = construct_gd_pep_data(t, mu_val, L_val, R_val, K_max, cfg.pep_obj)
         else:  # nesterov_fgm
             t, beta = stepsizes_list[0], stepsizes_list[1]
             pep_data = construct_fgm_pep_data(t, beta, mu_val, L_val, R_val, K_max, cfg.pep_obj)
-        
-        A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data
-        
-        # Use cvxpylayers with SCS
-        M = A_vals.shape[0]
-        params_list = (
-            [A_vals[m] for m in range(M)] +
-            [b_vals[m] for m in range(M)] +
-            [c_vals, A_obj, b_obj]
-        )
-        (G_opt, F_opt) = pep_layer(*params_list)
-        # Compute objective: trace(A_obj @ G) + b_obj^T @ F
-        loss = jnp.trace(A_obj @ G_opt) + jnp.dot(b_obj, F_opt)
+
+        A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+
+        # Call wc_pep_scs_solve with PEP data
+        # JAX autodiff will automatically differentiate through this
+        loss = wc_pep_scs_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
         return loss
-    
+
     # Create value and gradient function
     value_and_grad_fn = jax.value_and_grad(pep_loss_fn)
     
