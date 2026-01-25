@@ -41,7 +41,7 @@ learn_beta: True  # True or False depending on if beta is learnable or not
 # SGD training parameters
 sgd_iters: 100
 eta_t: 1e-3     # learning rate for stepsizes (descent)
-weight_decay: 1e-2  # weight decay for sgd_wd
+weight_decay: 1e-3  # weight decay for sgd_wd
 
 # MOSEK solver tolerances
 mosek_tol_dfeas: 1e-2

@@ -747,7 +747,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             lr=eta_t,
             betas=(0.9, 0.999),
             eps=1e-8,
-            weight_decay=0.01,
+            weight_decay=cfg.weight_decay,
             update_mask=update_mask,
         )
     
