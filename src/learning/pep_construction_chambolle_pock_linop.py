@@ -267,3 +267,23 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
 
     return (A_obj, b_obj, A_vals, b_vals, c_vals,
             PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
+
+
+def chambolle_pock_pep_data_to_numpy(pep_data):
+    """Convert JAX arrays in Chambolle-Pock pep_data to numpy arrays."""
+    import numpy as np
+
+    (A_obj, b_obj, A_vals, b_vals, c_vals,
+     PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes) = pep_data
+
+    return (
+        np.asarray(A_obj),
+        np.asarray(b_obj),
+        np.asarray(A_vals),
+        np.asarray(b_vals),
+        np.asarray(c_vals),
+        [np.asarray(a) for a in PSD_A_vals],
+        [np.asarray(b) for b in PSD_b_vals],
+        [np.asarray(c) for c in PSD_c_vals],
+        PSD_shapes
+    )
