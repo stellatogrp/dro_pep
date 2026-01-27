@@ -144,19 +144,11 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     A_vals = jnp.concatenate([A_vals, A_zero], axis=0)
     b_vals = jnp.concatenate([b_vals, b_zero], axis=0)
     c_vals = jnp.concatenate([c_vals, c_zero], axis=0)
-    
-    # [CRITICAL FIX] Bound the solution magnitude.
-    # Without this, the solver can scale x* and y* to infinity to exploit cross-terms.
-    # ||x_*||^2 + ||y_*||^2 <= B^2 (where B=1 matches R=1)
-    vec_xs = eyeG[idx_xs]
-    vec_ys = eyeG[idx_ys]
-    A_sol_bound = jnp.outer(vec_xs, vec_xs) + jnp.outer(vec_ys, vec_ys)
-    b_sol_bound = jnp.zeros(dimF)
-    c_sol_bound = -1.0 # B^2 = 1.0
-    
-    A_vals = jnp.concatenate([A_vals, A_sol_bound[None]], axis=0)
-    b_vals = jnp.concatenate([b_vals, b_sol_bound[None]], axis=0)
-    c_vals = jnp.concatenate([c_vals, jnp.array([c_sol_bound])], axis=0)
+
+    # NOTE: Solution bound ||x_s||^2 + ||y_s||^2 <= 1 removed.
+    # PEPit doesn't require this - the KKT operator pairs are sufficient to pin down
+    # the saddle point. This constraint only works with shifted coordinates (xs=0, ys=0)
+    # and fails when xs=x_opt, ys=y_opt in original coordinates.
 
     # 6. Gather Operator Pairs
     # Optimality Conditions
