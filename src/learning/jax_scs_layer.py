@@ -22,6 +22,7 @@ import jax.numpy as jnp
 from functools import partial
 import scipy.sparse as spa
 import logging
+import math
 
 log = logging.getLogger(__name__)
 
@@ -294,20 +295,32 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             c_arr = np.asarray(c_np)
             A_csc = spa.csc_matrix(A_arr)
             try:
-                x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
+                # Use solve_and_derivative_internal to get solver status
+                result = diffcp.solve_and_derivative_internal(
                     A_csc, b_arr, c_arr,
                     static_data.diffcp_cone_dict,
                     solve_method='CLARABEL',
                     direct_solve_method=get_direct_solve_method(),
                     verbose=False,
                 )
-                # x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
-                #     A_csc, b_arr, c_arr,
-                #     static_data.diffcp_cone_dict,
-                #     solve_method='SCS',
-                #     verbose=False,
-                # )
+                x = result["x"]
+                y = result["y"]
+                s = result["s"]
+                adjoint_deriv = result["DT"]
+                status = result["info"]["status"]
+
+                # Log solver diagnostics
                 obj = c_arr @ x
+                log.info(f"[Forward] Solver status: {status}")
+                log.info(f"[Forward] Primal objective: {obj:.6e}")
+                log.info(f"[Forward] ||x||: {np.linalg.norm(x):.6e}, ||y||: {np.linalg.norm(y):.6e}, ||s||: {np.linalg.norm(s):.6e}")
+                if "iter" in result["info"]:
+                    log.info(f"[Forward] Iterations: {result['info']['iter']}")
+
+                # Warn if not solved optimally
+                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
+                    log.warning(f"[Forward] Problem not solved optimally! Status: {status}")
+
                 # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
                 _adjoint_cache['valid'] = True
@@ -316,7 +329,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 x = np.zeros(c_arr.shape[0])
                 obj = np.nan
                 _adjoint_cache['valid'] = False
-            
+
             return np.array([obj])
         
         result_shapes = jax.ShapeDtypeStruct((1,), jnp.float64)
@@ -333,20 +346,32 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             c_arr = np.asarray(c_np)
             A_csc = spa.csc_matrix(A_arr)
             try:
-                x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
+                # Use solve_and_derivative_internal to get solver status
+                result = diffcp.solve_and_derivative_internal(
                     A_csc, b_arr, c_arr,
                     static_data.diffcp_cone_dict,
                     solve_method='CLARABEL',
                     direct_solve_method=get_direct_solve_method(),
                     verbose=False,
                 )
-                # x, y, s, _, adjoint_deriv = diffcp.solve_and_derivative(
-                #     A_csc, b_arr, c_arr,
-                #     static_data.diffcp_cone_dict,
-                #     solve_method='SCS',
-                #     verbose=False,
-                # )
+                x = result["x"]
+                y = result["y"]
+                s = result["s"]
+                adjoint_deriv = result["DT"]
+                status = result["info"]["status"]
+
+                # Log solver diagnostics
                 obj = c_arr @ x
+                log.info(f"[VJP Forward] Solver status: {status}")
+                log.info(f"[VJP Forward] Primal objective: {obj:.6e}")
+                log.info(f"[VJP Forward] ||x||: {np.linalg.norm(x):.6e}, ||y||: {np.linalg.norm(y):.6e}, ||s||: {np.linalg.norm(s):.6e}")
+                if "iter" in result["info"]:
+                    log.info(f"[VJP Forward] Iterations: {result['info']['iter']}")
+
+                # Warn if not solved optimally
+                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
+                    log.warning(f"[VJP Forward] Problem not solved optimally! Status: {status}")
+
                 # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
                 _adjoint_cache['x'] = x
@@ -361,7 +386,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 s = np.zeros(b_arr.shape[0])
                 obj = np.nan
                 _adjoint_cache['valid'] = False
-            
+
             return (
                 np.array([obj]),
                 x, y, s
@@ -441,6 +466,68 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
 
 
 # =============================================================================
+# Helper Function for PSD Constraint C and d Construction
+# =============================================================================
+
+def compute_C_d_matrices(PSD_A_vals, PSD_b_vals, PSD_mat_dims):
+    """
+    Compute C_symvecs and d_vecs from PSD constraint data using SCS vectorization.
+
+    This function iterates over the triangular elements of each H matrix and:
+    - For each element (r,c), extracts PSD_A_vals[m_psd][r, c] (an S_mat x S_mat matrix)
+    - Vectorizes it using jax_scs_symm_vectorize (handles SCS lower-triangle ordering)
+    - Applies factor of 2 for off-diagonal elements of H
+
+    Args:
+        PSD_A_vals: List of (dim, dim, S_mat, S_mat) arrays - PSD constraint LHS coefficients
+        PSD_b_vals: List of (dim, dim, V) arrays - PSD constraint RHS coefficients
+        PSD_mat_dims: (M_psd,) - Dimensions of each H matrix
+
+    Returns:
+        C_symvecs: List of (S_vec, H_vec) matrices for PSD constraint modification
+        d_vecs: List of (V, H_vec) matrices for equality constraint modification
+        H_vec_dims: List of H vectorized dimensions (Python ints)
+        PSD_mat_dims_list: List of PSD matrix dimensions (Python ints)
+    """
+    M_psd = len(PSD_A_vals)
+
+    C_symvecs_list = []
+    d_vecs_list = []
+    H_vec_dims = []
+    PSD_mat_dims_list = []
+
+    for m_psd in range(M_psd):
+        dim = int(PSD_mat_dims[m_psd])  # Convert to concrete int
+        H_vec = dim * (dim + 1) // 2
+        H_vec_dims.append(H_vec)
+        PSD_mat_dims_list.append(dim)
+
+        # Use existing SCS helper to get triangle indices (handles ordering correctly)
+        rows, cols = get_scs_lower_tri_indices(dim)
+
+        curr_C_list = []
+        curr_d_list = []
+
+        # Iterate over triangular elements of H matrix
+        # For each (r, c), extract the corresponding (S_mat, S_mat) matrix and vectorize it
+        for r, c in zip(rows, cols):
+            if r == c:
+                # Diagonal element of H: factor of 1
+                curr_C_list.append(jax_scs_symm_vectorize(PSD_A_vals[m_psd][r, c], jnp.sqrt(2.0)))
+                curr_d_list.append(PSD_b_vals[m_psd][r, c])
+            else:
+                # Off-diagonal element of H: factor of 2
+                curr_C_list.append(2.0 * jax_scs_symm_vectorize(PSD_A_vals[m_psd][r, c], jnp.sqrt(2.0)))
+                curr_d_list.append(2.0 * PSD_b_vals[m_psd][r, c])
+
+        # Stack into matrices: each column corresponds to one H element
+        C_symvecs_list.append(jnp.stack(curr_C_list, axis=0).T)  # (S_vec, H_vec)
+        d_vecs_list.append(jnp.stack(curr_d_list, axis=0).T)      # (V, H_vec)
+
+    return C_symvecs_list, d_vecs_list, H_vec_dims, PSD_mat_dims_list
+
+
+# =============================================================================
 # Pure JAX Canonicalization Function (JIT-compatible)
 # =============================================================================
 
@@ -452,6 +539,13 @@ def jax_scs_canonicalize_dro_expectation(
     G_batch, F_batch,
     # Parameters
     eps, precond_inv,
+    # PSD constraint data
+    PSD_A_vals=None,
+    PSD_b_vals=None,
+    PSD_mat_dims=None,
+    C_symvecs=None,
+    d_vecs=None,
+    H_vec_dims=None,
 ):
     """
     Pure JAX canonicalization of DRO expectation problem to SCS form.
@@ -474,17 +568,40 @@ def jax_scs_canonicalize_dro_expectation(
     S_mat = A_obj.shape[0]
     V = b_obj.shape[0]
     S_vec = S_mat * (S_mat + 1) // 2
-    
+
+    # Handle PSD constraint dimensions
+    if PSD_A_vals is None or C_symvecs is None:
+        M_psd = 0
+        H_vec_sum = 0
+        H_vec_dims_local = []
+        PSD_mat_dims_local = []
+    else:
+        M_psd = len(C_symvecs)
+        # Extract H_vec_dims from the shapes of C_symvecs (shape is (S_vec, H_vec))
+        H_vec_dims_local = [int(C_symvecs[m].shape[1]) for m in range(M_psd)]
+        H_vec_sum = sum(H_vec_dims_local)
+        # PSD_mat_dims should already be a list of Python ints from compute_C_d_matrices
+        PSD_mat_dims_local = PSD_mat_dims if PSD_mat_dims is not None else []
+
     # Decision variable dimension
-    # x = [lambda, s_1..s_N, y_1..y_NM, Fz_1..Fz_NV, Gz_1..Gz_N*S_vec]
-    x_dim = 1 + N * (1 + M + V + S_vec)
-    
+    # x = [lambda, s_1..s_N, y_1..y_NM, Fz_1..Fz_NV, Gz_1..Gz_N*S_vec, H_1..H_N*H_vec_sum]
+    x_dim = 1 + N * (1 + M + V + S_vec + H_vec_sum)
+
     # Index offsets
     lambd_idx = 0
     s_start = 1
     y_start = s_start + N
     Fz_start = y_start + N * M
     Gz_start = Fz_start + N * V
+    H_start = Gz_start + N * S_vec
+
+    # H indexing: H[m_psd][i][j] = H_start + sum(H_vec_dims[:m_psd])*N + i*H_vec_dims[m_psd] + j
+    H_rel_offsets = [0]
+    for m_psd_idx in range(M_psd):
+        H_rel_offsets.append(H_rel_offsets[-1] + N * H_vec_dims_local[m_psd_idx])
+
+    def H_idx(m_psd, i, j):
+        return H_start + H_rel_offsets[m_psd] + i * H_vec_dims_local[m_psd] + j
     
     # Build objective vector c (minimize lambda*eps + (1/N) sum s_i)
     c_obj = jnp.zeros(x_dim)
@@ -532,20 +649,34 @@ def jax_scs_canonicalize_dro_expectation(
     y_nonneg = y_nonneg.at[:, y_start:y_start + N * M].set(-jnp.eye(N * M))
     y_nonneg_b = jnp.zeros(N * M)
     
-    # 3. Equality constraints (N*V rows): -B^T y_i + Fz_i = -b_obj
+    # 3. Equality constraints (N*V rows): -B^T y_i + Fz_i + sum_m_psd d_vecs[m_psd] @ H[m_psd][i] = -b_obj
     Bm_T = b_vals.T  # (V, M)
     eq_rows = jnp.zeros((N * V, x_dim))
     for i in range(N):
         eq_rows = eq_rows.at[i * V:(i + 1) * V, y_start + i * M:y_start + (i + 1) * M].set(-Bm_T)
         eq_rows = eq_rows.at[i * V:(i + 1) * V, Fz_start + i * V:Fz_start + (i + 1) * V].set(jnp.eye(V))
+
+        # Add H contribution: sum_m_psd d_vecs[m_psd] @ H[m_psd][i]
+        for m_psd in range(M_psd):
+            H_start_idx = H_idx(m_psd, i, 0)
+            H_end_idx = H_idx(m_psd, i, H_vec_dims_local[m_psd])
+            eq_rows = eq_rows.at[i * V:(i + 1) * V, H_start_idx:H_end_idx].set(d_vecs[m_psd])
+
     eq_b = jnp.tile(-b_obj, N)
     
-    # 4. PSD constraints (N*S_vec rows): -A^* y_i + Gz_i << -A_obj
+    # 4. PSD constraints (N*S_vec rows): -A^* y_i + Gz_i + sum_m_psd C_symvecs[m_psd] @ H[m_psd][i] << -A_obj
     Am_T = A_vals_svec.T  # (S_vec, M)
     psd_rows = jnp.zeros((N * S_vec, x_dim))
     for i in range(N):
         psd_rows = psd_rows.at[i * S_vec:(i + 1) * S_vec, y_start + i * M:y_start + (i + 1) * M].set(-Am_T)
         psd_rows = psd_rows.at[i * S_vec:(i + 1) * S_vec, Gz_start + i * S_vec:Gz_start + (i + 1) * S_vec].set(scaledI)
+
+        # Add H contribution: sum_m_psd C_symvecs[m_psd] @ H[m_psd][i]
+        for m_psd in range(M_psd):
+            H_start_idx = H_idx(m_psd, i, 0)
+            H_end_idx = H_idx(m_psd, i, H_vec_dims_local[m_psd])
+            psd_rows = psd_rows.at[i * S_vec:(i + 1) * S_vec, H_start_idx:H_end_idx].set(C_symvecs[m_psd])
+
     psd_b = jnp.tile(-A_obj_svec, N)
     
     # 5. SOCP constraints (N*(1+V+S_vec) rows): || [Gz_i, Fz_i] ||_precond <= lambda
@@ -555,13 +686,32 @@ def jax_scs_canonicalize_dro_expectation(
         # -lambda coefficient
         socp_rows = socp_rows.at[i * socp_dim, lambd_idx].set(-1.0)
         # -diag(F_precond_sq) @ Fz_i
-        socp_rows = socp_rows.at[i * socp_dim + 1:i * socp_dim + 1 + V, 
+        socp_rows = socp_rows.at[i * socp_dim + 1:i * socp_dim + 1 + V,
                                   Fz_start + i * V:Fz_start + (i + 1) * V].set(-jnp.diag(F_precond_sq))
         # -scaledG_mult @ Gz_i
         socp_rows = socp_rows.at[i * socp_dim + 1 + V:(i + 1) * socp_dim,
                                   Gz_start + i * S_vec:Gz_start + (i + 1) * S_vec].set(-scaledG_mult)
     socp_b = jnp.zeros(N * socp_dim)
-    
+
+    # 6. H >> 0 constraints (N*H_vec_sum rows total)
+    H_psd_rows_list = []
+    for m_psd in range(M_psd):
+        H_vec = H_vec_dims_local[m_psd]
+        # Derive H_mat from H_vec using H_vec = H_mat * (H_mat + 1) / 2
+        # H_mat = (-1 + sqrt(1 + 8*H_vec)) / 2
+        H_mat = int((-1 + math.sqrt(1 + 8*H_vec)) / 2)
+        scaledI_H = jax_scs_scaled_off_triangles(jnp.ones((H_mat, H_mat)), jnp.sqrt(2.0))
+
+        for i in range(N):
+            H_psd_row = jnp.zeros((H_vec, x_dim))
+            H_start_idx = H_idx(m_psd, i, 0)
+            H_end_idx = H_idx(m_psd, i, H_vec)
+            H_psd_row = H_psd_row.at[:, H_start_idx:H_end_idx].set(-scaledI_H)
+            H_psd_rows_list.append(H_psd_row)
+
+    H_psd_rows = jnp.vstack(H_psd_rows_list) if H_psd_rows_list else jnp.zeros((0, x_dim))
+    H_psd_b = jnp.zeros(sum([N * H_vec_dims_local[m] for m in range(M_psd)]))
+
     # =========================================================================
     # Combine all blocks
     # SCS cone ordering: zero (z), nonneg (l), SOC (q), PSD (s)
@@ -571,15 +721,17 @@ def jax_scs_canonicalize_dro_expectation(
         epi_rows,      # N rows (nonneg)
         y_nonneg,      # N*M rows (nonneg)
         socp_rows,     # N*socp_dim rows (SOC)
-        psd_rows,      # N*S_vec rows (PSD)
+        psd_rows,      # N*S_vec rows (PSD for Gz)
+        H_psd_rows,    # Sum_m (N*H_vec_dims[m]) rows (PSD for H)
     ])
-    
+
     b = jnp.concatenate([
         eq_b,
         epi_b,
         y_nonneg_b,
         socp_b,
         psd_b,
+        H_psd_b,
     ])
     
     # Cone info for SCS
@@ -588,14 +740,16 @@ def jax_scs_canonicalize_dro_expectation(
         'z': N * V,           # Equality constraints (first)
         'l': N + N * M,       # Epigraph + y >= 0 (second)
         'q': [socp_dim] * N,  # SOC cones (third)
-        's': [S_mat] * N,     # PSD cones (fourth)
+        's': [S_mat] * N if PSD_A_vals is None else [S_mat] * N + sum([[PSD_mat_dims_local[m]] * N for m in range(M_psd)], []),
         'N': N,
         'M': M,
         'V': V,
         'S_mat': S_mat,
         'S_vec': S_vec,
+        'M_psd': M_psd,
+        'H_vec_dims': H_vec_dims_local,
     }
-    
+
     return A_dense, b, c_obj, x_dim, cone_info
 
 
@@ -611,6 +765,13 @@ def jax_scs_canonicalize_dro_cvar(
     G_batch, F_batch,
     # Parameters
     eps, alpha, precond_inv,
+    # PSD constraint data
+    PSD_A_vals=None,
+    PSD_b_vals=None,
+    PSD_mat_dims=None,
+    C_symvecs=None,
+    d_vecs=None,
+    H_vec_dims=None,
 ):
     """
     Pure JAX canonicalization of DRO CVaR problem to SCS form.
@@ -631,32 +792,46 @@ def jax_scs_canonicalize_dro_cvar(
         cone_info: Dict with cone dimensions for SCS
     """
     alpha_inv = 1.0 / alpha
-    
+
     N = G_batch.shape[0]
     M = A_vals.shape[0]  # Number of interpolation constraints
     V = b_obj.shape[0]  # Dimension of Fz
     S_mat = A_obj.shape[0]  # Dimension of main PSD constraint
     S_vec = S_mat * (S_mat + 1) // 2
-    
+
+    # Handle PSD constraint dimensions
+    if PSD_A_vals is None or C_symvecs is None:
+        M_psd = 0
+        H_vec_sum = 0
+        H_vec_dims_local = []
+        PSD_mat_dims_local = []
+    else:
+        M_psd = len(C_symvecs)
+        # Extract H_vec_dims from the shapes of C_symvecs (shape is (S_vec, H_vec))
+        H_vec_dims_local = [int(C_symvecs[m].shape[1]) for m in range(M_psd)]
+        H_vec_sum = sum(H_vec_dims_local)
+        # PSD_mat_dims should already be a list of Python ints from compute_C_d_matrices
+        PSD_mat_dims_local = PSD_mat_dims if PSD_mat_dims is not None else []
+
     # Process PEP matrices using SCS format (lower triangle column-major)
     A_obj_svec = jax_scs_symm_vectorize(A_obj, jnp.sqrt(2.0))  # (S_vec,)
     A_vals_svec = jax.vmap(lambda A: jax_scs_symm_vectorize(A, jnp.sqrt(2.0)))(A_vals)  # (M, S_vec)
     Bm_T = b_vals.T  # (V, M)
-    
+
     # Process sample matrices to vectors
     G_batch_svec = jax.vmap(lambda G: jax_scs_symm_vectorize(G, 2.0))(G_batch)  # (N, S_vec)
-    
+
     # Preconditioner
     G_precond_vec, F_precond = precond_inv
     F_precond_sq = F_precond ** 2
     scaled_G_vec_outer = jnp.outer(G_precond_vec, G_precond_vec)
     scaledG_mult = jax_scs_scaled_off_triangles(scaled_G_vec_outer, jnp.sqrt(2.0))  # (S_vec, S_vec)
     scaledI = jax_scs_scaled_off_triangles(jnp.ones((S_mat, S_mat)), jnp.sqrt(2.0))  # (S_vec, S_vec)
-    
+
     # Decision variable dimension
-    # x = [lambda, t, s_1..s_N, y1_1..y1_NM, y2_1..y2_NM, Fz1_1..Fz1_NV, Fz2_1..Fz2_NV, Gz1_1..Gz1_NS, Gz2_1..Gz2_NS]
-    x_dim = 2 + N * (1 + 2 * (M + V + S_vec))
-    
+    # x = [lambda, t, s_1..s_N, y1_1..y1_NM, y2_1..y2_NM, Fz1_1..Fz1_NV, Fz2_1..Fz2_NV, Gz1_1..Gz1_NS, Gz2_1..Gz2_NS, H1_1..H1_NS, H2_1..H2_NS]
+    x_dim = 2 + N * (1 + 2 * (M + V + S_vec + H_vec_sum))
+
     # Index helpers
     lambd_idx = 0
     t_idx = 1
@@ -667,6 +842,21 @@ def jax_scs_canonicalize_dro_cvar(
     Fz2_start = Fz1_start + N * V
     Gz1_start = Fz2_start + N * V
     Gz2_start = Gz1_start + N * S_vec
+    H1_start = Gz2_start + N * S_vec
+    H2_start = H1_start + N * H_vec_sum
+
+    # H indexing: H1[m_psd][i][j] and H2[m_psd][i][j]
+    H1_rel_offsets = [0]
+    H2_rel_offsets = [0]
+    for m_psd_idx in range(M_psd):
+        H1_rel_offsets.append(H1_rel_offsets[-1] + N * H_vec_dims_local[m_psd_idx])
+        H2_rel_offsets.append(H2_rel_offsets[-1] + N * H_vec_dims_local[m_psd_idx])
+
+    def H1_idx(m_psd, i, j):
+        return H1_start + H1_rel_offsets[m_psd] + i * H_vec_dims_local[m_psd] + j
+
+    def H2_idx(m_psd, i, j):
+        return H2_start + H2_rel_offsets[m_psd] + i * H_vec_dims_local[m_psd] + j
     
     # Build objective
     c_obj = jnp.zeros(x_dim)
@@ -679,17 +869,31 @@ def jax_scs_canonicalize_dro_cvar(
     # Build constraint blocks (in SCS order: zero, nonneg, soc, psd)
     # =========================================================================
     
-    # --- ZERO CONE: Equality constraints (-B^T y1 + Fz1 = -b_obj, -B^T y2 + Fz2 = -alpha_inv * b_obj)
+    # --- ZERO CONE: Equality constraints (-B^T y1 + Fz1 + sum_m_psd d_vecs[m_psd] @ H1[m_psd][i] = -b_obj)
     eq1_rows = jnp.zeros((N * V, x_dim))
     for i in range(N):
         eq1_rows = eq1_rows.at[i * V:(i + 1) * V, y1_start + i * M:y1_start + (i + 1) * M].set(-Bm_T)
         eq1_rows = eq1_rows.at[i * V:(i + 1) * V, Fz1_start + i * V:Fz1_start + (i + 1) * V].set(jnp.eye(V))
+
+        # Add H1 contribution
+        for m_psd in range(M_psd):
+            H1_start_idx = H1_idx(m_psd, i, 0)
+            H1_end_idx = H1_idx(m_psd, i, H_vec_dims_local[m_psd])
+            eq1_rows = eq1_rows.at[i * V:(i + 1) * V, H1_start_idx:H1_end_idx].set(d_vecs[m_psd])
+
     eq1_b = jnp.tile(-b_obj, N)
-    
+
     eq2_rows = jnp.zeros((N * V, x_dim))
     for i in range(N):
         eq2_rows = eq2_rows.at[i * V:(i + 1) * V, y2_start + i * M:y2_start + (i + 1) * M].set(-Bm_T)
         eq2_rows = eq2_rows.at[i * V:(i + 1) * V, Fz2_start + i * V:Fz2_start + (i + 1) * V].set(jnp.eye(V))
+
+        # Add H2 contribution
+        for m_psd in range(M_psd):
+            H2_start_idx = H2_idx(m_psd, i, 0)
+            H2_end_idx = H2_idx(m_psd, i, H_vec_dims_local[m_psd])
+            eq2_rows = eq2_rows.at[i * V:(i + 1) * V, H2_start_idx:H2_end_idx].set(d_vecs[m_psd])
+
     eq2_b = jnp.tile(-alpha_inv * b_obj, N)
     
     # --- NONNEGATIVE CONE: epi1, epi2, y1 >= 0, y2 >= 0
@@ -736,38 +940,80 @@ def jax_scs_canonicalize_dro_cvar(
     socp2_rows = jnp.zeros((N * socp_dim, x_dim))
     for i in range(N):
         socp2_rows = socp2_rows.at[i * socp_dim, lambd_idx].set(-1.0)
-        socp2_rows = socp2_rows.at[i * socp_dim + 1:i * socp_dim + 1 + V, 
+        socp2_rows = socp2_rows.at[i * socp_dim + 1:i * socp_dim + 1 + V,
                                     Fz2_start + i * V:Fz2_start + (i + 1) * V].set(-jnp.diag(F_precond_sq))
         socp2_rows = socp2_rows.at[i * socp_dim + 1 + V:(i + 1) * socp_dim,
                                     Gz2_start + i * S_vec:Gz2_start + (i + 1) * S_vec].set(-scaledG_mult)
     socp2_b = jnp.zeros(N * socp_dim)
-    
+
     # --- PSD CONES: 2N PSD cones for Gz1 and Gz2
     psd1_rows = jnp.zeros((N * S_vec, x_dim))
     for i in range(N):
         psd1_rows = psd1_rows.at[i * S_vec:(i + 1) * S_vec, y1_start + i * M:y1_start + (i + 1) * M].set(-Am_T)
         psd1_rows = psd1_rows.at[i * S_vec:(i + 1) * S_vec, Gz1_start + i * S_vec:Gz1_start + (i + 1) * S_vec].set(scaledI)
+
+        # Add H1 contribution
+        for m_psd in range(M_psd):
+            H1_start_idx = H1_idx(m_psd, i, 0)
+            H1_end_idx = H1_idx(m_psd, i, H_vec_dims_local[m_psd])
+            psd1_rows = psd1_rows.at[i * S_vec:(i + 1) * S_vec, H1_start_idx:H1_end_idx].set(C_symvecs[m_psd])
+
     psd1_b = jnp.tile(-A_obj_svec, N)
-    
+
     psd2_rows = jnp.zeros((N * S_vec, x_dim))
     for i in range(N):
         psd2_rows = psd2_rows.at[i * S_vec:(i + 1) * S_vec, y2_start + i * M:y2_start + (i + 1) * M].set(-Am_T)
         psd2_rows = psd2_rows.at[i * S_vec:(i + 1) * S_vec, Gz2_start + i * S_vec:Gz2_start + (i + 1) * S_vec].set(scaledI)
+
+        # Add H2 contribution
+        for m_psd in range(M_psd):
+            H2_start_idx = H2_idx(m_psd, i, 0)
+            H2_end_idx = H2_idx(m_psd, i, H_vec_dims_local[m_psd])
+            psd2_rows = psd2_rows.at[i * S_vec:(i + 1) * S_vec, H2_start_idx:H2_end_idx].set(C_symvecs[m_psd])
+
     psd2_b = jnp.tile(-alpha_inv * A_obj_svec, N)
-    
+
+    # H1 >> 0 and H2 >> 0 constraints
+    H1_psd_rows_list = []
+    H2_psd_rows_list = []
+
+    for m_psd in range(M_psd):
+        H_vec = H_vec_dims_local[m_psd]
+        # Derive H_mat from H_vec using H_vec = H_mat * (H_mat + 1) / 2
+        # H_mat = (-1 + sqrt(1 + 8*H_vec)) / 2
+        H_mat = int((-1 + math.sqrt(1 + 8*H_vec)) / 2)
+        scaledI_H = jax_scs_scaled_off_triangles(jnp.ones((H_mat, H_mat)), jnp.sqrt(2.0))
+
+        for i in range(N):
+            # H1
+            H1_row = jnp.zeros((H_vec, x_dim))
+            H1_row = H1_row.at[:, H1_idx(m_psd, i, 0):H1_idx(m_psd, i, H_vec)].set(-scaledI_H)
+            H1_psd_rows_list.append(H1_row)
+
+            # H2
+            H2_row = jnp.zeros((H_vec, x_dim))
+            H2_row = H2_row.at[:, H2_idx(m_psd, i, 0):H2_idx(m_psd, i, H_vec)].set(-scaledI_H)
+            H2_psd_rows_list.append(H2_row)
+
+    H1_psd_rows = jnp.vstack(H1_psd_rows_list) if H1_psd_rows_list else jnp.zeros((0, x_dim))
+    H2_psd_rows = jnp.vstack(H2_psd_rows_list) if H2_psd_rows_list else jnp.zeros((0, x_dim))
+    H_psd_b = jnp.zeros(2 * sum([N * H_vec_dims_local[m] for m in range(M_psd)]))
+
     # Combine all blocks (SCS order: zero, nonneg, soc, psd)
     A_dense = jnp.vstack([
         eq1_rows, eq2_rows,  # zero cone (2*N*V)
         epi1_rows, epi2_rows, y1_nonneg, y2_nonneg,  # nonneg cone (2*N + 2*N*M)
         socp1_rows, socp2_rows,  # soc cones (2*N*socp_dim)
-        psd1_rows, psd2_rows,  # psd cones (2*N*S_vec)
+        psd1_rows, psd2_rows,  # psd cones (2*N*S_vec for Gz)
+        H1_psd_rows, H2_psd_rows,  # psd cones (2*sum(N*H_vec_dims[m]) for H)
     ])
-    
+
     b = jnp.concatenate([
         eq1_b, eq2_b,
         epi1_b, epi2_b, y1_nonneg_b, y2_nonneg_b,
         socp1_b, socp2_b,
         psd1_b, psd2_b,
+        H_psd_b,
     ])
     
     # Cone info for SCS
@@ -776,14 +1022,16 @@ def jax_scs_canonicalize_dro_cvar(
         'z': 2 * N * V,              # Equality constraints
         'l': 2 * N + 2 * N * M,      # Epigraph + y1 >= 0 + y2 >= 0
         'q': [socp_dim] * (2 * N),   # SOC cones (doubled)
-        's': [S_mat] * (2 * N),      # PSD cones (doubled)
+        's': [S_mat] * (2 * N) if PSD_A_vals is None else [S_mat] * (2 * N) + sum([[PSD_mat_dims_local[m]] * (2*N) for m in range(M_psd)], []),
         'N': N,
         'M': M,
         'V': V,
         'S_mat': S_mat,
         'S_vec': S_vec,
+        'M_psd': M_psd,
+        'H_vec_dims': H_vec_dims_local,
     }
-    
+
     return A_dense, b, c_obj, x_dim, cone_info
 
 
@@ -901,17 +1149,23 @@ def dro_expectation_scs_solve(
     G_batch, F_batch,
     # Parameters
     eps, precond_inv,
+    # PSD constraint data
+    PSD_A_vals=None,
+    PSD_b_vals=None,
+    PSD_c_vals=None,
+    PSD_mat_dims=None,
 ):
     """
     Full differentiable DRO expectation solve using SCS + diffcp.
-    
+
     Args:
         A_obj, b_obj, A_vals, b_vals, c_vals: PEP constraint data
         G_batch: (N, S_mat, S_mat) Gram matrices
         F_batch: (N, V) function values
         eps: Wasserstein radius
         precond_inv: (G_precond_inv, F_precond_inv) preconditioner
-    
+        PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_mat_dims: PSD constraint data
+
     Returns:
         obj_val: Optimal DRO expectation objective value (scalar, differentiable)
     """
@@ -922,28 +1176,55 @@ def dro_expectation_scs_solve(
     V = b_obj.shape[0]
     S_vec = S_mat * (S_mat + 1) // 2
     socp_dim = 1 + V + S_vec
-    
+
+    # Handle PSD constraint dimensions
+    if PSD_A_vals is not None:
+        M_psd = len(PSD_A_vals)
+        log.info(f"[DRO Expectation] PSD constraints present: M_psd={M_psd}")
+        for m in range(M_psd):
+            log.info(f"  PSD[{m}]: shape={PSD_A_vals[m].shape}, mat_dim={PSD_mat_dims[m]}")
+        C_symvecs, d_vecs, H_vec_dims, PSD_mat_dims_list = compute_C_d_matrices(PSD_A_vals, PSD_b_vals, PSD_mat_dims)
+        H_vec_sum = sum(H_vec_dims)
+    else:
+        M_psd = 0
+        H_vec_sum = 0
+        H_vec_dims = []
+        PSD_mat_dims_list = []
+        C_symvecs = None
+        d_vecs = None
+        log.info("[DRO Expectation] No PSD constraints")
+
     # Cone info computed from static dimensions
     cone_info = {
         'z': N * V,           # Equality constraints
         'l': N + N * M,       # Epigraph + y >= 0
         'q': [socp_dim] * N,  # SOC cones
-        's': [S_mat] * N,     # PSD cones
+        's': [S_mat] * N if PSD_A_vals is None else [S_mat] * N + sum([[PSD_mat_dims_list[m]] * N for m in range(M_psd)], []),
     }
-    
+
     # Calculate A shape from cone dimensions
     m = cone_info['z'] + cone_info['l'] + sum(cone_info['q']) + sum([s*(s+1)//2 for s in cone_info['s']])
-    x_dim = 1 + N * (1 + M + V + S_vec)
+    x_dim = 1 + N * (1 + M + V + S_vec + H_vec_sum)
     A_shape = (m, x_dim)
-    
+
+    # Log cone structure
+    log.info(f"[DRO Expectation] Cone structure: z={cone_info['z']}, l={cone_info['l']}, "
+             f"q={len(cone_info['q'])} cones, s={len(cone_info['s'])} PSD cones")
+    log.info(f"[DRO Expectation] PSD cone dimensions: {cone_info['s']}")
+    log.info(f"[DRO Expectation] Problem size: A.shape={A_shape}, x_dim={x_dim}")
+
     # Create static data for cones BEFORE canonicalization
     static_data = SCSSolveData(cone_info, A_shape)
-    
+
     # Canonicalize to SCS form (this can be traced)
+    # Pass PSD_mat_dims_list (Python ints) instead of PSD_mat_dims (JAX array)
+    PSD_mat_dims_to_pass = PSD_mat_dims_list if PSD_A_vals is not None else None
     A_dense, b, c, _, _ = jax_scs_canonicalize_dro_expectation(
         A_obj, b_obj, A_vals, b_vals, c_vals,
         G_batch, F_batch,
         eps, precond_inv,
+        PSD_A_vals, PSD_b_vals, PSD_mat_dims_to_pass,
+        C_symvecs, d_vecs, None,  # H_vec_dims computed from C_symvecs inside
     )
 
     log.info('canon done')
@@ -961,10 +1242,15 @@ def dro_cvar_scs_solve(
     G_batch, F_batch,
     # Parameters
     eps, alpha, precond_inv,
+    # PSD constraint data
+    PSD_A_vals=None,
+    PSD_b_vals=None,
+    PSD_c_vals=None,
+    PSD_mat_dims=None,
 ):
     """
     Full differentiable DRO CVaR solve using SCS + diffcp.
-    
+
     Args:
         A_obj, b_obj, A_vals, b_vals, c_vals: PEP constraint data
         G_batch: (N, S_mat, S_mat) Gram matrices
@@ -972,7 +1258,8 @@ def dro_cvar_scs_solve(
         eps: Wasserstein radius
         alpha: CVaR confidence level (e.g., 0.1 for CVaR at 10%)
         precond_inv: (G_precond_inv, F_precond_inv) preconditioner
-    
+        PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_mat_dims: PSD constraint data
+
     Returns:
         obj_val: Optimal DRO CVaR objective value (scalar, differentiable)
     """
@@ -983,28 +1270,55 @@ def dro_cvar_scs_solve(
     V = b_obj.shape[0]
     S_vec = S_mat * (S_mat + 1) // 2
     socp_dim = 1 + V + S_vec
-    
+
+    # Handle PSD constraint dimensions
+    if PSD_A_vals is not None:
+        M_psd = len(PSD_A_vals)
+        log.info(f"[DRO CVaR] PSD constraints present: M_psd={M_psd}")
+        for m in range(M_psd):
+            log.info(f"  PSD[{m}]: shape={PSD_A_vals[m].shape}, mat_dim={PSD_mat_dims[m]}")
+        C_symvecs, d_vecs, H_vec_dims, PSD_mat_dims_list = compute_C_d_matrices(PSD_A_vals, PSD_b_vals, PSD_mat_dims)
+        H_vec_sum = sum(H_vec_dims)
+    else:
+        M_psd = 0
+        H_vec_sum = 0
+        H_vec_dims = []
+        PSD_mat_dims_list = []
+        C_symvecs = None
+        d_vecs = None
+        log.info("[DRO CVaR] No PSD constraints")
+
     # Cone info computed from static dimensions (doubled for CVaR)
     cone_info = {
         'z': 2 * N * V,              # Equality constraints (doubled)
         'l': 2 * N + 2 * N * M,      # Epigraph + y1 >= 0 + y2 >= 0
         'q': [socp_dim] * (2 * N),   # SOC cones (doubled)
-        's': [S_mat] * (2 * N),      # PSD cones (doubled)
+        's': [S_mat] * (2 * N) if PSD_A_vals is None else [S_mat] * (2 * N) + sum([[PSD_mat_dims_list[m]] * (2*N) for m in range(M_psd)], []),
     }
-    
+
     # Calculate A shape from cone dimensions
     m = cone_info['z'] + cone_info['l'] + sum(cone_info['q']) + sum([s*(s+1)//2 for s in cone_info['s']])
-    x_dim = 2 + N * (1 + 2 * (M + V + S_vec))
+    x_dim = 2 + N * (1 + 2 * (M + V + S_vec + H_vec_sum))
     A_shape = (m, x_dim)
-    
+
+    # Log cone structure
+    log.info(f"[DRO CVaR] Cone structure: z={cone_info['z']}, l={cone_info['l']}, "
+             f"q={len(cone_info['q'])} cones, s={len(cone_info['s'])} PSD cones")
+    log.info(f"[DRO CVaR] PSD cone dimensions: {cone_info['s']}")
+    log.info(f"[DRO CVaR] Problem size: A.shape={A_shape}, x_dim={x_dim}")
+
     # Create static data for cones BEFORE canonicalization
     static_data = SCSSolveData(cone_info, A_shape)
-    
+
     # Canonicalize to SCS form (this can be traced)
+    # Pass PSD_mat_dims_list (Python ints) instead of PSD_mat_dims (JAX array)
+    PSD_mat_dims_to_pass = PSD_mat_dims_list if PSD_A_vals is not None else None
     A_dense, b, c, _, _ = jax_scs_canonicalize_dro_cvar(
         A_obj, b_obj, A_vals, b_vals, c_vals,
         G_batch, F_batch,
         eps, alpha, precond_inv,
+        PSD_A_vals, PSD_b_vals, PSD_mat_dims_to_pass,
+        C_symvecs, d_vecs, None,  # H_vec_dims computed from C_symvecs inside
     )
 
     # log.info('canon done')
@@ -1079,13 +1393,18 @@ def dro_scs_solve(
     # Risk measure selection
     risk_type='expectation',
     alpha=0.1,
+    # PSD constraint data
+    PSD_A_vals=None,
+    PSD_b_vals=None,
+    PSD_c_vals=None,
+    PSD_mat_dims=None,
 ):
     """
     Full differentiable DRO solve using SCS + diffcp.
-    
+
     This is the main entry point that dispatches to the appropriate solver
     based on the risk_type.
-    
+
     Args:
         A_obj, b_obj, A_vals, b_vals, c_vals: PEP constraint data
         G_batch: (N, S_mat, S_mat) Gram matrices
@@ -1094,7 +1413,8 @@ def dro_scs_solve(
         precond_inv: (G_precond_inv, F_precond_inv) precomputed preconditioner
         risk_type: 'expectation' or 'cvar'
         alpha: CVaR confidence level (only used when risk_type='cvar')
-    
+        PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_mat_dims: PSD constraint data
+
     Returns:
         obj_val: Optimal DRO objective value (scalar, differentiable)
     """
@@ -1103,12 +1423,20 @@ def dro_scs_solve(
             A_obj, b_obj, A_vals, b_vals, c_vals,
             G_batch, F_batch,
             eps, precond_inv,
+            PSD_A_vals=PSD_A_vals,
+            PSD_b_vals=PSD_b_vals,
+            PSD_c_vals=PSD_c_vals,
+            PSD_mat_dims=PSD_mat_dims,
         )
     elif risk_type == 'cvar':
         return dro_cvar_scs_solve(
             A_obj, b_obj, A_vals, b_vals, c_vals,
             G_batch, F_batch,
             eps, alpha, precond_inv,
+            PSD_A_vals=PSD_A_vals,
+            PSD_b_vals=PSD_b_vals,
+            PSD_c_vals=PSD_c_vals,
+            PSD_mat_dims=PSD_mat_dims,
         )
     else:
         raise ValueError(f"Unknown risk_type: {risk_type}. Must be 'expectation' or 'cvar'.")
