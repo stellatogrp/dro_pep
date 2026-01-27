@@ -389,6 +389,102 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         self.assertLess(max_violation, 1e-6,
             f"Constraint violation too large: {max_violation:.2e}")
 
+    def test_nonzero_optimal_with_linear_terms(self):
+        """
+        Test with nonzero c, q AND nonzero x_opt, y_opt.
+
+        This is the critical test for the coordinate shifting fix - we need
+        to verify that the algorithm works correctly when both the linear
+        cost terms (c, q) and the optimal point (x_opt, y_opt) are nonzero.
+        """
+        np.random.seed(123)
+
+        n = 4
+        m1 = 3
+        m2 = 2
+        m = m1 + m2
+        K_max = 3
+
+        # Nonzero linear cost terms
+        c = jnp.array([1.0, -0.5, 0.3, -0.2])
+        q = jnp.array([0.5, -0.3, 0.2, -0.1, 0.4])
+
+        # Box constraints
+        l = jnp.array([-2.0, -2.0, -2.0, -2.0])
+        u = jnp.array([3.0, 3.0, 3.0, 3.0])
+
+        # Constraint matrix
+        K_mat = jnp.array(np.random.randn(m, n) * 0.3)
+        M = np.linalg.norm(K_mat, ord=2)
+
+        # NONZERO optimal point (this is the key difference from other tests)
+        x_opt = jnp.array([0.5, -0.3, 0.7, 0.2])
+        y_opt = jnp.array([0.2, -0.1, 0.3, -0.15, 0.1])
+
+        # Initial point (different from optimal)
+        x0 = jnp.array([1.0, 0.5, -0.5, 0.8])
+        y0 = jnp.array([0.3, 0.2, 0.1, 0.0, 0.2])
+
+        stepsizes = (0.5/M, 0.5/M, 1.0)
+
+        # This should NOT crash and should produce valid results
+        G, F = problem_data_to_pdhg_trajectories(
+            stepsizes,
+            c, K_mat, q, l, u,
+            x0, y0,
+            x_opt, y_opt,
+            K_max, m1,
+            M=M
+        )
+
+        G_np = np.array(G)
+        F_np = np.array(F)
+
+        # Basic sanity checks
+        dimG = 4 * K_max + 11
+        dimF = 2 * (K_max + 2)
+
+        self.assertEqual(G_np.shape, (dimG, dimG))
+        self.assertEqual(F_np.shape, (dimF,))
+
+        # G should be symmetric
+        np.testing.assert_allclose(G_np, G_np.T, atol=1e-10)
+
+        # G should be PSD
+        eigvals = np.linalg.eigvalsh(G_np)
+        min_eig = np.min(eigvals)
+        self.assertGreaterEqual(min_eig, -1e-8,
+            f"Gram matrix should be PSD, but has min eigenvalue {min_eig}")
+
+        # Function values at optimal should be 0
+        dimF1 = K_max + 2
+        F1 = F_np[:dimF1]
+        F_h = F_np[dimF1:]
+
+        self.assertAlmostEqual(F1[-1], 0.0, places=10,
+            msg="F1 at optimal should be 0")
+        self.assertAlmostEqual(F_h[-1], 0.0, places=10,
+            msg="F_h at optimal should be 0")
+
+        # Check function values are computed correctly
+        # F1[0] = f1(x0) - f1(x_opt) = c^T x0 - c^T x_opt = c^T (x0 - x_opt)
+        expected_f1_0 = np.dot(np.array(c), np.array(x0 - x_opt))
+        np.testing.assert_allclose(F1[0], expected_f1_0, rtol=1e-6,
+            err_msg="F1[0] with nonzero x_opt should be c^T (x0 - x_opt)")
+
+        # F_h[0] = h(y0) - h(y_opt) = q^T y0 - q^T y_opt = q^T (y0 - y_opt)
+        expected_h_0 = np.dot(np.array(q), np.array(y0 - y_opt))
+        np.testing.assert_allclose(F_h[0], expected_h_0, rtol=1e-6,
+            err_msg="F_h[0] with nonzero y_opt should be q^T (y0 - y_opt)")
+
+        print(f"\nNonzero optimal point test passed!")
+        print(f"  x_opt = {x_opt}")
+        print(f"  y_opt = {y_opt}")
+        print(f"  c = {c}")
+        print(f"  q = {q}")
+        print(f"  F1[0] = {F1[0]:.6f} (expected {expected_f1_0:.6f})")
+        print(f"  F_h[0] = {F_h[0]:.6f} (expected {expected_h_0:.6f})")
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
