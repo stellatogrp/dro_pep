@@ -32,20 +32,22 @@ jnp.set_printoptions(precision=6, suppress=True)
 log = logging.getLogger(__name__)
 
 
-def generate_A(seed, m, n):
+def generate_A(seed, m, n, scaling=1.0):
     """
     Generate sparse A matrix using NumPy.
-    
+
     Args:
         seed: Random seed for reproducibility
         m: Number of rows
         n: Number of columns
-        
+        scaling: Scale parameter for the normal distribution (default 1.0)
+                 For out-of-distribution, use scaling=4.0
+
     Returns:
         A: (m, n) numpy array with columns normalized to unit norm
     """
     np.random.seed(seed)
-    A = np.random.normal(scale=1/m, size=(m, n))
+    A = np.random.normal(scale=scaling/m, size=(m, n))
     col_norms = np.linalg.norm(A, axis=0, keepdims=True)
     col_norms = np.maximum(col_norms, 1e-10)
     A = A / col_norms
@@ -1267,4 +1269,226 @@ def lasso_run(cfg):
 
 
 def lasso_out_of_sample_run(cfg):
-    pass
+    """
+    Generate and save out-of-sample test problems for Lasso.
+
+    For in-distribution (validation and test):
+        - Use the SAME A matrix as training (A_seed)
+        - Generate out_of_sample_val_N different b vectors for validation
+        - Generate out_of_sample_test_N different b vectors for test
+        - Solve all Lasso problems to get optimal solutions and values
+        - Save A once, save validation and test data separately
+
+    For out-of-distribution:
+        - Generate NEW A matrix with scale=4/m (A_out_of_dist_seed, scaling=4)
+        - Generate out_of_dist_N different b vectors
+        - Solve all Lasso problems to get optimal solutions and values
+        - Save A once, save all data
+
+    Output files (saved in Hydra run directory):
+        Validation (in-distribution):
+            - A_in_dist.npz: Contains 'A' array of shape (m, n) [shared by val and test]
+            - b_val_samples.npz: Contains 'b' array of shape (out_of_sample_val_N, m)
+            - x_opt_val_samples.npz: Contains 'x_opt' array of shape (out_of_sample_val_N, n)
+            - f_opt_val_samples.npz: Contains 'f_opt' array of shape (out_of_sample_val_N,)
+
+        Test (in-distribution):
+            - b_test_samples.npz: Contains 'b' array of shape (out_of_sample_test_N, m)
+            - x_opt_test_samples.npz: Contains 'x_opt' array of shape (out_of_sample_test_N, n)
+            - f_opt_test_samples.npz: Contains 'f_opt' array of shape (out_of_sample_test_N,)
+
+        Out-of-distribution:
+            - A_out_of_dist.npz: Contains 'A' array of shape (m, n)
+            - b_out_of_dist_samples.npz: Contains 'b' array of shape (out_of_dist_N, m)
+            - x_opt_out_of_dist_samples.npz: Contains 'x_opt' array of shape (out_of_dist_N, n)
+            - f_opt_out_of_dist_samples.npz: Contains 'f_opt' array of shape (out_of_dist_N,)
+    """
+    log.info("=" * 60)
+    log.info("Generating Lasso out-of-sample problems")
+    log.info("=" * 60)
+    log.info(cfg)
+
+    # Extract config values
+    m = cfg.m
+    n = cfg.n
+    lambd = cfg.lambd
+    A_seed = cfg.A_seed
+    A_out_of_dist_seed = cfg.A_out_of_dist_seed
+    out_of_sample_val_N = cfg.out_of_sample_val_N
+    out_of_sample_test_N = cfg.out_of_sample_test_N
+    out_of_sample_val_seed = cfg.out_of_sample_val_seed
+    out_of_sample_test_seed = cfg.out_of_sample_test_seed
+    out_of_dist_N = cfg.out_of_dist_N
+    out_of_dist_seed = cfg.get('out_of_dist_seed', out_of_sample_val_seed + 1)
+    p_xsamp_nonzero = cfg.p_xsamp_nonzero
+    b_noise_std = cfg.b_noise_std
+
+    # =========================================================================
+    # Generate A matrix (SAME as training, shared by validation and test)
+    # =========================================================================
+    log.info(f"Generating A matrix for in-distribution sets (A_seed={A_seed})")
+    A_in_dist_np = generate_A(A_seed, m, n, scaling=1.0)
+    A_in_dist_jax = jnp.array(A_in_dist_np)
+
+    # Save A matrix once (shared by validation and test)
+    A_in_dist_path = "A_in_dist.npz"
+    np.savez_compressed(A_in_dist_path, A=A_in_dist_np)
+    log.info(f"Saved in-distribution A to {A_in_dist_path}, shape: {A_in_dist_np.shape}")
+
+    # Create DPP-parametrized Lasso problem for fast batch solving
+    lasso_dpp = LassoProblemDPP(A_in_dist_np, lambd)
+    log.info("Created DPP-parametrized Lasso problem for in-distribution sets")
+
+    # =========================================================================
+    # Validation Set (in-distribution): SAME A as training
+    # =========================================================================
+    log.info(f"Generating {out_of_sample_val_N} validation problems (in-distribution)...")
+
+    # Generate validation b vectors using out_of_sample_val_seed
+    key_val = jax.random.PRNGKey(out_of_sample_val_seed)
+    b_val_batch = generate_batch_b_jax(
+        key_val, A_in_dist_jax, out_of_sample_val_N,
+        p_xsamp_nonzero, b_noise_std
+    )
+
+    # Convert to numpy and save
+    b_val_np = np.array(b_val_batch)
+    b_val_path = "b_val_samples.npz"
+    np.savez_compressed(b_val_path, b=b_val_np)
+    log.info(f"Saved validation b samples to {b_val_path}, shape: {b_val_np.shape}")
+
+    # Solve validation Lasso problems and save solutions
+    log.info(f"Solving {out_of_sample_val_N} validation Lasso problems...")
+    x_opt_val_np = np.zeros((out_of_sample_val_N, n))
+    f_opt_val_np = np.zeros(out_of_sample_val_N)
+
+    for i in trange(out_of_sample_val_N, desc="Solving validation problems"):
+        x_opt, f_opt = lasso_dpp.solve(b_val_np[i])
+        x_opt_val_np[i] = x_opt
+        f_opt_val_np[i] = f_opt
+
+    x_opt_val_path = "x_opt_val_samples.npz"
+    f_opt_val_path = "f_opt_val_samples.npz"
+    np.savez_compressed(x_opt_val_path, x_opt=x_opt_val_np)
+    np.savez_compressed(f_opt_val_path, f_opt=f_opt_val_np)
+    log.info(f"Saved validation optimal solutions to {x_opt_val_path}, shape: {x_opt_val_np.shape}")
+    log.info(f"Saved validation optimal values to {f_opt_val_path}, shape: {f_opt_val_np.shape}")
+
+    # =========================================================================
+    # Test Set (in-distribution): SAME A as training
+    # =========================================================================
+    log.info(f"Generating {out_of_sample_test_N} test problems (in-distribution)...")
+
+    # Generate test b vectors using out_of_sample_test_seed
+    key_test = jax.random.PRNGKey(out_of_sample_test_seed)
+    b_test_batch = generate_batch_b_jax(
+        key_test, A_in_dist_jax, out_of_sample_test_N,
+        p_xsamp_nonzero, b_noise_std
+    )
+
+    # Convert to numpy and save
+    b_test_np = np.array(b_test_batch)
+    b_test_path = "b_test_samples.npz"
+    np.savez_compressed(b_test_path, b=b_test_np)
+    log.info(f"Saved test b samples to {b_test_path}, shape: {b_test_np.shape}")
+
+    # Solve test Lasso problems and save solutions
+    log.info(f"Solving {out_of_sample_test_N} test Lasso problems...")
+    x_opt_test_np = np.zeros((out_of_sample_test_N, n))
+    f_opt_test_np = np.zeros(out_of_sample_test_N)
+
+    for i in trange(out_of_sample_test_N, desc="Solving test problems"):
+        x_opt, f_opt = lasso_dpp.solve(b_test_np[i])
+        x_opt_test_np[i] = x_opt
+        f_opt_test_np[i] = f_opt
+
+    x_opt_test_path = "x_opt_test_samples.npz"
+    f_opt_test_path = "f_opt_test_samples.npz"
+    np.savez_compressed(x_opt_test_path, x_opt=x_opt_test_np)
+    np.savez_compressed(f_opt_test_path, f_opt=f_opt_test_np)
+    log.info(f"Saved test optimal solutions to {x_opt_test_path}, shape: {x_opt_test_np.shape}")
+    log.info(f"Saved test optimal values to {f_opt_test_path}, shape: {f_opt_test_np.shape}")
+
+    # =========================================================================
+    # Out-of-Distribution Test Set: DIFFERENT A with scale=4/m
+    # =========================================================================
+    log.info(f"Generating {out_of_dist_N} out-of-distribution test problems...")
+    log.info(f"Using DIFFERENT A matrix (A_out_of_dist_seed={A_out_of_dist_seed}, scaling=4)")
+
+    # Generate A matrix with scale=4/m (out-of-distribution)
+    A_ood_np = generate_A(A_out_of_dist_seed, m, n, scaling=4.0)
+    A_ood_jax = jnp.array(A_ood_np)
+
+    # Save A matrix
+    A_ood_path = "A_out_of_dist.npz"
+    np.savez_compressed(A_ood_path, A=A_ood_np)
+    log.info(f"Saved out-of-dist A to {A_ood_path}, shape: {A_ood_np.shape}")
+
+    # Generate b vectors using out_of_dist_seed
+    key_ood = jax.random.PRNGKey(out_of_dist_seed)
+    b_ood_batch = generate_batch_b_jax(
+        key_ood, A_ood_jax, out_of_dist_N,
+        p_xsamp_nonzero, b_noise_std
+    )
+
+    # Convert to numpy and save
+    b_ood_np = np.array(b_ood_batch)
+    b_ood_path = "b_out_of_dist_samples.npz"
+    np.savez_compressed(b_ood_path, b=b_ood_np)
+    log.info(f"Saved out-of-dist b samples to {b_ood_path}, shape: {b_ood_np.shape}")
+
+    # Create DPP-parametrized Lasso problem for out-of-distribution
+    lasso_dpp_ood = LassoProblemDPP(A_ood_np, lambd)
+    log.info("Created DPP-parametrized Lasso problem for out-of-distribution set")
+
+    # Solve out-of-distribution Lasso problems and save solutions
+    log.info(f"Solving {out_of_dist_N} out-of-distribution Lasso problems...")
+    x_opt_ood_np = np.zeros((out_of_dist_N, n))
+    f_opt_ood_np = np.zeros(out_of_dist_N)
+
+    for i in trange(out_of_dist_N, desc="Solving out-of-dist problems"):
+        x_opt, f_opt = lasso_dpp_ood.solve(b_ood_np[i])
+        x_opt_ood_np[i] = x_opt
+        f_opt_ood_np[i] = f_opt
+
+    x_opt_ood_path = "x_opt_out_of_dist_samples.npz"
+    f_opt_ood_path = "f_opt_out_of_dist_samples.npz"
+    np.savez_compressed(x_opt_ood_path, x_opt=x_opt_ood_np)
+    np.savez_compressed(f_opt_ood_path, f_opt=f_opt_ood_np)
+    log.info(f"Saved out-of-dist optimal solutions to {x_opt_ood_path}, shape: {x_opt_ood_np.shape}")
+    log.info(f"Saved out-of-dist optimal values to {f_opt_ood_path}, shape: {f_opt_ood_np.shape}")
+
+    # =========================================================================
+    # Save metadata for reference
+    # =========================================================================
+    metadata = {
+        'out_of_sample_val_N': out_of_sample_val_N,
+        'out_of_sample_test_N': out_of_sample_test_N,
+        'out_of_sample_val_seed': out_of_sample_val_seed,
+        'out_of_sample_test_seed': out_of_sample_test_seed,
+        'out_of_dist_N': out_of_dist_N,
+        'out_of_dist_seed': out_of_dist_seed,
+        'm': m,
+        'n': n,
+        'lambd': lambd,
+        'A_seed': A_seed,
+        'A_out_of_dist_seed': A_out_of_dist_seed,
+        'p_xsamp_nonzero': p_xsamp_nonzero,
+        'b_noise_std': b_noise_std,
+        'A_in_dist_shape': A_in_dist_np.shape,
+        'b_val_shape': b_val_np.shape,
+        'x_opt_val_shape': x_opt_val_np.shape,
+        'f_opt_val_shape': f_opt_val_np.shape,
+        'b_test_shape': b_test_np.shape,
+        'x_opt_test_shape': x_opt_test_np.shape,
+        'f_opt_test_shape': f_opt_test_np.shape,
+        'A_ood_shape': A_ood_np.shape,
+        'b_ood_shape': b_ood_np.shape,
+        'x_opt_ood_shape': x_opt_ood_np.shape,
+        'f_opt_ood_shape': f_opt_ood_np.shape,
+    }
+    metadata_path = "out_of_sample_metadata.npz"
+    np.savez_compressed(metadata_path, **metadata)
+    log.info(f"Saved metadata to {metadata_path}")
+
+    log.info("=== Lasso out-of-sample generation complete ===")

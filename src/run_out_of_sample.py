@@ -14,6 +14,7 @@ import sys
 
 log = logging.getLogger(__name__)
 
+from learning_experiment_classes.lasso import lasso_out_of_sample_run as lasso_run
 from learning_experiment_classes.quad import quad_out_of_sample_run as quad_run
 
 
@@ -22,11 +23,18 @@ def quad_driver(cfg):
     quad_run(cfg)
 
 
+@hydra.main(version_base='1.2', config_path='configs_learning', config_name='lasso.yaml')
+def lasso_driver(cfg):
+    lasso_run(cfg)
+
+
 func_driver_map = {
+    'Lasso': lasso_driver,
     'Quad': quad_driver,
 }
 
 base_dir_map = {
+    'Lasso': 'out_of_sample_outputs/Lasso',
     'Quad': 'out_of_sample_outputs/Quad',
 }
 

@@ -57,3 +57,11 @@ weight_decay: 1e-3  # weight decay for sgd_wd
 
 # Outputs
 output_dir: "learn_dro_outputs"
+
+# Out-of-sample validation/test configuration
+out_of_sample_val_N: 500     # Number of validation samples (in-distribution)
+out_of_sample_test_N: 1000   # Number of test samples (in-distribution)
+out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
+out_of_sample_test_seed: 20000  # Seed for generating test b vectors
+out_of_dist_N: 1000         # Number of out-of-distribution test samples
+out_of_dist_seed: 30000     # Seed for generating out-of-distribution b vectors
