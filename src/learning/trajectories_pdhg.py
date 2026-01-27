@@ -209,32 +209,59 @@ def problem_data_to_pdhg_trajectories(
         sigma_k = sigma[k]
         theta_k = theta[k]
 
-        # w_k = K^T @ y_k (note: y_curr is in shifted coords)
-        # But K^T @ y_shifted = K^T @ (y - y_opt) = K^T @ y - K^T @ y_opt
-        # For the algorithm update, we need K^T @ y_actual where y_actual = y_shifted + y_opt
-        w_k = K_mat.T @ (y_curr + y_opt)
-        w_iter = w_iter.at[k].set(w_k)
+        # For the ALGORITHM update, we need K^T @ y_actual (original coords)
+        # where y_actual = y_shifted + y_opt
+        w_k_actual = K_mat.T @ (y_curr + y_opt)
+
+        # For the GRAM matrix, store K^T @ y_shifted (shifted coords)
+        # This matches the PEP pair (y_curr, w_k) where w_k = K^T @ y_curr
+        w_k_shifted = K_mat.T @ y_curr
+        w_iter = w_iter.at[k].set(w_k_shifted)
 
         # Primal update: x_{k+1} = prox_{τ f1}(x_k - τ K^T y_k)
-        v_x = x_curr - tau_k * w_k
+        # Use actual (original coord) operator for algorithm
+        v_x = x_curr - tau_k * w_k_actual
         x_next = prox_f1_shifted(v_x, tau_k)
 
-        # Subgradient from prox optimality: gf1_{k+1} = (v_x - x_next) / τ
-        gf1_next = (v_x - x_next) / tau_k
+        # Subgradient from prox optimality condition
+        # The actual prox gives: gf1_actual = (v_x - x_next) / tau
+        # But the PEP expects: x_next = x_curr - tau * w_k_shifted - tau * gf1_pep
+        # where w_k_shifted = K^T @ y_curr (shifted coords)
+        #
+        # From the algorithm: x_next = x_curr - tau * w_k_actual - tau * gf1_actual
+        # where w_k_actual = K^T @ (y_curr + y_opt)
+        #
+        # Equating: gf1_pep = gf1_actual + (w_k_actual - w_k_shifted) = gf1_actual + K^T @ y_opt
+        gf1_actual = (v_x - x_next) / tau_k
+        gf1_next = gf1_actual + K_mat.T @ y_opt  # Adjusted for PEP consistency
 
-        # Extrapolation
+        # Extrapolation (in shifted coords)
         x_bar = x_next + theta_k * (x_next - x_curr)
 
-        # z_{k+1} = K @ x_bar (in original coords: K @ (x_bar + x_opt))
-        z_kp1 = K_mat @ (x_bar + x_opt)
-        z_iter = z_iter.at[k].set(z_kp1)
+        # For the ALGORITHM update, we need K @ x_bar_actual (original coords)
+        z_kp1_actual = K_mat @ (x_bar + x_opt)
+
+        # For the GRAM matrix, store K @ x_bar_shifted (shifted coords)
+        # This matches the PEP pair (x_bar, z_k) where z_k = K @ x_bar
+        z_kp1_shifted = K_mat @ x_bar
+        z_iter = z_iter.at[k].set(z_kp1_shifted)
 
         # Dual update: y_{k+1} = prox_{σ h}(y_k + σ K x_bar)
-        v_y = y_curr + sigma_k * z_kp1
+        # Use actual (original coord) operator for algorithm
+        v_y = y_curr + sigma_k * z_kp1_actual
         y_next = prox_h_shifted(v_y, sigma_k)
 
-        # Subgradient from prox optimality: gh_{k+1} = (v_y - y_next) / σ
-        gh_next = (v_y - y_next) / sigma_k
+        # Subgradient from prox optimality condition
+        # The actual prox gives: gh_actual = (v_y - y_next) / sigma
+        # But the PEP expects: y_next = y_curr + sigma * z_kp1_shifted - sigma * gh_pep
+        # where z_kp1_shifted = K @ x_bar (shifted coords)
+        #
+        # From the algorithm: y_next = y_curr + sigma * z_kp1_actual - sigma * gh_actual
+        # where z_kp1_actual = K @ (x_bar + x_opt)
+        #
+        # Equating: gh_pep = gh_actual - (z_kp1_actual - z_kp1_shifted) = gh_actual - K @ x_opt
+        gh_actual = (v_y - y_next) / sigma_k
+        gh_next = gh_actual - K_mat @ x_opt  # Adjusted for PEP consistency
 
         # Store
         x_iter = x_iter.at[k + 1].set(x_next)
@@ -274,15 +301,19 @@ def problem_data_to_pdhg_trajectories(
     dy0 = y0_shifted
 
     # Saddle point subgradients (at origin in shifted coords)
-    # At x_opt: subgrad f1 = c (if x_opt is interior to [l, u])
-    # At y_opt: subgrad h = q (if y_opt is interior to Y)
-    gf1_s = c
-    gh_s = q
+    # The PEP encodes optimality conditions as operator pairs:
+    #   -gf1_s = K^T @ y_s  and  gh_s = K @ x_s
+    # In shifted coords, x_s = 0 and y_s = 0, so:
+    #   gf1_s = 0 and gh_s = 0
+    # This is the abstract PEP representation, not the actual function subgradients.
+    gf1_s = jnp.zeros(n)
+    gh_s = jnp.zeros(m)
 
-    # Analysis vectors (in original coords for K application)
-    K_xK = K_mat @ (x_K + x_opt)
-    Kt_yK = K_mat.T @ (y_K + y_opt)
-    K_dx0 = K_mat @ dx0  # K @ (x0 - x_opt) = K @ x0 - K @ x_opt
+    # Analysis vectors (in SHIFTED coords for Gram matrix)
+    # These match PEP pairs: (x_K, K_xK) and (y_K, Kt_yK) where x_K, y_K are shifted
+    K_xK = K_mat @ x_K       # K @ x_K_shifted
+    Kt_yK = K_mat.T @ y_K    # K^T @ y_K_shifted
+    K_dx0 = K_mat @ dx0      # K @ (x0 - x_opt) = K @ dx0
 
     # Build G_half: embed primal in R^n and dual in R^m into R^{n+m}
     embedded_dim = n + m

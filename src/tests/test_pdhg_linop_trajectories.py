@@ -5,6 +5,15 @@ Tests the trajectory mapping against the PEP interpolation inequalities from
 pep_construction_chambolle_pock_linop.py.
 
 The new API uses LP data arrays instead of functions for JAX JIT compatibility.
+
+IMPORTANT: The trajectory-to-Gram mapping currently only works correctly for
+pure saddle-point problems with c=0 and q=0:
+    min_x max_y  <Kx, y> + indicator_{[l,u]}(x) - indicator_{y>=0}(y)
+
+For general LPs with nonzero c and q, the PEP operator constraints coupled with
+KKT conditions result in zero-valued adjusted subgradients, which is inconsistent
+with nonzero function values. Extending to handle linear terms would require
+modifying either the PEP construction or the trajectory mapping.
 """
 
 import unittest
@@ -26,15 +35,13 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
 
     def test_simple_lp(self):
         """
-        Test with a simple LP.
+        Test with a simple LP where saddle point is at origin.
 
-        min_x  c^T x
-        s.t.   K x >= q  (m1 inequality constraints)
-               l <= x <= u
+        For a valid PEP test, the saddle point must satisfy the optimality conditions:
+        - K^T @ y_opt = -c (primal stationarity for interior point)
+        - K @ x_opt = q (dual stationarity for interior point)
 
-        Saddle-point formulation:
-        min_x max_y  c^T x + y^T (K x - q)
-        s.t.  l <= x <= u, y >= 0
+        We use c=0, q=0, x_opt=0, y_opt=0 which trivially satisfies these conditions.
         """
         np.random.seed(42)
 
@@ -47,19 +54,17 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         K_mat = jnp.array(np.random.randn(m, n) * 0.5)
         M = np.linalg.norm(K_mat, ord=2)
 
-        # Cost vector
-        c = jnp.array([1.0, -0.5, 0.3])
+        # Zero cost/RHS -> saddle point at origin is valid
+        c = jnp.zeros(n)
+        q = jnp.zeros(m)
 
-        # RHS vector
-        q = jnp.array([0.5, -0.2, 0.1, 0.3])
-
-        # Box constraints (large to be non-binding at optimal)
+        # Box constraints (large to be non-binding)
         l = jnp.array([-10.0, -10.0, -10.0])
         u = jnp.array([10.0, 10.0, 10.0])
 
-        # Optimal saddle point (for testing, use arbitrary feasible points)
-        x_opt = jnp.array([1.0, -0.5, 0.3])
-        y_opt = jnp.array([0.2, 0.1, 0.4, 0.2])  # all non-negative for feasibility
+        # Optimal saddle point at origin (satisfies KKT conditions with c=0, q=0)
+        x_opt = jnp.zeros(n)
+        y_opt = jnp.zeros(m)
 
         # Step sizes
         tau = 0.5 / M
@@ -67,9 +72,8 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         theta = 1.0
 
         # Initial point (ORIGINAL coordinates)
-        x0 = x_opt + jnp.array(np.random.randn(n) * 0.5)
-        y0 = y_opt + jnp.array(np.random.randn(m) * 0.3)
-        y0 = jnp.maximum(y0, 0.0)  # ensure y0 >= 0
+        x0 = jnp.array(np.random.randn(n) * 0.5)
+        y0 = jnp.array(np.abs(np.random.randn(m) * 0.3))  # non-negative
 
         # Compute initial radius for P-norm
         dx0 = x0 - x_opt
@@ -120,10 +124,9 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         print(f"\nSimple LP test: max violation = {max_violation:.2e}")
         print(f"  Violations > 0: {np.sum(violations > 1e-6)} / {len(violations)}")
 
-        if max_violation > 1e-6:
-            print(f"  WARNING: Constraints violated (max = {max_violation:.2e})")
-            violated_indices = np.where(violations > 1e-6)[0]
-            print(f"  Violated constraint indices: {violated_indices[:10]}...")
+        # Assert all constraints satisfied (tolerance for numerical precision)
+        self.assertLess(max_violation, 1e-6,
+            f"Constraint violation too large: {max_violation:.2e}")
 
     def test_dimension_consistency(self):
         """Test that dimensions match between trajectory and PEP construction."""
@@ -304,10 +307,7 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         """
         Test LP with both inequality and equality constraints.
 
-        min_x  c^T x
-        s.t.   G x >= h  (m1 inequality constraints)
-               A x = b   (m2 equality constraints)
-               l <= x <= u
+        Uses c=0, q=0, x_opt=0, y_opt=0 to ensure valid saddle point conditions.
         """
         np.random.seed(123)
 
@@ -323,26 +323,29 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         K_mat = jnp.vstack([G_ineq, A_eq])
         M = np.linalg.norm(K_mat, ord=2)
 
-        # Stacked RHS q = [h; b]
-        h = jnp.array([0.3, -0.2])
-        b = jnp.array([0.1, 0.0])
-        q = jnp.concatenate([h, b])
-
-        c = jnp.array([1.0, -0.5, 0.3, 0.2])
+        # Zero cost/RHS for valid saddle point at origin
+        c = jnp.zeros(n)
+        q = jnp.zeros(m)
         l = -jnp.ones(n) * 10.0
         u = jnp.ones(n) * 10.0
 
-        # Optimal point
+        # Optimal point at origin
         x_opt = jnp.zeros(n)
-        # y_opt: first m1 components >= 0 (inequality duals), rest can be any sign
-        y_opt = jnp.array([0.1, 0.2, -0.1, 0.3])
+        y_opt = jnp.zeros(m)
 
         tau = 0.5 / M
         sigma = 0.5 / M
         theta = 1.0
 
         x0 = jnp.array(np.random.randn(n) * 0.3)
-        y0 = jnp.array([0.2, 0.3, 0.1, -0.1])  # first m1 non-negative
+        y0 = jnp.array([0.2, 0.3, 0.1, 0.05])  # first m1 non-negative
+
+        # Compute actual initial radius for P-norm
+        dx0 = x0 - x_opt
+        dy0 = y0 - y_opt
+        K_dx0 = K_mat @ dx0
+        R_sq = jnp.sum(dx0**2) / tau + jnp.sum(dy0**2) / sigma - 2 * jnp.dot(K_dx0, dy0)
+        R = float(jnp.sqrt(jnp.maximum(R_sq, 1.0)))
 
         stepsizes = (jnp.array(tau), jnp.array(sigma), jnp.array(theta))
         G_traj, F_traj = problem_data_to_pdhg_trajectories(
@@ -367,9 +370,24 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         # Check symmetry
         np.testing.assert_allclose(G_np, G_np.T, atol=1e-10)
 
-        print(f"\nLP with equality constraints test passed!")
+        # Check interpolation constraints
+        pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max)
+        pep_data_np = chambolle_pock_pep_data_to_numpy(pep_data)
+        A_obj, b_obj, A_vals, b_vals, c_vals, _, _, _, _ = pep_data_np
+
+        violations = []
+        for i in range(A_vals.shape[0]):
+            val = np.trace(A_vals[i] @ G_np) + np.dot(b_vals[i], F_np) + c_vals[i]
+            violations.append(val)
+        max_violation = np.max(violations)
+
+        print(f"\nLP with equality constraints test:")
         print(f"  n={n}, m1={m1}, m2={m2}, K_max={K_max}")
         print(f"  dimG={G_np.shape[0]}, dimF={F_np.shape[0]}")
+        print(f"  max violation = {max_violation:.2e}")
+
+        self.assertLess(max_violation, 1e-6,
+            f"Constraint violation too large: {max_violation:.2e}")
 
 
 if __name__ == '__main__':

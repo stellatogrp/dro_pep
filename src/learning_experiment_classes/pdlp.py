@@ -11,14 +11,14 @@ import cvxpy as cp
 from functools import partial
 from tqdm import trange
 
-from learning.pep_construction_chambolle_pock import (
-    construct_chambolle_pock_pep_data_decoupled,
+from learning.trajectories_pdhg import problem_data_to_pdhg_trajectories
+from learning.pep_construction_chambolle_pock_linop import (
+    construct_chambolle_pock_pep_data,
     chambolle_pock_pep_data_to_numpy,
 )
+
 from learning.adam_optimizers import AdamWMin
-from learning.trajectories_pdhg import (
-    problem_data_to_pdhg_trajectories_decoupled,
-)
+from learning.trajectories_pdhg import problem_data_to_pdhg_trajectories
 from learning.jax_scs_layer import dro_scs_solve, compute_preconditioner_from_samples
 
 jax.config.update("jax_enable_x64", True)
@@ -497,9 +497,9 @@ def run_sgd_for_K_pdlp(cfg, K_max, key, stepsizes_init, sgd_iters, eta_t,
             make_D_q_vmap = jax.vmap(make_D_q)
             D_batch, q_batch = make_D_q_vmap(Aineq_batch, bineq_batch, Aeq_batch, beq_batch)
 
-            # Compute trajectories for all samples (using decoupled representation)
+            # Compute trajectories for all samples
             def traj_fn_single(c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt):
-                return problem_data_to_pdhg_trajectories_decoupled(
+                return problem_data_to_pdhg_trajectories(
                     stepsizes_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt,
                     K_max=K_max, m1=m1, M=M
                 )
@@ -510,9 +510,11 @@ def run_sgd_for_K_pdlp(cfg, K_max, key, stepsizes_init, sgd_iters, eta_t,
                 x0_batch, y0_batch, x_opt_batch, y_opt_batch, f_opt_batch
             )
 
-            # Compute PEP constraint matrices (depend on stepsizes) - using decoupled version
-            pep_data = construct_chambolle_pock_pep_data_decoupled(tau, sigma, theta, M, R, K_max)
+            # Compute PEP constraint matrices (depend on stepsizes) -
+            pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max)
             A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+            print(pep_data[-1])
+            exit(0)
 
             return dro_scs_solve(
                 A_obj, b_obj, A_vals, b_vals, c_vals,
@@ -772,7 +774,7 @@ def pdlp_run(cfg):
                 # Stack D and q
                 D = jnp.vstack([A_ineq, A_eq])
                 q = jnp.concatenate([b_ineq, b_eq])
-                return problem_data_to_pdhg_trajectories_decoupled(
+                return problem_data_to_pdhg_trajectories(
                     stepsizes_precond_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt,
                     K_max=cfg.K_max[0], m1=m1, M=Dnorm_max
                 )

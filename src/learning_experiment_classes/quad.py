@@ -75,6 +75,41 @@ def get_Q_samples(subkeys, dim, mu, L, M):
     return jax.vmap(sampler)(subkeys)
 
 
+@partial(jax.jit, static_argnames=['dim'])
+def get_out_of_dist_Q_samples(subkeys, dim, mu, L):
+    """Generate out-of-distribution Q samples with random eigenvalues and random rotation.
+
+    Each sample is generated as Q = U @ diag(eigvals) @ U.T where:
+    - eigvals are drawn uniformly from [mu, L]
+    - U is a random orthogonal matrix
+
+    Args:
+        subkeys: JAX random keys for each sample (shape: (N,))
+        dim: Dimension of the matrix
+        mu: Lower bound for eigenvalues
+        L: Upper bound for eigenvalues
+        M: Unused parameter (kept for signature compatibility)
+
+    Returns:
+        Q_batch: Batch of symmetric PSD matrices (N, dim, dim)
+    """
+    def sample_single(key):
+        k1, k2 = jax.random.split(key)
+
+        # Generate random eigenvalues uniformly in [mu, L]
+        random_eigvals = jax.random.uniform(k1, shape=(dim,), minval=mu, maxval=L)
+
+        # Generate random orthogonal matrix
+        U = jax.random.orthogonal(k2, dim)
+
+        # Q = U @ diag(eigvals) @ U.T
+        Q = U @ jnp.diag(random_eigvals) @ U.T
+
+        return Q
+
+    return jax.vmap(sample_single)(subkeys)
+
+
 def sample_z0_single(key, d, R):
     k1, k2 = jax.random.split(key)
     
@@ -1004,6 +1039,7 @@ def quad_out_of_sample_run(cfg):
     L_val = cfg.L
     R_val = cfg.R
     N_oos = cfg.out_of_sample_N
+    N_ood = cfg.out_of_dist_N
     seed = cfg.out_of_sample_seed
     
     # Compute matrix width for Marchenko-Pastur (same as in quad_run)
@@ -1020,16 +1056,23 @@ def quad_out_of_sample_run(cfg):
     
     # Split keys for Q and z0 sampling
     key, k1, k2 = jax.random.split(key, 3)
-    Q_subkeys = jax.random.split(k1, N_oos)
-    z0_subkeys = jax.random.split(k2, N_oos)
     
     # Sample Q matrices and z0 vectors
-    log.info("Sampling Q matrices...")
-    Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
+    if cfg.out_of_dist_Q:
+        Q_subkeys = jax.random.split(k1, N_ood)
+        z0_subkeys = jax.random.split(k2, N_ood)
+        log.info("Sampling Q matrices out of distribution...")
+        Q_batch = get_out_of_dist_Q_samples(Q_subkeys, d_val, mu_val, L_val)
+        log.info("Sampling z0 vectors...")
+        z0_batch = get_z0_samples(z0_subkeys, d_val, R_val)
+    else:
+        Q_subkeys = jax.random.split(k1, N_oos)
+        z0_subkeys = jax.random.split(k2, N_oos)
+        log.info("Sampling Q matrices in distribution...")
+        Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
+        log.info("Sampling z0 vectors...")
+        z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
     log.info(f"Q_batch shape: {Q_batch.shape}")
-    
-    log.info("Sampling z0 vectors...")
-    z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
     log.info(f"z0_batch shape: {z0_batch.shape}")
     
     # Convert from JAX arrays to NumPy arrays

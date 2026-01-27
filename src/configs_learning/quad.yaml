@@ -25,7 +25,7 @@ l2o_loss_type: "cumulative"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
-K_max: [5, 10, 15, 20]
+K_max: [5]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
@@ -52,3 +52,6 @@ mosek_tol_rel_gap: 1e-2
 output_dir: "learn_dro_outputs"
 out_of_sample_N: 500
 out_of_sample_seed: 12345
+out_of_dist_N: 1000
+
+out_of_dist_Q: True

@@ -116,7 +116,6 @@ Quad_options = [
     ['mu=1'],
     ['N=20'],
     ['sgd_iters=500'],
-    []
     ['K_max=[10]', 'K_max=[15]'],
 ]
 

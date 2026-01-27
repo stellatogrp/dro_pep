@@ -119,8 +119,12 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     repF_h = repF_h.at[idx_saddle].set(jnp.zeros(dimF_h))
 
     # 4. Interpolation Constraints
-    A_f1, b_f1 = convex_interp(repX_f1, repG_f1, repF_f1, n_points)
-    A_h, b_h = convex_interp(repY_h, repG_h, repF_h, n_points)
+    # convex_interp expects n_points = number of algorithm points (excluding optimal)
+    # We have K_max + 1 iterates (x_0 to x_K_max) + 1 saddle point = K_max + 2 total
+    # So we pass K_max + 1 as the number of algorithm points
+    n_algo_points = K_max + 1
+    A_f1, b_f1 = convex_interp(repX_f1, repG_f1, repF_f1, n_algo_points)
+    A_h, b_h = convex_interp(repY_h, repG_h, repF_h, n_algo_points)
 
     b_f1_pad = jnp.concatenate([b_f1, jnp.zeros((b_f1.shape[0], dimF_h))], axis=1)
     b_h_pad  = jnp.concatenate([jnp.zeros((b_h.shape[0], dimF1)), b_h], axis=1)
