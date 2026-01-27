@@ -97,7 +97,9 @@ def get_out_of_dist_Q_samples(subkeys, dim, mu, L):
         k1, k2 = jax.random.split(key)
 
         # Generate random eigenvalues uniformly in [mu, L]
-        random_eigvals = jax.random.uniform(k1, shape=(dim,), minval=mu, maxval=L)
+        # random_eigvals = jax.random.uniform(k1, shape=(dim,), minval=mu, maxval=L)
+        random_eigvals = jax.random.beta(k1, 0.5, 0.5, shape=(dim,))
+        random_eigvals = random_eigvals * (L - mu) + mu
 
         # Generate random orthogonal matrix
         U = jax.random.orthogonal(k2, dim)

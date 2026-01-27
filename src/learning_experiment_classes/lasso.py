@@ -24,7 +24,7 @@ from learning.trajectories_ista_fista import (
     problem_data_to_ista_trajectories,
     problem_data_to_fista_trajectories,
 )
-from learning.jax_scs_layer import dro_scs_solve, compute_preconditioner_from_samples
+from learning.jax_scs_layer import dro_scs_solve, wc_pep_scs_solve, compute_preconditioner_from_samples
 
 jax.config.update("jax_enable_x64", True)
 jnp.set_printoptions(precision=6, suppress=True)
@@ -962,6 +962,161 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
     df.to_csv(csv_path, index=False)
     
 
+def run_gd_for_K_lpep_lasso(cfg, K_max, problem_data, gamma_init, gd_iters, eta_t,
+                             alg, csv_path):
+    """
+    Run gradient descent for learning PEP (lpep) for Lasso - no samples, no min-max.
+
+    Optimizes step sizes to minimize the standard (worst-case) PEP objective
+    using SCS solver with wc_pep_scs_solve for differentiation.
+
+    Args:
+        cfg: Configuration object
+        K_max: Number of algorithm iterations
+        problem_data: Dictionary with Lasso problem data (A, L, mu, R, lambd)
+        gamma_init: Initial step size (scalar or vector)
+        gd_iters: Number of gradient descent iterations
+        eta_t: Learning rate for step sizes
+        alg: Algorithm name ('ista' or 'fista')
+        csv_path: Path to save progress CSV
+    """
+    log.info(f"=== Running lpep GD for K={K_max}, alg={alg} ===")
+
+    # Extract problem data
+    L = problem_data['L']
+    mu = problem_data['mu']
+    R = problem_data['R']
+
+    # Initialize stepsizes based on algorithm and stepsize_type
+    is_vector_gamma = cfg.stepsize_type == 'vector'
+
+    if alg == 'ista':
+        # Just step size gamma
+        if is_vector_gamma:
+            gamma = jnp.atleast_1d(jnp.array(gamma_init))
+            if gamma.ndim == 0 or gamma.shape[0] == 1:
+                gamma = jnp.full(K_max, float(gamma_init))
+        else:
+            gamma = jnp.array(float(gamma_init))  # Keep as scalar
+        stepsizes = [gamma]
+        has_beta = False
+    elif alg == 'fista':
+        # Step size gamma and momentum beta
+        if is_vector_gamma:
+            gamma = jnp.atleast_1d(jnp.array(gamma_init))
+            if gamma.ndim == 0 or gamma.shape[0] == 1:
+                gamma = jnp.full(K_max, float(gamma_init))
+        else:
+            gamma = jnp.array(float(gamma_init))  # Keep as scalar
+        # FISTA beta initialization
+        betas_t = [1.0]
+        for k in range(K_max):
+            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
+            betas_t.append(t_new)
+        beta_init = jnp.array(betas_t)  # Raw t_k sequence of length K+1
+        stepsizes = [gamma, beta_init]
+        has_beta = True
+    else:
+        log.error(f"Algorithm '{alg}' is not implemented.")
+        raise ValueError(f"Unknown algorithm: {alg}")
+
+    # Track step size values for logging
+    all_stepsizes_vals = [tuple(stepsizes)]
+    all_losses = []  # Will be filled as we go - loss[i] corresponds to stepsizes[i]
+
+    log.info(f"Using wc_pep_scs_solve for lpep optimization")
+
+    # Define the PEP loss function (differentiable w.r.t. stepsizes)
+    def pep_loss_fn(stepsizes_list):
+        """Compute PEP worst-case bound for given stepsizes using wc_pep_scs_solve."""
+        if alg == 'ista':
+            gamma = stepsizes_list[0]
+            pep_data = construct_ista_pep_data(gamma, mu, L, R, K_max, cfg.pep_obj)
+        else:  # fista
+            gamma, beta = stepsizes_list[0], stepsizes_list[1]
+            pep_data = construct_fista_pep_data(gamma, beta, mu, L, R, K_max, cfg.pep_obj)
+
+        A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+
+        # Call wc_pep_scs_solve with PEP data
+        # JAX autodiff will automatically differentiate through this
+        loss = wc_pep_scs_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
+        return loss
+
+    # Create value and gradient function
+    value_and_grad_fn = jax.value_and_grad(pep_loss_fn)
+
+    # Determine update mask for learn_beta
+    # If learn_beta=False and we have beta (fista), only update gamma
+    learn_beta = cfg.get('learn_beta', True)
+    if has_beta and not learn_beta:
+        update_mask = [True, False]  # Update gamma, keep beta fixed
+        log.info(f'learn_beta=False: beta will NOT be updated during optimization')
+    else:
+        update_mask = None  # Update all parameters
+
+    # Initialize AdamWMin optimizer
+    optimizer = AdamWMin(
+        x_params=stepsizes,
+        lr=eta_t,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=getattr(cfg, 'weight_decay', 0.0),
+        update_mask=update_mask,
+    )
+
+    # Projection function to keep stepsizes non-negative
+    def proj_nonneg(params):
+        return [jnp.maximum(p, 1e-6) for p in params]
+
+    # GD iterations (descent only, no ascent)
+    for iter_num in range(gd_iters):
+        gamma = stepsizes[0]
+        if is_vector_gamma:
+            gamma_log = '[' + ', '.join(f'{x:.5f}' for x in gamma.tolist()) + ']'
+        else:
+            gamma_log = f'{float(gamma):.5f}'
+        if has_beta:
+            beta = stepsizes[1]
+            beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
+            log.info(f'K={K_max}, iter={iter_num}, gamma={gamma_log}, beta={beta_log}')
+        else:
+            log.info(f'K={K_max}, iter={iter_num}, gamma={gamma_log}')
+
+        # Compute loss and gradients (loss corresponds to CURRENT stepsizes before update)
+        current_loss, grads = value_and_grad_fn(stepsizes)
+        log.info(f'  PEP loss: {current_loss:.6f}')
+
+        # Store loss for current stepsizes (iteration iter_num)
+        all_losses.append(float(current_loss))
+
+        # Check for NaN gradients
+        if any(jnp.any(jnp.isnan(g)) for g in grads):
+            log.warning(f'NaN gradients at iter {iter_num}, skipping update')
+            all_stepsizes_vals.append(tuple(stepsizes))
+            continue
+
+        # Update stepsizes via AdamWMin
+        stepsizes = optimizer.step(stepsizes, grads, proj_x_fn=proj_nonneg)
+
+        # Store updated stepsizes for next iteration
+        all_stepsizes_vals.append(tuple(stepsizes))
+
+        # Save progress
+        df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses)
+        df.to_csv(csv_path, index=False)
+
+    # Final save
+    df = build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_gamma, has_beta, all_losses)
+    gamma = stepsizes[0]
+    if is_vector_gamma:
+        gamma_str = '[' + ', '.join(f'{x:.6f}' for x in gamma.tolist()) + ']'
+    else:
+        gamma_str = f'{float(gamma):.6f}'
+    log.info(f'K={K_max} complete. Final gamma={gamma_str}. Saved to {csv_path}')
+    df.to_csv(csv_path, index=False)
+
+
 def lasso_run(cfg):
     log.info("=" * 60)
     log.info("Starting Lasso learning experiment")
@@ -1039,14 +1194,15 @@ def lasso_run(cfg):
         
         # Select run function based on learning framework
         learning_framework = cfg.learning_framework
-        
+
         if learning_framework == 'lpep':
             # LPEP: deterministic PEP minimization (no samples, no DRO)
-            # run_gd_for_K_lpep_lasso(
-            #     cfg, K, problem_data, gamma_init, sgd_iters, eta_t,
-            #     alg, csv_path
-            # )
-            raise NotImplementedError
+            run_gd_for_K_lpep_lasso(
+                cfg, K, problem_data, gamma_init, sgd_iters, eta_t,
+                alg, csv_path
+            )
+            # LPEP is complete, continue to next K
+            continue
         elif learning_framework == 'l2o':
             # L2O doesn't need the preconditioner
             precond_inv = None
@@ -1109,3 +1265,6 @@ def lasso_run(cfg):
     
     log.info("=== Lasso SGD experiment complete ===")
 
+
+def lasso_out_of_sample_run(cfg):
+    pass

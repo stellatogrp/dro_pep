@@ -2,7 +2,7 @@
 n: 50                   # Dimension of beta
 N_data: 1000            # Number of data points per problem
 p_beta_nonzero: 0.3     # Sparsity of true beta
-delta: 0.01             # L2 regularization parameter (equals mu)
+delta: 0.0             # L2 regularization parameter (equals mu)
 
 # Computed on-the-fly if null
 L: 6.200262             # Lipschitz constant (from A matrix)
@@ -13,12 +13,16 @@ A_std: 4.0              # Standard deviation for A matrix entries
 eps_std: 1.0            # Standard deviation for label noise
 
 # Sample sizes
-N: 16                   # Batch size for SGD training
-R_sample_size: 100      # Number of samples for R/L computation
+N: 20                   # Batch size for SGD training
+L_sample_size: 1000     # Number of A samples for worst-case L computation
+R_sample_size: 100      # Number of (A, b) samples for R computation
+precond_sample_size: 100  # Number of samples for preconditioner
 
 # Random seeds
-seed: 50                # Seed for SGD randomness
-A_seed: 1000            # Seed for A matrix generation
+seed: 50                # SGD randomness
+A_seed: 1000            # (deprecated - A now sampled per iteration)
+L_seed: 1001            # Seed for L computation
+R_seed: 5002            # Seed for R computation
 
 # Learning framework
 learning_framework: 'ldro-pep'  # Options: 'ldro-pep', 'l2o', 'lpep'
@@ -30,8 +34,8 @@ stepsize_type: 'scalar' # Options: 'scalar', 'vector'
 vector_init: 'fixed'    # Options: 'fixed', 'silver'
 
 # K_max values
-K_max: [5, 10, 15, 20]
-# K_max: [4]
+# K_max: [5, 10, 15, 20]
+K_max: [5]
 
 # Optimization hyperparameters
 pep_obj: 'obj_val'          # Options: 'obj_val', 'opt_dist_sq_norm', 'grad_sq_norm'
@@ -40,6 +44,10 @@ sdp_backend: 'scs'          # Options: 'scs', 'clarabel'
 dro_canon_backend: 'manual_jax'  # Options: 'manual_jax', 'cvxpylayers'
 eps: 0.1                    # Wasserstein ball radius
 alpha: 0.1                  # CVaR confidence level
+
+# L2O-specific loss formulations (only used when learning_framework='l2o')
+l2o_loss_type: 'final'      # Options: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
+l2o_decay_rate: 0.9         # Decay rate for 'weighted' loss type
 precond_type: 'average'     # Preconditioner type
 
 learn_beta: True           # Whether to learn beta (only for nesterov_fgm)
