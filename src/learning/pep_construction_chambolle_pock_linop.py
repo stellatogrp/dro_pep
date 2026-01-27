@@ -151,15 +151,22 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     # and fails when xs=x_opt, ys=y_opt in original coordinates.
 
     # 6. Gather Operator Pairs
-    # Optimality Conditions
-    pairs_Kt.append((eyeG[idx_ys], -gf1_vec(idx_saddle))) 
-    pairs_K.append((eyeG[idx_xs], gh_vec(idx_saddle)))    
+    # In shifted coordinates (x_s=0, y_s=0), we include TRIVIAL operator pairs
+    # for the saddle point: (0, K@0) = (0, 0). These are valid operator evaluations
+    # that include the saddle point in the PSD constraints.
+    #
+    # The function subgradients gf1_s=c and gh_s=q come from interpolation inequalities,
+    # NOT from these operator pairs.
 
-    # [CRITICAL FIX] Initial Condition Observations (K * dx0)
+    # Saddle point operator evaluations (trivial in shifted coordinates)
+    pairs_K.append((eyeG[idx_xs], jnp.zeros(dimG)))     # (x_s, K @ x_s) = (0, 0)
+    pairs_Kt.append((eyeG[idx_ys], jnp.zeros(dimG)))    # (y_s, K^T @ y_s) = (0, 0)
+
+    # Initial Condition Observations (K * dx0)
     # Allows us to form the cross term <K dx0, dy0> in the P-norm
     pairs_K.append((eyeG[idx_dx0], eyeG[idx_K_dx0]))
 
-    # Objective Observations
+    # Final Iterate Observations
     pairs_K.append((x_curr, eyeG[idx_K_xK]))
     pairs_Kt.append((y_curr, eyeG[idx_Kt_yK]))
 

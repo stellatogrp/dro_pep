@@ -35,7 +35,7 @@ precond_sample_size: 100
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
-K_max: [5]
+K_max: [1]
 
 sgd_seed: 500
 

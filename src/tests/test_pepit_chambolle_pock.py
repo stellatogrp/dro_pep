@@ -13,8 +13,8 @@ import cvxpy as cp
 
 jax.config.update('jax_enable_x64', True)
 
-from tests.test_chambolle_pock import wc_chambolle_pock_last_iterate
-from learning.pep_construction_chambolle_pock import (
+from tests.test_chambolle_pock import wc_chambolle_pock_last_iterate, wc_chambolle_pock_last_iterate_linop
+from learning.pep_construction_chambolle_pock_linop import (
     construct_chambolle_pock_pep_data,
     chambolle_pock_pep_data_to_numpy,
 )
@@ -39,19 +39,35 @@ def solve_chambolle_pock_pep(tau, sigma, theta, M, R, K):
     # Variables
     G = cp.Variable((dimG, dimG), symmetric=True)
     F = cp.Variable(dimF)
-    
+
     constraints = [G >> 0]
-    
+
     # Interpolation constraints
     for i in range(A_vals.shape[0]):
         constraints.append(cp.trace(A_vals[i] @ G) + b_vals[i] @ F + c_vals[i] <= 0)
-    
+
+    # PSD constraints (operator norm bounds)
+    for idx in range(len(PSD_A_vals)):
+        A_psd = PSD_A_vals[idx]
+        b_psd = PSD_b_vals[idx]
+        c_psd = PSD_c_vals[idx]
+        size_H = int(PSD_shapes[idx])  # Convert JAX array to Python int
+
+        # Build H matrix: H[i,j] = Tr(A_psd[i,j] @ G) + b_psd[i,j]^T @ F + c_psd[i,j]
+        H = cp.Variable((size_H, size_H), symmetric=True)
+        for i in range(size_H):
+            for j in range(size_H):
+                constraints.append(
+                    H[i, j] == cp.trace(A_psd[i, j] @ G) + b_psd[i, j] @ F + c_psd[i, j]
+                )
+        constraints.append(H >> 0)
+
     # Objective
     objective = cp.trace(A_obj @ G) + b_obj @ F
-    
+
     prob = cp.Problem(cp.Maximize(objective), constraints)
     prob.solve(solver='CLARABEL', verbose=False)
-    
+
     return prob.value
 
 
@@ -59,58 +75,58 @@ class TestChambollePockPEPitComparison(unittest.TestCase):
     """Tests comparing custom PEP construction with PEPit Chambolle-Pock."""
     
     def test_gap_objective_n1(self):
-        """Test gap objective with n=1 iteration."""
+        """Test gap objective with n=1 iteration (linop version)."""
         tau = 0.1
         sigma = 0.1
         theta = 1.0
         M = 1.0
         R = 1.0
         n = 1
-        
-        # Run PEPit
-        pepit_gap = wc_chambolle_pock_last_iterate(
-            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+
+        # Run PEPit with linear operator version
+        pepit_gap = wc_chambolle_pock_last_iterate_linop(
+            tau=tau, sigma=sigma, theta=theta, n=n, L_M=M, verbose=0
         )
-        
+
         # Run our implementation
         custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
-        
+
         np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
             err_msg=f"Mismatch for n={n}: custom={custom_gap}, pepit={pepit_gap}")
     
     def test_gap_objective_n2(self):
-        """Test gap objective with n=2 iterations."""
+        """Test gap objective with n=2 iterations (linop version)."""
         tau = 0.1
         sigma = 0.1
         theta = 1.0
         M = 1.0
         R = 1.0
         n = 2
-        
-        pepit_gap = wc_chambolle_pock_last_iterate(
-            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+
+        pepit_gap = wc_chambolle_pock_last_iterate_linop(
+            tau=tau, sigma=sigma, theta=theta, n=n, L_M=M, verbose=0
         )
-        
+
         custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
-        
+
         np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
             err_msg=f"Mismatch for n={n}: custom={custom_gap}, pepit={pepit_gap}")
     
     def test_gap_objective_n3(self):
-        """Test gap objective with n=3 iterations."""
+        """Test gap objective with n=3 iterations (linop version)."""
         tau = 0.1
         sigma = 0.1
         theta = 1.0
         M = 1.0
         R = 1.0
         n = 3
-        
-        pepit_gap = wc_chambolle_pock_last_iterate(
-            tau=tau, sigma=sigma, theta=theta, n=n, M=M, verbose=0
+
+        pepit_gap = wc_chambolle_pock_last_iterate_linop(
+            tau=tau, sigma=sigma, theta=theta, n=n, L_M=M, verbose=0
         )
-        
+
         custom_gap = solve_chambolle_pock_pep(tau, sigma, theta, M, R, n)
-        
+
         np.testing.assert_allclose(custom_gap, pepit_gap, rtol=1e-3,
             err_msg=f"Mismatch for n={n}: custom={custom_gap}, pepit={pepit_gap}")
     

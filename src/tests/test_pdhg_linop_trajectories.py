@@ -28,6 +28,11 @@ from learning.pep_construction_chambolle_pock_linop import (
     construct_chambolle_pock_pep_data,
     chambolle_pock_pep_data_to_numpy,
 )
+from learning_experiment_classes.pdlp import (
+    generate_facility_location_problem,
+    extract_constraint_matrices,
+    FacilityLocationDPP,
+)
 
 
 class TestPDHGLinopTrajectories(unittest.TestCase):
@@ -484,6 +489,337 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         print(f"  q = {q}")
         print(f"  F1[0] = {F1[0]:.6f} (expected {expected_f1_0:.6f})")
         print(f"  F_h[0] = {F_h[0]:.6f} (expected {expected_h_0:.6f})")
+
+    def test_pdlp_with_nonzero_cost_full_validation(self):
+        """
+        Test PDLP with nonzero c and q from a REAL facility location problem.
+
+        This is the critical test: check that trajectories from a realistic
+        PDLP problem (with nonzero objective) satisfy both:
+        1. Inequality constraints: Tr(A @ G) + b^T @ F + c <= 0
+        2. PSD constraints: constructed H matrices are PSD
+        """
+        import jax.random as jrandom
+
+        # Create config for facility location problem
+        class Config:
+            fixed_costs = type('obj', (object,), {'l': 1.0, 'u': 2.0})()
+            demands = type('obj', (object,), {'l': 0.5, 'u': 1.5})()
+            transportation_costs = type('obj', (object,), {'l': 0.1, 'u': 1.0})()
+            base_capacity = type('obj', (object,), {'base': 2.0, 'scaling': 1.5})()
+
+        cfg = Config()
+
+        # Generate facility location problem (GUARANTEED FEASIBLE)
+        n_facilities = 5
+        n_customers = 10  # Keep small for faster testing
+        key = jrandom.PRNGKey(42)
+        K_max = 2
+
+        problem = generate_facility_location_problem(
+            cfg=cfg,
+            n_facilities=n_facilities,
+            key=key,
+            n_customers=n_customers,
+        )
+
+        # Extract constraint matrices
+        c, A_eq, b_eq, A_ineq, b_ineq, lb, ub = extract_constraint_matrices(
+            problem["fixed_costs"],
+            problem["capacities"],
+            problem["demands"],
+            problem["transportation_costs"],
+            n_facilities=n_facilities,
+            n_customers=n_customers,
+        )
+
+        # Problem dimensions
+        n_vars = c.shape[0]  # m + m*n
+        m1 = A_ineq.shape[0]  # inequality constraints
+        m2 = A_eq.shape[0]    # equality constraints
+
+        # Solve for optimal point using cvxpy
+        solver = FacilityLocationDPP(n_vars, m1, m2)
+        x_opt, y_opt = solver.solve(
+            np.array(c),
+            np.array(A_ineq),
+            np.array(b_ineq),
+            np.array(A_eq),
+            np.array(b_eq),
+            np.array(lb),
+            np.array(ub),
+        )
+
+        # Convert to JAX arrays
+        x_opt = jnp.array(x_opt)
+        y_opt = jnp.array(y_opt)  # Now only [s; ν], no λ
+
+        # Build constraint matrix K for PDHG formulation (WITHOUT box constraints)
+        # CVXPy constraint: -A_ineq @ x >= -b_ineq (equivalent to A_ineq @ x <= b_ineq)
+        # In saddle point: L(x,y) = c^T x + y^T (Kx - q) where K = [-A_ineq; A_eq]
+        # Box constraints (l <= x <= u) are handled in f1's indicator function
+        #
+        # y = [s; ν] where s >= 0 (for inequality), ν free (for equality)
+        # q = [-b_ineq; b_eq]
+        K_mat = jnp.vstack([-A_ineq, A_eq])
+        q = jnp.concatenate([-b_ineq, b_eq])
+
+        M = np.linalg.norm(K_mat, ord=2)
+
+        # Initial point (random feasible point)
+        key2 = jrandom.split(key)[0]
+        x0 = jrandom.uniform(key2, shape=(n_vars,)) * 0.5 + 0.1  # in (0.1, 0.6)
+        x0 = jnp.clip(x0, lb, ub)  # ensure within bounds
+
+        # Initial dual point [s; ν] (no λ for box constraints)
+        # - s >= 0 (inequality constraints)
+        # - ν free (equality constraints)
+        key3 = jrandom.split(key2)[0]
+        y0_ineq = jnp.abs(jrandom.normal(key3, shape=(m1,))) * 0.1
+        y0_eq = jrandom.normal(key3, shape=(m2,)) * 0.1
+        y0 = jnp.concatenate([y0_ineq, y0_eq])
+
+        # Step sizes
+        tau = 0.5 / M
+        sigma = 0.5 / M
+        theta = 1.0
+
+        # Generate trajectories using K = [-A_ineq; A_eq] (box constraints in f1)
+        # Use dual y = [s; ν] (no λ)
+        stepsizes = (jnp.array(tau), jnp.array(sigma), jnp.array(theta))
+        G_traj, F_traj = problem_data_to_pdhg_trajectories(
+            stepsizes,
+            c, K_mat, q, lb, ub,  # K = [-A_ineq; A_eq], box constraints via f1
+            x0, y0,               # Dual [s; ν]
+            x_opt, y_opt,         # Dual [s; ν] from CVX (negated)
+            K_max, m1,
+            M=M
+        )
+
+        print(f"\n{'='*70}")
+        print(f"Testing PDLP with FACILITY LOCATION problem")
+        print(f"  n_facilities={n_facilities}, n_customers={n_customers}")
+        print(f"  n_vars={n_vars}, m1={m1}, m2={m2}, K_max={K_max}")
+        print(f"  Nonzero objective: ||c||={np.linalg.norm(c):.3f}")
+        print(f"  Nonzero RHS: ||q||={np.linalg.norm(q):.3f}")
+        print(f"  b_ineq (first 10): {np.array(b_ineq)[:10]}")
+        print(f"  b_eq (first 5): {np.array(b_eq)[:5]}")
+        print(f"  q vector (first 10 elements): {np.array(q)[:10]}")
+        print(f"  K matrix shape: {K_mat.shape}")
+        print(f"  y_opt shape (dual [s;ν]): {y_opt.shape}")
+        print(f"  M = ||K||: {M:.3f}")
+
+        # Verify KKT conditions
+        Kt_y = np.array(K_mat.T @ y_opt)
+        kkt_primal = c + Kt_y
+        K_x = np.array(K_mat @ x_opt)
+        print(f"  KKT verification:")
+        print(f"    ||c + K^T y_opt|| = {np.linalg.norm(kkt_primal):.6e}")
+        print(f"    K @ x_opt (first 5 / last 5): {K_x[:5]} / {K_x[-5:]}")
+        print(f"    q (first 5 / last 5): {np.array(q)[:5]} / {np.array(q)[-5:]}")
+        print(f"    ||K @ x_opt - q||: {np.linalg.norm(K_x - np.array(q)):.6e}")
+        print(f"{'='*70}")
+
+        # Print actual dual iterates for reference [s; ν]
+        print(f"\nDual iterate values (for diagnostic):")
+        print(f"  y0 [s;ν] (first 5): {np.array(y0)[:5]}")
+        print(f"  y_opt [s;ν] (first 5): {np.array(y_opt)[:5]}")
+        print(f"  dy0 = y0 - y_opt (first 5): {np.array(y0 - y_opt)[:5]}")
+
+        # Get PEP constraints
+        dx0 = x0 - x_opt
+        dy0 = y0 - y_opt
+        K_dx0 = K_mat @ dx0
+        R_sq = jnp.sum(dx0**2) / tau + jnp.sum(dy0**2) / sigma - 2 * jnp.dot(K_dx0, dy0)
+        R = float(jnp.sqrt(jnp.maximum(R_sq, 1.0)))
+
+        pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max)
+        pep_data_np = chambolle_pock_pep_data_to_numpy(pep_data)
+
+        A_obj, b_obj, A_vals, b_vals, c_vals, PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes = pep_data_np
+
+        G_np = np.array(G_traj)
+        F_np = np.array(F_traj)
+
+        # ========================================================================
+        # DIAGNOSTIC: Check if function values are computed correctly
+        # ========================================================================
+        dimF1 = K_max + 2
+        F1 = F_np[:dimF1]
+        F_h = F_np[dimF1:]
+
+        print(f"\n{'='*70}")
+        print(f"DIAGNOSTIC: Function Value Validation")
+        print(f"{'='*70}")
+        print(f"\nFor h(y) = q^T y, function values should be:")
+        print(f"  F_h[i] = h(y_i) - h(y_opt) = q^T (y_i - y_opt)")
+
+        # Expected function values (manually computed)
+        expected_F_h_0 = np.dot(np.array(q), np.array(y0 - y_opt))
+        expected_F_h_last = np.dot(np.array(q), np.array(y_opt - y_opt))  # Should be 0
+
+        print(f"\n  Expected F_h[0] = q^T (y0 - y_opt) = {expected_F_h_0:.6e}")
+        print(f"  Actual   F_h[0] = {F_h[0]:.6e}")
+        print(f"  Difference: {np.abs(F_h[0] - expected_F_h_0):.6e}")
+
+        print(f"\n  Expected F_h[{K_max+1}] (at y_opt) = 0")
+        print(f"  Actual   F_h[{K_max+1}] = {F_h[K_max+1]:.6e}")
+
+        print(f"\n  All F_h values: {F_h}")
+        print(f"{'='*70}")
+
+        # ========================================================================
+        # STEP 1: Validate Inequality Constraints
+        # ========================================================================
+
+        inequality_violations = []
+        for i in range(A_vals.shape[0]):
+            val = np.trace(A_vals[i] @ G_np) + np.dot(b_vals[i], F_np) + c_vals[i]
+            inequality_violations.append(val)
+
+        inequality_violations = np.array(inequality_violations)
+        max_ineq_violation = np.max(inequality_violations)
+        num_violated = np.sum(inequality_violations > 1e-6)
+
+        print(f"\nInequality Constraints:")
+        print(f"  Total constraints: {len(inequality_violations)}")
+        print(f"  Violated (> 1e-6): {num_violated}")
+        print(f"  Max violation: {max_ineq_violation:.6e}")
+
+        if num_violated > 0:
+            violated_indices = np.where(inequality_violations > 1e-6)[0]
+            print(f"  Violated constraint indices: {violated_indices[:10]}...")  # show first 10
+            print(f"  Violation values: {inequality_violations[violated_indices[:10]]}")
+
+            # Decode which interpolation constraints are violated
+            # For K_max=2: n_algo_points=3, total_points=4
+            # convex_interp generates (total_points)*(total_points-1) = 4*3 = 12 constraints per function
+            n_algo_points = K_max + 1
+            total_points = n_algo_points + 1
+            num_interp_per_func = total_points * (total_points - 1)
+
+            print(f"\n  Constraint structure (K_max={K_max}):")
+            print(f"    Indices 0-{num_interp_per_func-1}: f1 (primal) interpolation")
+            print(f"    Indices {num_interp_per_func}-{2*num_interp_per_func-1}: h (dual) interpolation")
+            print(f"    Indices {2*num_interp_per_func}-{2*num_interp_per_func+3}: value pinning")
+            print(f"    Index {2*num_interp_per_func+4}: solution bound")
+            print(f"    Remaining: adjoint consistency + P-norm IC")
+
+            print(f"\n  Decoding violated constraints:")
+            for idx in violated_indices[:10]:
+                if idx < num_interp_per_func:
+                    # f1 interpolation
+                    local_idx = idx
+                    i = local_idx // (total_points - 1)
+                    j_offset = local_idx % (total_points - 1)
+                    j = j_offset if j_offset < i else j_offset + 1
+                    print(f"    [{idx}] f1 interp ({i},{j}): f1(x{i}) >= f1(x{j}) + <gf1({j}), x{i}-x{j}>")
+                    print(f"         Violation: {inequality_violations[idx]:.6e}")
+                elif idx < 2*num_interp_per_func:
+                    # h interpolation
+                    local_idx = idx - num_interp_per_func
+                    i = local_idx // (total_points - 1)
+                    j_offset = local_idx % (total_points - 1)
+                    j = j_offset if j_offset < i else j_offset + 1
+
+                    # Map to actual iterate indices (0=y0, 1=y1, 2=y2, 3=ys)
+                    point_names = ['y0', 'y1', 'y2', 'ys']
+                    print(f"    [{idx}] h interp ({i},{j}): h({point_names[i]}) >= h({point_names[j]}) + <gh({point_names[j]}), {point_names[i]}-{point_names[j]}>")
+                    print(f"         Violation: {inequality_violations[idx]:.6e}")
+
+                    # For h(y) = q^T y, gh(y) = q, so this should be:
+                    # q^T y_i >= q^T y_j + q^T (y_i - y_j) => 0 >= 0 (always satisfied!)
+                    print(f"         NOTE: For h(y)=q^T y, this should ALWAYS be satisfied (violation = 0)!")
+
+                    # Check actual constraint value breakdown
+                    # Constraint: Tr(A @ G) + b^T @ F <= 0
+                    # For convex interp (i,j): A_ij = 0.5*(gj ⊗ dx + dx ⊗ gj), b_ij = fj - fi
+                    A_ij = A_vals[idx]
+                    b_ij = b_vals[idx]
+                    c_ij = c_vals[idx]
+
+                    trace_term = np.trace(A_ij @ G_np)
+                    linear_term = np.dot(b_ij, F_np)
+                    total = trace_term + linear_term + c_ij
+
+                    print(f"         Breakdown: Tr(A@G)={trace_term:.6e}, b^T@F={linear_term:.6e}, c={c_ij:.6e}")
+                    print(f"         Total: {total:.6e}")
+
+                    # Get function values for diagnostic
+                    dimF1 = K_max + 2
+                    F1 = F_np[:dimF1]
+                    F_h = F_np[dimF1:]
+                    print(f"         F_h[{i}]={F_h[i]:.6e}, F_h[{j}]={F_h[j]:.6e}")
+                    print(f"         Expected: F_h[{i}] - F_h[{j}] = {F_h[i] - F_h[j]:.6e}")
+                else:
+                    print(f"    [{idx}] Other constraint (value pinning, bound, adjoint, or IC)")
+                    print(f"         Violation: {inequality_violations[idx]:.6e}")
+
+        # ========================================================================
+        # STEP 2: Validate PSD Constraints
+        # ========================================================================
+        print(f"\nPSD Constraints:")
+
+        if PSD_A_vals is None:
+            print("  No PSD constraints present")
+            psd_all_satisfied = True
+        else:
+            M_psd = len(PSD_A_vals)
+            print(f"  Number of PSD constraint groups: {M_psd}")
+
+            psd_violations = []
+            min_eigenvalues = []
+
+            for m_psd in range(M_psd):
+                # Construct H matrix: H = PSD_A[m_psd] : G + PSD_b[m_psd] @ F + PSD_c[m_psd]
+                # PSD_A_vals[m_psd] has shape (mat_dim, mat_dim, dimG, dimG)
+                # We need H[r,c] = Tr(PSD_A[m_psd][r,c] @ G) + 0 + 0 (assuming b,c are zero or handled)
+
+                mat_dim = PSD_shapes[m_psd]
+                H = np.zeros((mat_dim, mat_dim))
+
+                # Reconstruct H from the constraint data
+                for r in range(mat_dim):
+                    for c in range(mat_dim):
+                        H[r, c] = np.trace(PSD_A_vals[m_psd][r, c] @ G_np)
+                        if PSD_b_vals is not None and PSD_b_vals[m_psd] is not None:
+                            H[r, c] += np.dot(PSD_b_vals[m_psd][r, c], F_np)
+                        if PSD_c_vals is not None and PSD_c_vals[m_psd] is not None:
+                            H[r, c] += PSD_c_vals[m_psd][r, c]
+
+                # Check if H is PSD
+                eigvals = np.linalg.eigvalsh(H)
+                min_eig = np.min(eigvals)
+                min_eigenvalues.append(min_eig)
+
+                is_psd = min_eig >= -1e-8
+                psd_violations.append(not is_psd)
+
+                print(f"  PSD[{m_psd}]: shape={mat_dim}x{mat_dim}, min_eig={min_eig:.6e}, satisfied={is_psd}")
+
+                if not is_psd:
+                    print(f"    VIOLATION: H matrix is not PSD!")
+                    print(f"    Eigenvalues: {eigvals}")
+
+            psd_all_satisfied = not any(psd_violations)
+
+        # ========================================================================
+        # STEP 3: Summary and Assertions
+        # ========================================================================
+        print(f"\n{'='*70}")
+        print(f"SUMMARY:")
+        print(f"  Inequality constraints satisfied: {num_violated == 0}")
+        print(f"  PSD constraints satisfied: {psd_all_satisfied}")
+        print(f"{'='*70}\n")
+
+        # Assertions
+        if num_violated > 0 or not psd_all_satisfied:
+            self.fail(
+                f"PEP constraints violated with nonzero c, q!\n"
+                f"  Inequality violations: {num_violated}/{len(inequality_violations)}\n"
+                f"  PSD violations: {sum(psd_violations) if PSD_A_vals else 0}\n"
+                f"This explains why the DRO dual is unbounded (primal PEP is infeasible)."
+            )
 
 
 if __name__ == '__main__':

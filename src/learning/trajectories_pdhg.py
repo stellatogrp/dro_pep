@@ -302,13 +302,15 @@ def problem_data_to_pdhg_trajectories(
     dy0 = y0_shifted
 
     # Saddle point subgradients (at origin in shifted coords)
-    # The PEP encodes optimality conditions as operator pairs:
-    #   -gf1_s = K^T @ y_s  and  gh_s = K @ x_s
-    # In shifted coords, x_s = 0 and y_s = 0, so:
-    #   gf1_s = 0 and gh_s = 0
-    # This is the abstract PEP representation, not the actual function subgradients.
-    gf1_s = jnp.zeros(n)
-    gh_s = jnp.zeros(m)
+    # Even though x_s = 0 and y_s = 0 in shifted coords, the interpolation
+    # inequalities need the ACTUAL function subgradients, not operator-based values.
+    #
+    # For h_shifted(y) = q^T(y + y_opt), the gradient is q everywhere (including at y=0)
+    # For f1_shifted(x) = c^T(x + x_opt) + indicator, the linear part has gradient c
+    #
+    # Setting gh_s = q ensures the h interpolation inequality is satisfied for the linear function
+    gf1_s = c
+    gh_s = q
 
     # Analysis vectors (in SHIFTED coords for Gram matrix)
     # These match PEP pairs: (x_K, K_xK) and (y_K, Kt_yK) where x_K, y_K are shifted

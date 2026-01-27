@@ -186,6 +186,10 @@ def extract_constraint_matrices(
 class FacilityLocationDPP:
 
     def __init__(self, n, m1, m2):
+        self.n = n
+        self.m1 = m1
+        self.m2 = m2
+
         self.c_param = cp.Parameter(n)
         self.Aineq_param = cp.Parameter((m1, n))
         self.bineq_param = cp.Parameter(m1)
@@ -196,28 +200,30 @@ class FacilityLocationDPP:
 
         self.x = cp.Variable(n)
 
+        # Reformulate box constraints as inequalities to include them in K matrix
+        # x >= l becomes I @ x >= l
+        # x <= u becomes -I @ x >= -u
+        # Stack these with A_ineq to form the full inequality system
         self.obj = self.c_param.T @ self.x
         self.constraints = [
-            -self.Aineq_param @ self.x >= -self.bineq_param,
+            -self.Aineq_param @ self.x >= -self.bineq_param,  # A_ineq @ x <= b_ineq
             self.Aeq_param @ self.x == self.beq_param,
-            self.x >= self.l_param,
-            self.x <= self.u_param,
+            self.x >= self.l_param,  # Will extract dual for lower bound
+            -self.x >= -self.u_param,  # Will extract dual for upper bound
         ]
 
         self.prob = cp.Problem(cp.Minimize(self.obj), self.constraints)
     
     def solve(self, c_np, Aineq_np, bineq_np, Aeq_np, beq_np, l_np, u_np):
         """
-        Solve Lasso for a given b vector.
-
-        Args:
-            b_np: (m,) numpy array
+        Solve LP and return primal + dual variables for PDLP formulation.
 
         Returns:
-            x_opt: (n,) optimal solution
-            f_opt: optimal objective value
+            x_opt: (n,) optimal primal solution
+            y_opt: (m1 + m2 + 2*n,) optimal dual variables for K = [A_ineq; A_eq; I; -I]
+                   where y_opt = [y_ineq; y_eq; y_lower; y_upper]
         """
-        # Update parameter value
+        # Update parameter values
         self.c_param.value = c_np
         self.Aineq_param.value = Aineq_np
         self.bineq_param.value = bineq_np
@@ -230,7 +236,58 @@ class FacilityLocationDPP:
         self.prob.solve(solver='CLARABEL')
 
         x_opt = self.x.value
-        y_opt = np.concatenate([self.constraints[0].dual_value, -self.constraints[1].dual_value])
+
+        # Extract dual variables with correct signs for PDLP formulation
+        # CVX convention: constraint dual_value is the Lagrange multiplier
+        # PDLP form: min_x max_y c^T x + <Kx - q, y> where K = [A_ineq; I; -I; A_eq]
+        # Order: all inequalities first, then equalities
+        #
+        # Constraint [0]: -A_ineq @ x >= -b_ineq  =>  dual for (A_ineq @ x <= b_ineq)
+        # Constraint [1]: A_eq @ x == b_eq  =>  dual for equality
+        # Constraint [2]: x >= l  =>  dual for lower bound
+        # Constraint [3]: -x >= -u  =>  dual for upper bound
+
+        # Extract dual variables for PDHG formulation K = [-A_ineq; A_eq]
+        # Box constraints are handled in f1's indicator function, not in K
+        #
+        # CVX solves with constraint -A_ineq @ x >= -b_ineq
+        # For PDHG with K = [-A_ineq; A_eq], we convert from CVX's Lagrangian duals to saddle point duals
+        # The conversion depends on whether we're maximizing or minimizing over y
+        #
+        # PDHG: min_x max_y c^T x + <Kx - q, y>
+        # KKT: c + K^T y = 0  =>  K^T y = -c
+        #
+        # CVX standard form has KKT: c - (constraint gradients)^T λ = 0
+        # For constraint -A_ineq x >= -b_ineq: gradient is -A_ineq
+        # So: c - (-A_ineq)^T λ_ineq - A_eq^T λ_eq = 0
+        # =>  c + A_ineq^T λ_ineq + A_eq^T λ_eq = 0
+        #
+        # Comparing with PDHG KKT: c + (-A_ineq)^T y_ineq + A_eq^T y_eq = 0
+        # We get: y_ineq = -λ_ineq, y_eq = λ_eq
+
+        # Extract dual variables for PDHG formulation K = [-A_ineq; A_eq]
+        # Box constraints are handled implicitly in f1's indicator function, not in K
+        #
+        # CVX solves:
+        #   min c^T x s.t. -A_ineq @ x >= -b_ineq, A_eq @ x == b_eq, l <= x <= u
+        # CVX KKT: c - (-A_ineq)^T λ_ineq - A_eq^T λ_eq = 0
+        #       => c + A_ineq^T λ_ineq - A_eq^T λ_eq = 0
+        #
+        # PDHG with K = [-A_ineq; A_eq], q = [-b_ineq; b_eq]:
+        #   L(x,y) = c^T x + <Kx - q, y> with y = [s; ν]
+        # PDHG KKT: c + K^T y = c + (-A_ineq)^T s + A_eq^T ν = 0
+        #
+        # Matching terms: -A_ineq^T s = A_ineq^T λ_ineq  =>  s = -λ_ineq (but s must be >= 0)
+        #                 A_eq^T ν = -A_eq^T λ_eq         =>  ν = -λ_eq
+        #
+        # User clarification: Do NOT negate inequality duals (they must be non-negative)
+        # Only negate equality duals
+
+        y_ineq = self.constraints[0].dual_value    # Keep as is: s >= 0
+        ν_eq = -self.constraints[1].dual_value     # Negate: ν = -λ_eq
+
+        # Return dual variables: [s; ν] (no λ for box constraints)
+        y_opt = np.concatenate([y_ineq, ν_eq])
 
         return x_opt, y_opt
     
@@ -498,23 +555,25 @@ def run_sgd_for_K_pdlp(cfg, K_max, key, stepsizes_init, sgd_iters, eta_t,
             D_batch, q_batch = make_D_q_vmap(Aineq_batch, bineq_batch, Aeq_batch, beq_batch)
 
             # Compute trajectories for all samples
-            def traj_fn_single(c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt):
+            def traj_fn_single(c, D, q, l, u, x0, y0, x_opt, y_opt):
                 return problem_data_to_pdhg_trajectories(
-                    stepsizes_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt,
+                    stepsizes_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt,
                     K_max=K_max, m1=m1, M=M
                 )
 
-            batch_GF_fn = jax.vmap(traj_fn_single, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+            batch_GF_fn = jax.vmap(traj_fn_single, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0))
             G_batch, F_batch = batch_GF_fn(
                 c_batch, D_batch, q_batch, lb_batch, ub_batch,
-                x0_batch, y0_batch, x_opt_batch, y_opt_batch, f_opt_batch
+                x0_batch, y0_batch, x_opt_batch, y_opt_batch
             )
 
-            # Compute PEP constraint matrices (depend on stepsizes) -
+            # Compute PEP constraint matrices (depend on stepsizes)
             pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max)
             A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
-            print(pep_data[-1])
-            exit(0)
+            PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes = pep_data[5:]
+
+            # Convert PSD_shapes (Python list) to JAX array for API compatibility
+            PSD_mat_dims = jnp.array(PSD_shapes) if PSD_shapes else None
 
             return dro_scs_solve(
                 A_obj, b_obj, A_vals, b_vals, c_vals,
@@ -522,6 +581,10 @@ def run_sgd_for_K_pdlp(cfg, K_max, key, stepsizes_init, sgd_iters, eta_t,
                 eps, precond_inv,
                 risk_type=risk_type,
                 alpha=alpha,
+                PSD_A_vals=PSD_A_vals,
+                PSD_b_vals=PSD_b_vals,
+                PSD_c_vals=PSD_c_vals,
+                PSD_mat_dims=PSD_mat_dims,
             )
 
         value_and_grad_fn = jax.value_and_grad(pdlp_dro_pipeline, argnums=0)
@@ -770,12 +833,12 @@ def pdlp_run(cfg):
             theta_0 = 1.0
             stepsizes_precond_tuple = (jnp.tile(tau_0, K), jnp.tile(sigma_0, K), jnp.tile(theta_0, K))
 
-            def traj_fn_precond(c, A_ineq, b_ineq, A_eq, b_eq, l, u, x0, y0, x_opt, y_opt, f_opt):
+            def traj_fn_precond(c, A_ineq, b_ineq, A_eq, b_eq, l, u, x0, y0, x_opt, y_opt):
                 # Stack D and q
                 D = jnp.vstack([A_ineq, A_eq])
                 q = jnp.concatenate([b_ineq, b_eq])
                 return problem_data_to_pdhg_trajectories(
-                    stepsizes_precond_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt, f_opt,
+                    stepsizes_precond_tuple, c, D, q, l, u, x0, y0, x_opt, y_opt,
                     K_max=cfg.K_max[0], m1=m1, M=Dnorm_max
                 )
             
@@ -791,23 +854,11 @@ def pdlp_run(cfg):
             )
             
             # Compute trajectories
-            batch_traj_fn = jax.vmap(traj_fn_precond, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None))
-            # Note: f_opt is not readily available from CVXPY solve?
-            # solve_batch returned x_opt, y_opt. We can compute f_opt (Lagrangian value at saddle)
-            # L(x, y) = c'x + y'q - y'Dx. At optimality this is the value.
-            
-            # Helper to compute f_opt
-            def compute_lagrangian_opt(c, A_ineq, b_ineq, A_eq, b_eq, x, y):
-                D = jnp.vstack([A_ineq, A_eq])
-                q = jnp.concatenate([b_ineq, b_eq])
-                return jnp.dot(c, x) + jnp.dot(y, q) - jnp.dot(y, D @ x)
-            
-            compute_f_opt_vmap = jax.vmap(compute_lagrangian_opt)
-            f_opt_batch = compute_f_opt_vmap(c_batch, Aineq_batch, bineq_batch, Aeq_batch, beq_batch, x_opt_batch, y_opt_batch)
+            batch_traj_fn = jax.vmap(traj_fn_precond, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 
             G_batch, F_batch = batch_traj_fn(
                 c_batch, Aineq_batch, bineq_batch, Aeq_batch, beq_batch, lb_batch, ub_batch,
-                x0_batch_precond, y0_batch_precond, x_opt_batch, y_opt_batch, f_opt_batch
+                x0_batch_precond, y0_batch_precond, x_opt_batch, y_opt_batch
             )
 
             # Compute preconditioner
