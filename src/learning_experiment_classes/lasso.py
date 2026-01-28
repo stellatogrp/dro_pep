@@ -917,8 +917,9 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
 
     def proj_stepsizes(x):
         if isinstance(x, list):
-            return [jax.nn.relu(jnp.array(xi)) for xi in x]
-        return jax.nn.relu(x)
+            # return [jax.nn.relu(jnp.array(xi)) for xi in x]
+            return [jnp.maximum(jnp.array(xi), 1e-6) for xi in x]
+        return jnp.maximum(jnp.array(x), 1e-6)
 
     optimizer = None
     weight_decay = cfg.get('weight_decay', 1e-2)
