@@ -108,15 +108,15 @@ def conditional_product(common_options, conditional_groups):
 
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
+    ['learning_framework=ldro-pep'],
     ['alg=vanilla_gd'],
-    ['pep_obj=obj_val', 'pep_obj=opt_dist_sq_norm'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
+    ['pep_obj=obj_val'],
+    ['dro_obj=expectation'],
     ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
     ['mu=1'],
     ['N=20'],
     ['sgd_iters=500'],
-    ['K_max=[10]', 'K_max=[15]'],
+    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
 LogReg_options = [

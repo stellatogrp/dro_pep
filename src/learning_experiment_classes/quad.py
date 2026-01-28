@@ -510,11 +510,11 @@ def quad_run(cfg):
         else:
             # LDRO-PEP or L2O: stochastic optimization with samples
             run_sgd_for_K(
-                cfg, K, key, M_val, t_init, 
+                cfg, K, key, M_val, t_init,
                 sgd_iters, eta_t,
                 eps, alpha, alg, optimizer_type,
                 mu_val, L_val, R_val, N_val, d_val,
-                csv_path
+                csv_path, K_output_dir
             )
             log.info("=== SGD experiment complete ===")
 
@@ -558,11 +558,11 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_los
     return pd.DataFrame(data)
 
 
-def run_sgd_for_K(cfg, K_max, key, M_val, t_init, 
+def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
                    sgd_iters, eta_t,
                    eps, alpha, alg, optimizer_type,
                    mu_val, L_val, R_val, N_val, d_val,
-                   csv_path):
+                   csv_path, K_output_dir):
     """
     Run SGD for a specific K_max value.
     
@@ -586,19 +586,53 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         # return [jax.nn.relu(s) for s in stepsizes]
         return [jnp.maximum(s, 1e-6) for s in stepsizes]
     
-    # Sample functions
-    def sample_batch(key):
-        key, k1, k2 = jax.random.split(key, 3)
-        Q_subkeys = jax.random.split(k1, N_val)
-        z0_subkeys = jax.random.split(k2, N_val)
-        
-        Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
-        z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
-        zs_batch = jnp.zeros(z0_batch.shape)
-        fs_batch = jnp.zeros(N_val)
-        
-        return key, Q_batch, z0_batch, zs_batch, fs_batch
-    
+    # ============================================================
+    # PRE-SAMPLE TRAINING DATA
+    # ============================================================
+    training_sample_N = cfg.get('training_sample_N', 500)
+    log.info(f'Pre-sampling {training_sample_N} training problems...')
+
+    # Validate divisibility
+    assert training_sample_N % N_val == 0, \
+        f"training_sample_N ({training_sample_N}) must be divisible by N ({N_val})"
+
+    # Sample training set
+    key, k1, k2 = jax.random.split(key, 3)
+    Q_train_keys = jax.random.split(k1, training_sample_N)
+    z0_train_keys = jax.random.split(k2, training_sample_N)
+
+    Q_train_full = get_Q_samples(Q_train_keys, d_val, mu_val, L_val, M_val)
+    z0_train_full = get_z0_samples(z0_train_keys, M_val, R_val)
+    zs_train_full = jnp.zeros(z0_train_full.shape)
+    fs_train_full = jnp.zeros(training_sample_N)
+
+    log.info(f'Training set shapes: Q={Q_train_full.shape}, z0={z0_train_full.shape}')
+
+    # Save training set to disk
+    train_Q_path = os.path.join(K_output_dir, 'training_set_Q.npz')
+    train_z0_path = os.path.join(K_output_dir, 'training_set_z0.npz')
+    np.savez_compressed(train_Q_path, Q=np.array(Q_train_full))
+    np.savez_compressed(train_z0_path, z0=np.array(z0_train_full))
+    log.info(f'Saved training set to {train_Q_path} and {train_z0_path}')
+
+    # Compute number of minibatches
+    n_minibatches = training_sample_N // N_val
+    log.info(f'Number of minibatches per epoch: {n_minibatches}')
+
+    # Define new sample_batch function using sliding window
+    def sample_batch_from_training_set(sgd_iter):
+        """Extract minibatch from pre-sampled training set using sliding window."""
+        minibatch_idx = sgd_iter % n_minibatches
+        start_idx = minibatch_idx * N_val
+        end_idx = start_idx + N_val
+
+        Q_batch = Q_train_full[start_idx:end_idx]
+        z0_batch = z0_train_full[start_idx:end_idx]
+        zs_batch = zs_train_full[start_idx:end_idx]
+        fs_batch = fs_train_full[start_idx:end_idx]
+
+        return Q_batch, z0_batch, zs_batch, fs_batch
+
     # Define grad_fn based on learning framework
     learning_framework = cfg.learning_framework
     
@@ -634,15 +668,12 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         else:
             raise ValueError(f"Unknown algorithm: {alg}")
         
-        # Compute preconditioner from first sample batch
-        # Sample a batch and compute trajectories to get G, F statistics
-        key, k1, k2 = jax.random.split(key, 3)
-        Q_precond_keys = jax.random.split(k1, N_val)
-        z0_precond_keys = jax.random.split(k2, N_val)
-        Q_precond_batch = get_Q_samples(Q_precond_keys, d_val, mu_val, L_val, M_val)
-        z0_precond_batch = get_z0_samples(z0_precond_keys, M_val, R_val)
-        zs_precond_batch = jnp.zeros(z0_precond_batch.shape)
-        fs_precond_batch = jnp.zeros(N_val)
+        # Use ALL training samples for preconditioner computation
+        log.info(f'Computing preconditioner from {training_sample_N} training samples...')
+        Q_precond_batch = Q_train_full
+        z0_precond_batch = z0_train_full
+        zs_precond_batch = zs_train_full
+        fs_precond_batch = fs_train_full
         
         # Compute G, F for preconditioner calculation using correct stepsizes
         batch_GF_func = jax.vmap(
@@ -656,7 +687,7 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
         precond_inv = compute_preconditioner_from_samples(
             np.array(G_precond_batch), np.array(F_precond_batch), precond_type=precond_type
         )
-        log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
+        log.info(f'Computed preconditioner from {training_sample_N} samples using type: {precond_type}')
         
         # Get dro_canon_backend from config (default: cvxpylayers for backward compatibility)
         dro_canon_backend = cfg.get('dro_canon_backend', 'cvxpylayers')
@@ -798,9 +829,9 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}, beta={beta_log}')
         else:
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
-        
-        # Sample new batch (Q and z0 are resampled each iteration)
-        key, Q_batch, z0_batch, zs_batch, fs_batch = sample_batch(key)
+
+        # Extract minibatch from pre-sampled training set using sliding window
+        Q_batch, z0_batch, zs_batch, fs_batch = sample_batch_from_training_set(iter_num)
         
         # Compute loss and gradients w.r.t stepsizes only
         # The loss corresponds to the CURRENT stepsizes (before update)

@@ -2,10 +2,10 @@
 mu: 1.
 L: 10.
 R: 20.
-dim: 200
+dim: 300
 
 # type of learning framework
-learning_framework: 'l2o'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Batch size
 N: 20
@@ -21,7 +21,7 @@ vector_init: "fixed" # "fixed" or "silver"
 # L2O loss type (ONLY affects learning_framework='l2o', NOT 'ldro-pep')
 # 'final': Standard final iterate loss f(x_K) - f_opt
 # 'cumulative': Sum of losses at all iterates (better gradient diversity)
-l2o_loss_type: "cumulative"
+l2o_loss_type: "weighted"
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
@@ -50,6 +50,7 @@ mosek_tol_rel_gap: 1e-2
 
 # Outputs
 output_dir: "learn_dro_outputs"
+training_sample_N: 500
 out_of_sample_N: 500
 out_of_sample_seed: 12345
 out_of_dist_N: 1000

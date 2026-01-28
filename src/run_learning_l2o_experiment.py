@@ -102,14 +102,14 @@ def conditional_product(common_options, conditional_groups):
 
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
+    ['learning_framework=l2o'],
     ['alg=vanilla_gd'],
-    ['pep_obj=obj_val', 'pep_obj=opt_dist_sq_norm'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
+    ['pep_obj=obj_val'],
+    ['dro_obj=expectation'],
     ['mu=1'],
     ['N=20'],
     ['sgd_iters=500'],
-    ['K_max=[10]', 'K_max=[15]'],
+    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
 LogReg_options = [
@@ -125,10 +125,10 @@ Learn_Quad_params = conditional_product(
         #     'mu=0': ['K_max=[3,7,15]', 'K_max=[31]'],
         #     'mu=1': ['K_max=[4,8,16]', 'K_max=[32]'],
         # },
-        {
-            'stepsize_type=scalar': ['vector_init=fixed'],
-            'stepsize_type=vector': ['vector_init=fixed'],
-        },
+        # {
+        #     'stepsize_type=scalar': ['vector_init=fixed'],
+        #     'stepsize_type=vector': ['vector_init=fixed'],
+        # },
     ]
 )
 
@@ -143,14 +143,14 @@ Lasso_options = [
 Learn_Lasso_params = conditional_product(
     common_options=Lasso_options,
     conditional_groups=[
-        {
-            'm=300': ['n=200'],
-            'm=200': ['n=300'],
-        },
-        {
-            'stepsize_type=scalar': ['vector_init=fixed'],
-            'stepsize_type=vector': ['vector_init=fixed'],
-        },
+        # {
+        #     'm=300': ['n=200'],
+        #     'm=200': ['n=300'],
+        # },
+        # {
+        #     'stepsize_type=scalar': ['vector_init=fixed'],
+        #     'stepsize_type=vector': ['vector_init=fixed'],
+        # },
     ]
 )
 
@@ -161,9 +161,9 @@ func_driver_map = {
 }
 
 base_dir_map = {
-    'Quad': 'learn_dro_outputs/Quad',
-    'Lasso': 'learn_dro_outputs/Lasso',
-    'LogReg': 'learn_dro_outputs/LogReg',
+    'Quad': 'learn_l2o_outputs/Quad',
+    'Lasso': 'learn_l2o_outputs/Lasso',
+    'LogReg': 'learn_l2o_outputs/LogReg',
 }
 
 
