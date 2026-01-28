@@ -184,7 +184,7 @@ class LassoProblemDPP:
         f_opt_batch = np.zeros(N)
         R_max = 0.0
 
-        for i in range(N):
+        for i in trange(N):
             x_opt, f_opt = self.solve(b_batch_np[i])
             x_opt_batch[i] = x_opt
             f_opt_batch[i] = f_opt
@@ -235,7 +235,7 @@ def solve_batch_lasso_cvxpy(A_np, b_batch_np, lambd, lasso_dpp=None):
     f_opt_batch = np.zeros(N)
     R_max = 0.0
 
-    for i in range(N):
+    for i in trange(N):
         x_opt, f_opt = solve_lasso_cvxpy(A_np, b_batch_np[i], lambd)
         x_opt_batch[i] = x_opt
         f_opt_batch[i] = f_opt
@@ -692,9 +692,9 @@ def compute_geometric_stepsizes(L, K, start_factor=0.5, end_factor=1.5):
 
 
 def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, eta_t,
-                         eps, alpha, alg, optimizer_type, N_val, csv_path, precond_inv):
+                         eps, alpha, alg, optimizer_type, N_val, csv_path, K_output_dir):
     log.info(f"=== Running SGD for K={K_max}, alg={alg} ===")
-    
+
     # Extract problem data
     A_jax = problem_data['A_jax']
     A_np = problem_data['A_np']
@@ -702,8 +702,70 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
     mu = problem_data['mu']
     R = problem_data['R']
     lambd = problem_data['lambd']
-    
+
     learning_framework = cfg.learning_framework
+
+    # Create DPP-parametrized Lasso problem for fast batch solving
+    lasso_dpp = LassoProblemDPP(A_np, lambd)
+    log.info("Created DPP-parametrized Lasso problem for fast batch solving")
+
+    # ============================================================
+    # PRE-SAMPLE TRAINING DATA
+    # ============================================================
+    training_sample_N = cfg.get('training_sample_N', 500)
+    log.info(f'Pre-sampling {training_sample_N} training problems...')
+
+    # Validate divisibility
+    assert training_sample_N % N_val == 0, \
+        f"training_sample_N ({training_sample_N}) must be divisible by N ({N_val})"
+
+    # Sample training set
+    key, train_key = jax.random.split(key)
+    b_train_full, x_opt_train_full, f_opt_train_full = sample_lasso_batch(
+        train_key, A_jax, A_np, training_sample_N,
+        cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd, lasso_dpp=lasso_dpp
+    )
+
+    # x0 is always zero in shifted coordinates
+    x0_train_full = jnp.zeros((training_sample_N, A_jax.shape[1]))
+
+    log.info(f'Training set shapes: b={b_train_full.shape}, x_opt={x_opt_train_full.shape}, '
+             f'f_opt={f_opt_train_full.shape}, x0={x0_train_full.shape}')
+
+    # Save training set to disk
+    train_b_path = os.path.join(K_output_dir, 'training_set_b.npz')
+    train_x_opt_path = os.path.join(K_output_dir, 'training_set_x_opt.npz')
+    train_f_opt_path = os.path.join(K_output_dir, 'training_set_f_opt.npz')
+    train_x0_path = os.path.join(K_output_dir, 'training_set_x0.npz')
+
+    np.savez_compressed(train_b_path, b=np.array(b_train_full))
+    np.savez_compressed(train_x_opt_path, x_opt=np.array(x_opt_train_full))
+    np.savez_compressed(train_f_opt_path, f_opt=np.array(f_opt_train_full))
+    np.savez_compressed(train_x0_path, x0=np.array(x0_train_full))
+
+    log.info(f'Saved training set to:')
+    log.info(f'  {train_b_path}')
+    log.info(f'  {train_x_opt_path}')
+    log.info(f'  {train_f_opt_path}')
+    log.info(f'  {train_x0_path}')
+
+    # Compute number of minibatches
+    n_minibatches = training_sample_N // N_val
+    log.info(f'Number of minibatches per epoch: {n_minibatches}')
+
+    # Define sample_batch function using sliding window
+    def sample_batch_from_training_set(sgd_iter):
+        """Extract minibatch from pre-sampled training set using sliding window."""
+        minibatch_idx = sgd_iter % n_minibatches
+        start_idx = minibatch_idx * N_val
+        end_idx = start_idx + N_val
+
+        b_batch = b_train_full[start_idx:end_idx]
+        x_opt_batch = x_opt_train_full[start_idx:end_idx]
+        f_opt_batch = f_opt_train_full[start_idx:end_idx]
+        x0_batch = x0_train_full[start_idx:end_idx]
+
+        return b_batch, x_opt_batch, f_opt_batch, x0_batch
 
     # TODO: add ALISTA
     if learning_framework == 'ldro-pep':
@@ -734,22 +796,36 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
             betas_t.append(t_new)
         beta_init = jnp.array(betas_t)  # Raw t_k sequence of length K+1
 
-    # Create DPP-parametrized Lasso problem for fast batch solving
-    # This avoids rebuilding the CVXPY problem at each SGD iteration
-    lasso_dpp = LassoProblemDPP(A_np, lambd)
-    log.info("Created DPP-parametrized Lasso problem for fast batch solving")
-
-    # Helper to sample a batch of Lasso problems
-    def sample_batch(sample_key):
-        batch_key, next_key = jax.random.split(sample_key)
-        b_batch, x_opt_batch, f_opt_batch = sample_lasso_batch(
-            batch_key, A_jax, A_np, N_val,
-            cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd, lasso_dpp=lasso_dpp
-        )
-        return next_key, b_batch, x_opt_batch, f_opt_batch
-    
     risk_type = 'cvar' if cfg.dro_obj == 'cvar' else 'expectation'
     if learning_framework == 'ldro-pep':
+        # Compute preconditioner from ALL training samples
+        log.info(f'Computing preconditioner from {training_sample_N} training samples...')
+
+        # Set up algorithm-specific functions for preconditioner
+        if has_beta:
+            traj_stepsizes_precond = (gamma_init, beta_init)
+        else:
+            traj_stepsizes_precond = gamma_init
+
+        # Compute G_batch and F_batch from full training set
+        batch_GF_fn = jax.vmap(
+            lambda b, x0, x_opt, f_opt: traj_fn(
+                traj_stepsizes_precond, A_jax, b, x0, x_opt, f_opt, lambd, K_max,
+                return_Gram_representation=True
+            ),
+            in_axes=(0, 0, 0, 0)
+        )
+        G_batch_precond, F_batch_precond = batch_GF_fn(
+            b_train_full, x0_train_full, x_opt_train_full, f_opt_train_full
+        )
+
+        # Compute preconditioner
+        precond_type = cfg.get('precond_type', 'average')
+        precond_inv = compute_preconditioner_from_samples(
+            G_batch_precond, F_batch_precond, precond_type=precond_type
+        )
+        log.info(f'Computed preconditioner from {training_sample_N} samples using type: {precond_type}')
+
         # DRO pipeline: compute Gram representation, then solve DRO SDP
         def lasso_dro_pipeline(stepsizes_tuple, b_batch, x0_batch, x_opt_batch, f_opt_batch):
             """Full DRO pipeline for Lasso using manual JAX canonicalization."""
@@ -867,12 +943,9 @@ def run_sgd_for_K_lasso(cfg, K_max, problem_data, key, gamma_init, sgd_iters, et
         else:
             log.info(f'K={K_max}, iter={iter_num}, gamma={gamma_log}')
         
-        # Sample new batch
+        # Extract minibatch from pre-sampled training set using sliding window
         iter_start_time = time.perf_counter()
-        log.info('sampling...')
-        key, b_batch, x_opt_batch, f_opt_batch = sample_batch(key)
-        log.info('samples found')
-        x0_batch = jnp.zeros((N_val, A_jax.shape[1]))  # Shifted problem: start at 0
+        b_batch, x_opt_batch, f_opt_batch, x0_batch = sample_batch_from_training_set(iter_num)
         
         # Compute loss and gradients
         log.info('calling value_and_grad_fn...')
@@ -1205,64 +1278,13 @@ def lasso_run(cfg):
             )
             # LPEP is complete, continue to next K
             continue
-        elif learning_framework == 'l2o':
-            # L2O doesn't need the preconditioner
-            precond_inv = None
-        elif learning_framework == 'ldro-pep':
-            # LDRO-PEP: precompute preconditioner using a large sample batch
-            precond_sample_size = cfg.get('precond_sample_size', 100)
-            log.info(f"Precomputing preconditioner using {precond_sample_size} samples...")
-            
-            precond_key, key = jax.random.split(key)
-            b_batch_precond, x_opt_batch_precond, f_opt_batch_precond = sample_lasso_batch(
-                precond_key, A_jax, A_np, precond_sample_size,
-                cfg.p_xsamp_nonzero, cfg.b_noise_std, lambd
-            )
-            x0_batch_precond = jnp.zeros((precond_sample_size, A_jax.shape[1]))
-            
-            # Compute G_batch and F_batch using initial stepsizes
-            if alg == 'ista':
-                traj_fn = problem_data_to_ista_trajectories
-                traj_stepsizes = gamma_init
-            elif alg == 'fista':
-                traj_fn = problem_data_to_fista_trajectories
-                # Initialize beta for FISTA
-                betas_t = [1.0]
-                for k in range(K):
-                    t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
-                    betas_t.append(t_new)
-                beta_init = jnp.array(betas_t)
-                traj_stepsizes = (gamma_init, beta_init)
-            else:
-                raise ValueError(f"Unknown algorithm: {alg}")
-            
-            batch_GF_fn = jax.vmap(
-                lambda b, x0, x_opt, f_opt: traj_fn(
-                    traj_stepsizes, A_jax, b, x0, x_opt, f_opt, lambd, K, 
-                    return_Gram_representation=True
-                ),
-                in_axes=(0, 0, 0, 0)
-            )
-            G_batch_precond, F_batch_precond = batch_GF_fn(
-                b_batch_precond, x0_batch_precond, x_opt_batch_precond, f_opt_batch_precond
-            )
-            
-            # Compute preconditioner (fixed for all SGD iterations)
-            precond_type = cfg.get('precond_type', 'average')
-            precond_inv = compute_preconditioner_from_samples(
-                G_batch_precond, F_batch_precond, precond_type=precond_type
-            )
-            log.info(f"Preconditioner computed (type={precond_type})")
-            log.info(precond_inv)
-        else:
-            raise ValueError(f"Unknown learning_framework: {learning_framework}")
-        
-        # Run SGD for both L2O and ldro-pep
+
+        # Run SGD for both L2O and ldro-pep (preconditioner computed inside run_sgd_for_K_lasso)
         run_sgd_for_K_lasso(
             cfg, K, problem_data, key,
             gamma_init, sgd_iters, eta_t,
             eps, alpha, alg, optimizer_type,
-            N_val, csv_path, precond_inv
+            N_val, csv_path, K_output_dir
         )
     
     log.info("=== Lasso SGD experiment complete ===")

@@ -7,6 +7,7 @@ R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
 
 # Sample sizes
 N: 5                # Batch size for SGD training
+training_sample_N: 500  # Number of training samples (pre-sampled for sliding window)
 precond_sample_size: 100
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
@@ -24,7 +25,7 @@ b_noise_std: 1e-2
 z0_type: 'zero'
 
 # Type of learning framework
-learning_framework: 'lpep'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'l2o'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Algorithm and optimizer type (selected by Slurm job index)
 alg: "ista"            # ista or fista
