@@ -25,7 +25,7 @@ L_seed: 1001            # Seed for L computation
 R_seed: 5002            # Seed for R computation
 
 # Learning framework
-learning_framework: 'ldro-pep'  # Options: 'ldro-pep', 'l2o', 'lpep'
+learning_framework: 'l2o'  # Options: 'ldro-pep', 'l2o', 'lpep'
 
 # Algorithm and optimizer settings
 alg: 'vanilla_gd'       # Options: 'vanilla_gd', 'nesterov_fgm'
@@ -46,7 +46,7 @@ eps: 0.1                    # Wasserstein ball radius
 alpha: 0.1                  # CVaR confidence level
 
 # L2O-specific loss formulations (only used when learning_framework='l2o')
-l2o_loss_type: 'final'      # Options: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
+l2o_loss_type: 'weighted'      # Options: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
 l2o_decay_rate: 0.9         # Decay rate for 'weighted' loss type
 precond_type: 'average'     # Preconditioner type
 

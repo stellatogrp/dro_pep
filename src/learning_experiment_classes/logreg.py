@@ -781,22 +781,25 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
         if dro_canon_backend == 'manual_jax':
             precond_inv_jax = (jnp.array(precond_inv[0]), jnp.array(precond_inv[1]))
             risk_type = 'cvar' if cfg.dro_obj == 'cvar' else 'expectation'
-            
+
+            # Bind static arguments to trajectory and pep_data functions
+            traj_fn_bound = partial(traj_fn, K_max=K_max, return_Gram_representation=True)
+            pep_data_fn_bound = partial(pep_data_fn, mu=mu, L=L, R=R, K_max=K_max, pep_obj=cfg.pep_obj)
+
             def manual_jax_pipeline(stepsizes, A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch):
                 """Full DRO pipeline using manual JAX canonicalization."""
                 # Compute trajectories (A is now batched)
                 batch_GF_func = jax.vmap(
-                    lambda A, b, z0, x_opt, f_opt: traj_fn(
-                        stepsizes, A, b, z0, x_opt, f_opt, K_max,
-                        return_Gram_representation=True
+                    lambda A, b, z0, x_opt, f_opt: traj_fn_bound(
+                        stepsizes, A, b, z0, x_opt, f_opt
                     ),
                     in_axes=(0, 0, 0, 0, 0)  # A is batched
                 )
                 G_batch, F_batch = batch_GF_func(A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch)
-                
-                pep_data = pep_data_fn(stepsizes, mu, L, R, K_max, cfg.pep_obj)
+
+                pep_data = pep_data_fn_bound(stepsizes)
                 A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
-                
+
                 return dro_scs_solve(
                     A_obj, b_obj, A_vals, b_vals, c_vals,
                     G_batch, F_batch,
@@ -804,7 +807,7 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
                     risk_type=risk_type,
                     alpha=alpha,
                 )
-            
+
             value_and_grad_fn = jax.value_and_grad(manual_jax_pipeline, argnums=0)
             full_dro_layer = None
             log.info(f'Using manual JAX pipeline with risk_type={risk_type}')
@@ -825,6 +828,15 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
         # Determine risk type string
         risk_type = cfg.dro_obj  # 'expectation' or 'cvar'
 
+        # Create a wrapper for traj_fn that accepts delta as an argument (for compatibility)
+        # but doesn't pass it to traj_fn (since delta is already baked into traj_fn via closure)
+        def traj_fn_wrapper(stepsizes, A, b, z0, x_opt, f_opt, delta_arg, K_max_arg, return_Gram_representation):
+            """Wrapper that accepts delta/K_max for compatibility but uses fixed K_max."""
+            # traj_fn signature: (stepsizes, A, b, z0, x_opt, f_opt, K_max, return_Gram_representation)
+            # delta is already baked into traj_fn, so we don't pass delta_arg
+            # K_max_arg might be a tracer, so we use the fixed K_max from closure
+            return traj_fn(stepsizes, A, b, z0, x_opt, f_opt, K_max, return_Gram_representation)
+
         if l2o_loss_type == 'final':
             # Original loss (only final iterate)
             def l2o_wrapper(stepsizes, A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch):
@@ -832,7 +844,7 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
                 # Vmap over batched A matrices
                 batch_pep_obj_func = jax.vmap(
                     lambda A, b, z0, x_opt, f_opt: logreg_pep_obj(
-                        stepsizes, A, b, z0, x_opt, f_opt, delta, K_max, traj_fn, cfg.pep_obj
+                        stepsizes, A, b, z0, x_opt, f_opt, delta, K_max, traj_fn_wrapper, cfg.pep_obj
                     ),
                     in_axes=(0, 0, 0, 0, 0)  # A is batched
                 )
@@ -855,7 +867,7 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
                 # Vmap over batched A matrices
                 batch_loss_func = jax.vmap(
                     lambda A, b, z0, x_opt, f_opt: logreg_trajectory_loss(
-                        stepsizes, A, b, z0, x_opt, f_opt, delta, K_max, traj_fn, cfg.pep_obj,
+                        stepsizes, A, b, z0, x_opt, f_opt, delta, K_max, traj_fn_wrapper, cfg.pep_obj,
                         loss_type=l2o_loss_type, decay_rate=decay_rate
                     ),
                     in_axes=(0, 0, 0, 0, 0)  # A is batched

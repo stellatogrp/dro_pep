@@ -35,6 +35,7 @@ test/
 learn_dro_outputs/
 experiment_plots_icml/
 out_of_sample_outputs/
+learn_l2o_outputs/
 
 ## Bibliography auxiliary files (bibtex/biblatex/biber):
 *.bbl

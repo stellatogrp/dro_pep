@@ -236,7 +236,7 @@ def main():
             if job_idx >= len(Learn_LogReg_params):
                 log.error(f'job_idx {job_idx} >= len(Learn_LogReg_params) {len(Learn_LogReg_params)}')
                 exit(1)
-            hydra_tags += Learn_Lasso_params[job_idx]
+            hydra_tags += Learn_LogReg_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
     driver()
