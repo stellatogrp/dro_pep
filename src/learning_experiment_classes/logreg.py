@@ -14,6 +14,7 @@ import logging
 import time
 import cvxpy as cp
 from functools import partial
+from tqdm import trange
 
 from learning.pep_construction import (
     construct_gd_pep_data,
@@ -353,7 +354,9 @@ def sample_logreg_batch(key, N, N_data, n, A_std, p_beta_nonzero,
     x_opt_batch_np = np.zeros((N, n))
     f_opt_batch_np = np.zeros(N)
 
-    for i in range(N):
+    # Use trange for progress tracking when N is large (>= 50)
+    iterator = trange(N, desc="Solving logreg problems") if N >= 50 else range(N)
+    for i in iterator:
         x_opt, f_opt = solve_logreg_cvxpy(A_batch_np[i], b_batch_np[i], delta)
         x_opt_batch_np[i] = x_opt
         f_opt_batch_np[i] = f_opt
@@ -591,10 +594,10 @@ def build_stepsizes_df(all_stepsizes_vals, K_max, is_vector_t, has_beta, all_los
 # SGD Run Function for Single K
 # =============================================================================
 
-def run_sgd_for_K(cfg, K_max, key, problem_data, t_init, 
+def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
                    sgd_iters, eta_t,
                    eps, alpha, alg, optimizer_type,
-                   csv_path):
+                   csv_path, K_output_dir):
     """
     Run SGD for a specific K_max value.
     
@@ -603,15 +606,18 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
     """
     log.info(f"=== Running SGD for K={K_max} ===")
 
-    # Extract problem data
-    L = problem_data['L']
+    # Extract problem data (L and R will be recomputed from training set)
+    L_config = problem_data['L']
     mu = problem_data['mu']
-    R = problem_data['R']
+    R_config = problem_data['R']
     delta = problem_data['delta']
     N_data = problem_data['N_data']
     n = problem_data['n']
     A_std = problem_data['A_std']
     N_val = cfg.N
+
+    log.info(f"Config values: L={L_config:.6f}, R={R_config:.6f}")
+    log.info(f"Will compute L and R on-the-fly from pre-sampled training set")
     
     # Select trajectory function based on algorithm
     if alg == 'vanilla_gd':
@@ -626,21 +632,95 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
     def proj_stepsizes(stepsizes):
         return [jax.nn.relu(s) for s in stepsizes]
     
-    # Sample function
-    def sample_batch(sample_key):
-        k1, k2, next_key = jax.random.split(sample_key, 3)
+    # ============================================================
+    # PRE-SAMPLE TRAINING DATA
+    # ============================================================
+    training_sample_N = cfg.get('training_sample_N', 500)
+    log.info(f'Pre-sampling {training_sample_N} training problems...')
 
-        # Sample both A and b (not just b)
-        A_batch, b_batch, x_opt_batch, f_opt_batch = sample_logreg_batch(
-            k1, N_val, N_data, n, A_std, cfg.p_beta_nonzero, cfg.beta_scale,
-            cfg.eps_std, delta
-        )
+    # Validate divisibility
+    assert training_sample_N % N_val == 0, \
+        f"training_sample_N ({training_sample_N}) must be divisible by N ({N_val})"
 
-        # Sample z0 in shifted coordinates
-        z0_batch = sample_batch_x0_disk_jax(k2, N_val, n, R)
+    # Sample training set
+    key, k1 = jax.random.split(key, 2)
 
-        return next_key, A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch
-    
+    # Sample A and b for all training problems
+    A_train_full, b_train_full, x_opt_train_full, f_opt_train_full = sample_logreg_batch(
+        k1, training_sample_N, N_data, n, A_std, cfg.p_beta_nonzero, cfg.beta_scale,
+        cfg.eps_std, delta
+    )
+
+    # Compute L on the fly from the training set A matrices
+    log.info(f'Computing L from {training_sample_N} training A matrices...')
+    L_fn = lambda A: compute_logreg_L_single(A, delta)
+    L_vals = jax.vmap(L_fn)(A_train_full)
+    L_computed = float(jnp.max(L_vals))
+    L_mean = float(jnp.mean(L_vals))
+    L_std = float(jnp.std(L_vals))
+    log.info(f'Computed L distribution: mean={L_mean:.6f}, std={L_std:.6f}, max={L_computed:.6f}')
+
+    # Compute R on the fly from the training set optimal solutions
+    log.info(f'Computing R from {training_sample_N} training optimal solutions...')
+    x_opt_norms = jnp.linalg.norm(x_opt_train_full, axis=1)
+    R_computed = float(jnp.max(x_opt_norms))
+    R_mean = float(jnp.mean(x_opt_norms))
+    R_std = float(jnp.std(x_opt_norms))
+    log.info(f'Computed R distribution: mean={R_mean:.6f}, std={R_std:.6f}, max={R_computed:.6f}')
+
+    # Override L and R with computed values
+    L = L_computed
+    R = R_computed
+    log.info(f'Using computed L={L:.6f} and R={R:.6f} for training')
+
+    # Set x0 = 0 in original coordinates
+    # z0 is in shifted coordinates: z0 = x0 - x_opt = 0 - x_opt = -x_opt
+    # R is the maximum distance from origin to any optimal solution
+    z0_train_full = -x_opt_train_full
+    log.info(f'Set x0=0 in original coordinates (z0=-x_opt in shifted coordinates)')
+
+    log.info(f'Training set shapes: A={A_train_full.shape}, b={b_train_full.shape}, '
+             f'x_opt={x_opt_train_full.shape}, z0={z0_train_full.shape}')
+
+    # Save training set to disk
+    train_A_path = os.path.join(K_output_dir, 'training_set_A.npz')
+    train_b_path = os.path.join(K_output_dir, 'training_set_b.npz')
+    train_x_opt_path = os.path.join(K_output_dir, 'training_set_x_opt.npz')
+    train_f_opt_path = os.path.join(K_output_dir, 'training_set_f_opt.npz')
+    train_z0_path = os.path.join(K_output_dir, 'training_set_z0.npz')
+
+    np.savez_compressed(train_A_path, A=np.array(A_train_full))
+    np.savez_compressed(train_b_path, b=np.array(b_train_full))
+    np.savez_compressed(train_x_opt_path, x_opt=np.array(x_opt_train_full))
+    np.savez_compressed(train_f_opt_path, f_opt=np.array(f_opt_train_full))
+    np.savez_compressed(train_z0_path, z0=np.array(z0_train_full))
+
+    log.info(f'Saved training set to:')
+    log.info(f'  {train_A_path}')
+    log.info(f'  {train_b_path}')
+    log.info(f'  {train_x_opt_path}')
+    log.info(f'  {train_f_opt_path}')
+    log.info(f'  {train_z0_path}')
+
+    # Compute number of minibatches
+    n_minibatches = training_sample_N // N_val
+    log.info(f'Number of minibatches per epoch: {n_minibatches}')
+
+    # Define new sample_batch function using sliding window
+    def sample_batch_from_training_set(sgd_iter):
+        """Extract minibatch from pre-sampled training set using sliding window."""
+        minibatch_idx = sgd_iter % n_minibatches
+        start_idx = minibatch_idx * N_val
+        end_idx = start_idx + N_val
+
+        A_batch = A_train_full[start_idx:end_idx]
+        b_batch = b_train_full[start_idx:end_idx]
+        z0_batch = z0_train_full[start_idx:end_idx]
+        x_opt_batch = x_opt_train_full[start_idx:end_idx]
+        f_opt_batch = f_opt_train_full[start_idx:end_idx]
+
+        return A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch
+
     # Define grad_fn based on learning framework
     learning_framework = cfg.learning_framework
     
@@ -670,8 +750,13 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
         else:
             raise ValueError(f"Unknown algorithm: {alg}")
         
-        # Compute preconditioner from first sample batch
-        key, A_precond, b_precond, z0_precond, x_opt_precond, f_opt_precond = sample_batch(key)
+        # Use ALL training samples for preconditioner computation
+        log.info(f'Computing preconditioner from {training_sample_N} training samples...')
+        A_precond = A_train_full
+        b_precond = b_train_full
+        z0_precond = z0_train_full
+        x_opt_precond = x_opt_train_full
+        f_opt_precond = f_opt_train_full
 
         batch_GF_func = jax.vmap(
             lambda A, b, z0, x_opt, f_opt: traj_fn(
@@ -683,12 +768,12 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
         G_precond_batch, F_precond_batch = batch_GF_func(
             A_precond, b_precond, z0_precond, x_opt_precond, f_opt_precond
         )
-        
+
         precond_type = cfg.get('precond_type', 'average')
         precond_inv = compute_preconditioner_from_samples(
             np.array(G_precond_batch), np.array(F_precond_batch), precond_type=precond_type
         )
-        log.info(f'Computed preconditioner from {N_val} samples using type: {precond_type}')
+        log.info(f'Computed preconditioner from {training_sample_N} samples using type: {precond_type}')
         
         dro_canon_backend = cfg.get('dro_canon_backend', 'manual_jax')
         log.info(f'Using DRO canon backend: {dro_canon_backend}')
@@ -839,9 +924,9 @@ def run_sgd_for_K(cfg, K_max, key, problem_data, t_init,
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}, beta={beta_log}')
         else:
             log.info(f'K={K_max}, iter={iter_num}, t={t_log}')
-        
-        # Sample new batch (includes A now)
-        key, A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch = sample_batch(key)
+
+        # Extract minibatch from pre-sampled training set using sliding window
+        A_batch, b_batch, z0_batch, x_opt_batch, f_opt_batch = sample_batch_from_training_set(iter_num)
 
         # Compute loss and gradients
         iter_start_time = time.time()
@@ -1125,9 +1210,248 @@ def logreg_run(cfg):
                 cfg, K, key, problem_data, t_init,
                 sgd_iters, eta_t,
                 eps, alpha, alg, optimizer_type,
-                csv_path
+                csv_path, K_output_dir
             )
 
     log.info("=" * 60)
     log.info("Logistic Regression learning experiment complete!")
+    log.info("=" * 60)
+
+
+def logreg_out_of_sample_run(cfg):
+    """
+    Generate and save out-of-sample test problems for Logistic Regression.
+
+    For validation (in-distribution):
+        - Generate out_of_sample_val_N different (A, b) problem instances
+        - Solve all problems to get optimal solutions and values
+        - Save A, b, x_opt, f_opt, and z0 separately
+
+    For test (in-distribution):
+        - Generate out_of_sample_test_N different (A, b) problem instances
+        - Solve all problems to get optimal solutions and values
+        - Save A, b, x_opt, f_opt, and z0 separately
+
+    For out-of-distribution:
+        - Generate out_of_dist_N different (A, b) problems with scaled A_std
+        - Solve all problems to get optimal solutions and values
+        - Save A, b, x_opt, f_opt, and z0 separately
+
+    Output files (saved in Hydra run directory):
+        Validation (in-distribution):
+            - A_val_samples.npz: Contains 'A' array of shape (out_of_sample_val_N, N_data, n)
+            - b_val_samples.npz: Contains 'b' array of shape (out_of_sample_val_N, N_data)
+            - x_opt_val_samples.npz: Contains 'x_opt' array of shape (out_of_sample_val_N, n)
+            - f_opt_val_samples.npz: Contains 'f_opt' array of shape (out_of_sample_val_N,)
+            - z0_val_samples.npz: Contains 'z0' array of shape (out_of_sample_val_N, n)
+
+        Test (in-distribution):
+            - A_test_samples.npz: Contains 'A' array of shape (out_of_sample_test_N, N_data, n)
+            - b_test_samples.npz: Contains 'b' array of shape (out_of_sample_test_N, N_data)
+            - x_opt_test_samples.npz: Contains 'x_opt' array of shape (out_of_sample_test_N, n)
+            - f_opt_test_samples.npz: Contains 'f_opt' array of shape (out_of_sample_test_N,)
+            - z0_test_samples.npz: Contains 'z0' array of shape (out_of_sample_test_N, n)
+
+        Out-of-distribution:
+            - A_out_of_dist_samples.npz: Contains 'A' array of shape (out_of_dist_N, N_data, n)
+            - b_out_of_dist_samples.npz: Contains 'b' array of shape (out_of_dist_N, N_data)
+            - x_opt_out_of_dist_samples.npz: Contains 'x_opt' array of shape (out_of_dist_N, n)
+            - f_opt_out_of_dist_samples.npz: Contains 'f_opt' array of shape (out_of_dist_N,)
+            - z0_out_of_dist_samples.npz: Contains 'z0' array of shape (out_of_dist_N, n)
+    """
+    log.info("=" * 60)
+    log.info("Generating Logistic Regression out-of-sample problems")
+    log.info("=" * 60)
+    log.info(cfg)
+
+    # Extract config values
+    n = cfg.n
+    N_data = cfg.N_data
+    delta = cfg.delta
+    A_std = cfg.A_std
+    p_beta_nonzero = cfg.p_beta_nonzero
+    beta_scale = cfg.beta_scale
+    eps_std = cfg.eps_std
+
+    out_of_sample_val_N = cfg.out_of_sample_val_N
+    out_of_sample_test_N = cfg.out_of_sample_test_N
+    out_of_sample_val_seed = cfg.out_of_sample_val_seed
+    out_of_sample_test_seed = cfg.out_of_sample_test_seed
+    out_of_dist_N = cfg.out_of_dist_N
+    out_of_dist_seed = cfg.get('out_of_dist_seed', out_of_sample_val_seed + 1)
+    A_out_of_dist_seed = cfg.get('A_out_of_dist_seed', 4000)
+    A_out_of_dist_std_multiplier = cfg.get('A_out_of_dist_std_multiplier', 2.0)
+
+    # =========================================================================
+    # Validation Set (in-distribution)
+    # =========================================================================
+    log.info(f"Generating {out_of_sample_val_N} validation problems (in-distribution)...")
+
+    # Sample validation problems
+    key_val = jax.random.PRNGKey(out_of_sample_val_seed)
+    A_val_batch, b_val_batch, x_opt_val_batch, f_opt_val_batch = sample_logreg_batch(
+        key_val, out_of_sample_val_N, N_data, n, A_std, p_beta_nonzero,
+        beta_scale, eps_std, delta
+    )
+
+    # Compute R from validation set
+    x_opt_val_norms = jnp.linalg.norm(x_opt_val_batch, axis=1)
+    R_val = float(jnp.max(x_opt_val_norms))
+    log.info(f'Computed R from validation set: {R_val:.6f}')
+
+    # Set x0 = 0 in original coordinates, z0 = -x_opt in shifted coordinates
+    z0_val_batch = -x_opt_val_batch
+
+    # Convert to numpy and save
+    A_val_np = np.array(A_val_batch)
+    b_val_np = np.array(b_val_batch)
+    x_opt_val_np = np.array(x_opt_val_batch)
+    f_opt_val_np = np.array(f_opt_val_batch)
+    z0_val_np = np.array(z0_val_batch)
+
+    A_val_path = "A_val_samples.npz"
+    b_val_path = "b_val_samples.npz"
+    x_opt_val_path = "x_opt_val_samples.npz"
+    f_opt_val_path = "f_opt_val_samples.npz"
+    z0_val_path = "z0_val_samples.npz"
+
+    np.savez_compressed(A_val_path, A=A_val_np)
+    np.savez_compressed(b_val_path, b=b_val_np)
+    np.savez_compressed(x_opt_val_path, x_opt=x_opt_val_np)
+    np.savez_compressed(f_opt_val_path, f_opt=f_opt_val_np)
+    np.savez_compressed(z0_val_path, z0=z0_val_np)
+
+    log.info(f"Saved validation A to {A_val_path}, shape: {A_val_np.shape}")
+    log.info(f"Saved validation b to {b_val_path}, shape: {b_val_np.shape}")
+    log.info(f"Saved validation optimal solutions to {x_opt_val_path}, shape: {x_opt_val_np.shape}")
+    log.info(f"Saved validation optimal values to {f_opt_val_path}, shape: {f_opt_val_np.shape}")
+    log.info(f"Saved validation z0 to {z0_val_path}, shape: {z0_val_np.shape}")
+
+    # =========================================================================
+    # Test Set (in-distribution)
+    # =========================================================================
+    log.info(f"Generating {out_of_sample_test_N} test problems (in-distribution)...")
+
+    # Sample test problems
+    key_test = jax.random.PRNGKey(out_of_sample_test_seed)
+    A_test_batch, b_test_batch, x_opt_test_batch, f_opt_test_batch = sample_logreg_batch(
+        key_test, out_of_sample_test_N, N_data, n, A_std, p_beta_nonzero,
+        beta_scale, eps_std, delta
+    )
+
+    # Compute R from test set
+    x_opt_test_norms = jnp.linalg.norm(x_opt_test_batch, axis=1)
+    R_test = float(jnp.max(x_opt_test_norms))
+    log.info(f'Computed R from test set: {R_test:.6f}')
+
+    # Set x0 = 0 in original coordinates, z0 = -x_opt in shifted coordinates
+    z0_test_batch = -x_opt_test_batch
+
+    # Convert to numpy and save
+    A_test_np = np.array(A_test_batch)
+    b_test_np = np.array(b_test_batch)
+    x_opt_test_np = np.array(x_opt_test_batch)
+    f_opt_test_np = np.array(f_opt_test_batch)
+    z0_test_np = np.array(z0_test_batch)
+
+    A_test_path = "A_test_samples.npz"
+    b_test_path = "b_test_samples.npz"
+    x_opt_test_path = "x_opt_test_samples.npz"
+    f_opt_test_path = "f_opt_test_samples.npz"
+    z0_test_path = "z0_test_samples.npz"
+
+    np.savez_compressed(A_test_path, A=A_test_np)
+    np.savez_compressed(b_test_path, b=b_test_np)
+    np.savez_compressed(x_opt_test_path, x_opt=x_opt_test_np)
+    np.savez_compressed(f_opt_test_path, f_opt=f_opt_test_np)
+    np.savez_compressed(z0_test_path, z0=z0_test_np)
+
+    log.info(f"Saved test A to {A_test_path}, shape: {A_test_np.shape}")
+    log.info(f"Saved test b to {b_test_path}, shape: {b_test_np.shape}")
+    log.info(f"Saved test optimal solutions to {x_opt_test_path}, shape: {x_opt_test_np.shape}")
+    log.info(f"Saved test optimal values to {f_opt_test_path}, shape: {f_opt_test_np.shape}")
+    log.info(f"Saved test z0 to {z0_test_path}, shape: {z0_test_np.shape}")
+
+    # =========================================================================
+    # Out-of-Distribution Test Set: scaled A_std
+    # =========================================================================
+    log.info(f"Generating {out_of_dist_N} out-of-distribution test problems...")
+    log.info(f"Using A_std * {A_out_of_dist_std_multiplier} = {A_std * A_out_of_dist_std_multiplier}")
+
+    A_ood_std = A_std * A_out_of_dist_std_multiplier
+
+    # Sample out-of-distribution problems
+    key_ood = jax.random.PRNGKey(out_of_dist_seed)
+    A_ood_batch, b_ood_batch, x_opt_ood_batch, f_opt_ood_batch = sample_logreg_batch(
+        key_ood, out_of_dist_N, N_data, n, A_ood_std, p_beta_nonzero,
+        beta_scale, eps_std, delta
+    )
+
+    # Compute R from out-of-distribution set
+    x_opt_ood_norms = jnp.linalg.norm(x_opt_ood_batch, axis=1)
+    R_ood = float(jnp.max(x_opt_ood_norms))
+    log.info(f'Computed R from out-of-distribution set: {R_ood:.6f}')
+
+    # Set x0 = 0 in original coordinates, z0 = -x_opt in shifted coordinates
+    z0_ood_batch = -x_opt_ood_batch
+
+    # Convert to numpy and save
+    A_ood_np = np.array(A_ood_batch)
+    b_ood_np = np.array(b_ood_batch)
+    x_opt_ood_np = np.array(x_opt_ood_batch)
+    f_opt_ood_np = np.array(f_opt_ood_batch)
+    z0_ood_np = np.array(z0_ood_batch)
+
+    A_ood_path = "A_out_of_dist_samples.npz"
+    b_ood_path = "b_out_of_dist_samples.npz"
+    x_opt_ood_path = "x_opt_out_of_dist_samples.npz"
+    f_opt_ood_path = "f_opt_out_of_dist_samples.npz"
+    z0_ood_path = "z0_out_of_dist_samples.npz"
+
+    np.savez_compressed(A_ood_path, A=A_ood_np)
+    np.savez_compressed(b_ood_path, b=b_ood_np)
+    np.savez_compressed(x_opt_ood_path, x_opt=x_opt_ood_np)
+    np.savez_compressed(f_opt_ood_path, f_opt=f_opt_ood_np)
+    np.savez_compressed(z0_ood_path, z0=z0_ood_np)
+
+    log.info(f"Saved out-of-dist A to {A_ood_path}, shape: {A_ood_np.shape}")
+    log.info(f"Saved out-of-dist b to {b_ood_path}, shape: {b_ood_np.shape}")
+    log.info(f"Saved out-of-dist optimal solutions to {x_opt_ood_path}, shape: {x_opt_ood_np.shape}")
+    log.info(f"Saved out-of-dist optimal values to {f_opt_ood_path}, shape: {f_opt_ood_np.shape}")
+    log.info(f"Saved out-of-dist z0 to {z0_ood_path}, shape: {z0_ood_np.shape}")
+
+    # =========================================================================
+    # Save metadata for reference
+    # =========================================================================
+    metadata = {
+        'out_of_sample_val_N': out_of_sample_val_N,
+        'out_of_sample_test_N': out_of_sample_test_N,
+        'out_of_sample_val_seed': out_of_sample_val_seed,
+        'out_of_sample_test_seed': out_of_sample_test_seed,
+        'out_of_dist_N': out_of_dist_N,
+        'out_of_dist_seed': out_of_dist_seed,
+        'n': n,
+        'N_data': N_data,
+        'delta': delta,
+        'A_std': A_std,
+        'A_ood_std': A_ood_std,
+        'p_beta_nonzero': p_beta_nonzero,
+        'beta_scale': beta_scale,
+        'eps_std': eps_std,
+        'R_val': R_val,
+        'R_test': R_test,
+        'R_ood': R_ood,
+        'A_val_shape': A_val_np.shape,
+        'b_val_shape': b_val_np.shape,
+        'A_test_shape': A_test_np.shape,
+        'b_test_shape': b_test_np.shape,
+        'A_ood_shape': A_ood_np.shape,
+        'b_ood_shape': b_ood_np.shape,
+    }
+    metadata_path = "out_of_sample_metadata.npz"
+    np.savez_compressed(metadata_path, **metadata)
+    log.info(f"Saved metadata to {metadata_path}")
+
+    log.info("=" * 60)
+    log.info("Out-of-sample generation complete!")
     log.info("=" * 60)

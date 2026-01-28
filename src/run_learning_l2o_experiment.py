@@ -112,10 +112,6 @@ Quad_options = [
     ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
-LogReg_options = [
-
-]
-
 # Parameter combinations for Slurm array jobs
 # Uses conditional_product to tie mu and K_max values together
 Learn_Quad_params = conditional_product(
@@ -130,6 +126,21 @@ Learn_Quad_params = conditional_product(
         #     'stepsize_type=vector': ['vector_init=fixed'],
         # },
     ]
+)
+
+LogReg_options = [
+    ['learning_framework=l2o'],
+    ['alg=vanilla_gd'],
+    ['pep_obj=obj_val'],
+    ['dro_obj=expectation'],
+    ['N=20'],
+    ['sgd_iters=500'],
+    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+]
+
+Learn_LogReg_params = conditional_product(
+    common_options=LogReg_options,
+    conditional_groups=[],
 )
 
 Lasso_options = [
@@ -219,6 +230,11 @@ def main():
         if experiment == 'Lasso':
             if job_idx >= len(Learn_Lasso_params):
                 log.error(f'job_idx {job_idx} >= len(Learn_Lasso_params) {len(Learn_Lasso_params)}')
+                exit(1)
+            hydra_tags += Learn_Lasso_params[job_idx]
+        if experiment == 'LogReg':
+            if job_idx >= len(Learn_LogReg_params):
+                log.error(f'job_idx {job_idx} >= len(Learn_LogReg_params) {len(Learn_LogReg_params)}')
                 exit(1)
             hydra_tags += Learn_Lasso_params[job_idx]
 
