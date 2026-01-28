@@ -858,7 +858,8 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             # Update stepsizes and project to be nonnegative
             # Respect update_mask: if learn_beta=False, don't update beta
             if update_mask is None:
-                stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
+                # stepsizes = tuple(jax.nn.relu(s - eta_t * ds) for s, ds in zip(stepsizes, d_stepsizes))
+                stepsizes = tuple(jnp.maximum(s - eta_t * ds, 1e-6) for s, ds in zip(stepsizes, d_stepsizes))
             else:
                 stepsizes = tuple(
                     jax.nn.relu(s - eta_t * ds) if should_update else s 
@@ -879,7 +880,8 @@ def run_sgd_for_K(cfg, K_max, key, M_val, t_init,
             # Respect update_mask: if learn_beta=False, don't update beta
             weight_decay = cfg.get('weight_decay', 1e-2)
             if update_mask is None:
-                stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
+                # stepsizes = tuple(jax.nn.relu(s - eta_t * (ds + weight_decay * s)) for s, ds in zip(stepsizes, d_stepsizes))
+                stepsizes = tuple(jnp.maximum(s - eta_t * (ds + weight_decay * s), 1e-6) for s, ds in zip(stepsizes, d_stepsizes))
             else:
                 stepsizes = tuple(
                     jax.nn.relu(s - eta_t * (ds + weight_decay * s)) if should_update else s 

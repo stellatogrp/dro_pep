@@ -144,9 +144,10 @@ Lasso_options = [
     ['N=20'],
     ['dro_obj=expectation', 'dro_obj=cvar'],
     ['alpha=0.1'],
-    ['sgd_iters=200'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=10.0'],
-    ['K_max=[10]', 'K_max=[15]'],
+    ['sgd_iters=500'],
+    # ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
+    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['learning_framework=l2o'],
 ]
 
 Learn_Lasso_params = conditional_product(
