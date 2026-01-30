@@ -111,12 +111,18 @@ Quad_options = [
     ['learning_framework=ldro-pep'],
     ['alg=vanilla_gd'],
     ['pep_obj=obj_val'],
-    ['dro_obj=expectation'],
+    ['dro_obj=expectation', 'dro_obj=cvar'],
+    ['alpha=0.1'],
+    ['stepsize_type=vector'],
+    ['vector_init=fixed', 'vector_init=silver'],
     ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
     ['mu=1'],
     ['N=20'],
     ['sgd_iters=500'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['eta_t=1e-2', 'eta_t=1e-3', 'eta_t=1e-4'],
+    ['weight_decay=1e-3', 'weight_decay=1e-4', 'weight_decay=1e-5'],
+    # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['K_max=[15]'],
 ]
 
 # Parameter combinations for Slurm array jobs
@@ -219,7 +225,7 @@ def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
     print('len of Learn_PDLP_params:', len(Learn_PDLP_params))
-    # exit(0)
+    exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
         print('  experiment: Quad')
