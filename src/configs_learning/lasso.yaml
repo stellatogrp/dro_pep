@@ -1,0 +1,68 @@
+# Problem parameters, default from ALISTA code https://github.com/VITA-Group/ALISTA/blob/master/config.py
+m: 250
+n: 500
+lambd: 0.4
+
+R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
+
+# Sample sizes
+N: 5                # Batch size for SGD training
+training_sample_N: 500  # Number of training samples (pre-sampled for sliding window)
+precond_sample_size: 100
+R_sample_size: 1000     # Number of samples for R computation (if R is null)
+
+# Random seeds
+sgd_seed: 50                # Seed for SGD randomness
+A_seed: 1000            # Seed for A matrix generation (fixed across experiments)
+b_seed: 2000            # Seed for b vector sampling
+R_seed: 3000
+
+A_out_of_dist_seed: 4000
+
+p_xsamp_nonzero: 0.1   # Probability of non-zero entries in x samples
+b_noise_std: 1e-2
+
+z0_type: 'zero'
+
+# Type of learning framework
+learning_framework: 'l2o'  # 'ldro-pep' or 'l2o' or 'lpep'
+
+# Algorithm and optimizer type (selected by Slurm job index)
+alg: "ista"            # ista or fista
+optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
+stepsize_type: "vector" # "scalar" or "vector"
+vector_init: "fixed" # "fixed", "silver", "geometric", "increasing", "decreasing"
+
+# L2O loss type (ONLY affects learning_framework='l2o', NOT 'ldro-pep')
+# 'final': Standard final iterate loss f(x_K) - f_opt
+# 'cumulative': Sum of losses at all iterates (better gradient diversity)
+l2o_loss_type: "weighted"
+
+# K_max loop inside quad_run (per-K CSV logging)
+# K_max: [5, 10, 15, 20]
+K_max: [15]
+
+# Optimization hyperparameters
+pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
+dro_obj: "expectation"  # "expectation" or "cvar"
+sdp_backend: "diffcp"
+dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'average'
+
+# SGD training parameters
+sgd_iters: 500
+eta_t: 1e-3     # learning rate for stepsizes (descent)
+weight_decay: 1e-3  # weight decay for sgd_wd
+
+# Outputs
+output_dir: "learn_dro_outputs"
+
+# Out-of-sample validation/test configuration
+out_of_sample_val_N: 100     # Number of validation samples (in-distribution)
+out_of_sample_test_N: 200   # Number of test samples (in-distribution)
+out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
+out_of_sample_test_seed: 20000  # Seed for generating test b vectors
+out_of_dist_N: 200         # Number of out-of-distribution test samples
+out_of_dist_seed: 30000     # Seed for generating out-of-distribution b vectors

@@ -430,40 +430,31 @@ def compute_sample_rho(sample):
     G_half = np.array([x[q], g[q], g[q+1]])
     return G_half @ G_half.T, np.array([f[q], f[q+1]]), q
 
-# def quad_lyap(cfg):
+def quad_learn_dro(cfg):
+    log.info(cfg)
 
-#     res = []
-#     sample_df_list = []
+    if cfg.alg == 'grad_desc':
+        algo = gradient_descent
+    elif cfg.alg == 'nesterov_grad_desc':
+        algo = nesterov_accelerated_gradient
+    elif cfg.alg == 'nesterov_fgm':
+        algo = nesterov_fgm
+    else:
+        log.info('invalid alg in cfg')
+        exit(0)
 
-#     for k in range(cfg.K_min, cfg.K_max + 1):
-#         log.info(f'----k={k}----')
-#         samples = []
+    if cfg.dro_obj == 'expectation':
+        N = cfg.training.expectation_N
+        num_clusters = cfg.num_clusters.expectation
+        dro_obj = 'expectation'
 
-#         for i in range(N):
-#             h = quad_funcs[i]
-#             # x0 = h.x0
-#             x0 = h.sample_init_point()
-#             xs = h.x_star
-#             fs = h.f_star
+    elif cfg.dro_obj == 'cvar':
+        N = cfg.training.cvar_N
+        num_clusters = cfg.num_clusters.cvar
+        dro_obj = 'cvar'
 
-#             params = {
-#                 't': cfg.eta / cfg.L,
-#                 'K_max': k,
-#                 'q': cfg.mu / cfg.L, 
-#             }
-
-#             G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
-#             # log.info(F.shape)
-#             samples.append((G, F))
-#             sample_df_list.append(pd.Series({
-#                 'i': i,
-#                 'K': k,
-#                 'obj_val': F[-1] - F[0],
-#                 'grad_sq_norm': G[-1, -1],
-#             }))
-#         sample_df = pd.DataFrame(sample_df_list)
-#         sample_df.to_csv('samples.csv', index=False)
-
-#         dro_eps = 0.1
-#         lyap_res = gd_lyap(cfg.mu, cfg.L, cfg.eta / cfg.L, k, samples, 0.1)
-#         log.info(lyap_res)
+    else:
+        log.info('invalid dro obj')
+        exit(0)
+    
+    

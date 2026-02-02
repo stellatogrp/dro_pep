@@ -1,0 +1,58 @@
+# Problem parameters
+mu: 1.
+L: 10.
+R: 20.
+dim: 300
+
+# type of learning framework
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
+
+# Batch size
+N: 20
+
+seed: 50
+
+# Algorithm and optimizer type (selected by Slurm job index)
+alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
+stepsize_type: "vector" # "scalar" or "vector"
+vector_init: "fixed" # "fixed" or "silver"
+
+# L2O loss type (ONLY affects learning_framework='l2o', NOT 'ldro-pep')
+# 'final': Standard final iterate loss f(x_K) - f_opt
+# 'cumulative': Sum of losses at all iterates (better gradient diversity)
+l2o_loss_type: "weighted"
+
+# K_max loop inside quad_run (per-K CSV logging)
+# K_max: [5, 10, 15, 20]
+K_max: [5]
+
+# Optimization hyperparameters
+pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
+dro_obj: "cvar"  # "expectation" or "cvar"
+sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
+dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'average'
+
+learn_beta: True  # True or False depending on if beta is learnable or not
+
+# SGD training parameters
+sgd_iters: 500
+eta_t: 1e-3     # learning rate for stepsizes (descent)
+weight_decay: 1e-3  # weight decay for sgd_wd
+
+# MOSEK solver tolerances
+mosek_tol_dfeas: 1e-2
+mosek_tol_pfeas: 1e-2
+mosek_tol_rel_gap: 1e-2
+
+# Outputs
+output_dir: "learn_dro_outputs"
+training_sample_N: 500
+out_of_sample_N: 500
+out_of_sample_seed: 12345
+out_of_dist_N: 1000
+
+out_of_dist_Q: True

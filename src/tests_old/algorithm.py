@@ -15,9 +15,12 @@ def gradient_descent(f, g, x0, xs, params) :
     g_stack = [g(xs), g(x0)]
     f_stack = [f(xs), f(x0)]
 
+    is_scalar = np.isscalar(t) or (isinstance(t, np.ndarray) and t.ndim == 0)
+
     for k in range(1, K_max+1):
         # algorithm: GD
-        x = x - t * g(x)
+        t_k = t if is_scalar else t[k-1]
+        x = x - t_k * g(x)
         x_stack.append(x)
         g_stack.append(g(x))
         f_stack.append(f(x))
