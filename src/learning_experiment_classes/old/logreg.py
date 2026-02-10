@@ -21,11 +21,11 @@ from learning.pep_constructions import (
     construct_fgm_pep_data,
 )
 from learning.adam_optimizers import AdamWMin
-from learning.trajectories_gd_fgm import (
+from learning.trajectories import (
     compute_preconditioner_from_samples,
     dro_pep_obj_jax,
 )
-from learning.trajectories_logreg_gd_fgm import (
+from learning.trajectories import (
     logreg_pep_obj,
     create_logreg_traj_fn_gd,
     create_logreg_traj_fn_fgm,

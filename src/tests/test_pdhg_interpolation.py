@@ -15,10 +15,8 @@ import jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 
 from learning.pep_constructions import convex_interp
-from learning.trajectories_pdhg import (
+from learning.trajectories import (
     problem_data_to_pdhg_trajectories,
-    compute_pdhg_stepsizes_from_K,
-    build_lp_matrices,
     proj_box,
     proj_nonneg_first_m1,
 )

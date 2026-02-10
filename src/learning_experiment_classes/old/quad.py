@@ -15,7 +15,7 @@ from learning.pep_constructions import (
     pep_data_to_numpy,
 )
 from learning.adam_optimizers import AdamWMin
-from learning.trajectories_gd_fgm import (
+from learning.trajectories import (
     problem_data_to_gd_trajectories,
     problem_data_to_nesterov_fgm_trajectories,
     problem_data_to_pep_obj,

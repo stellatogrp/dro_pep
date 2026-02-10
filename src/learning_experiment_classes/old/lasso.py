@@ -17,10 +17,10 @@ from learning.pep_constructions import (
     ista_pep_data_to_numpy,
 )
 from learning.adam_optimizers import AdamWMin
-from learning.trajectories_gd_fgm import (
+from learning.trajectories import (
     dro_pep_obj_jax,
 )
-from learning.trajectories_ista_fista import (
+from learning.trajectories import (
     problem_data_to_ista_trajectories,
     problem_data_to_fista_trajectories,
 )

@@ -1135,7 +1135,7 @@ class TestJAXTrajectoryFunctions(unittest.TestCase):
     def test_jax_ista_matches_test_implementation(self):
         """Verify problem_data_to_ista_trajectories matches run_shifted_ista."""
         import jax.numpy as jnp
-        from learning.trajectories_ista_fista import problem_data_to_ista_trajectories
+        from learning.trajectories import problem_data_to_ista_trajectories
         
         np.random.seed(42)
         m, n = 20, 10
@@ -1180,7 +1180,7 @@ class TestJAXTrajectoryFunctions(unittest.TestCase):
     def test_jax_fista_matches_test_implementation(self):
         """Verify problem_data_to_fista_trajectories matches the shifted FISTA test."""
         import jax.numpy as jnp
-        from learning.trajectories_ista_fista import problem_data_to_fista_trajectories
+        from learning.trajectories import problem_data_to_fista_trajectories
         
         np.random.seed(42)
         m, n = 20, 10

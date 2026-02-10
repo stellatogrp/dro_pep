@@ -11,14 +11,14 @@ import cvxpy as cp
 from functools import partial
 from tqdm import trange
 
-from learning.trajectories_pdhg import problem_data_to_pdhg_trajectories
+from learning.trajectories import problem_data_to_pdhg_trajectories
 from learning.pep_constructions import (
     construct_chambolle_pock_pep_data,
     chambolle_pock_pep_data_to_numpy,
 )
 
 from learning.adam_optimizers import AdamWMin
-from learning.trajectories_pdhg import problem_data_to_pdhg_trajectories
+from learning.trajectories import problem_data_to_pdhg_trajectories
 from learning.jax_scs_layer import dro_scs_solve, compute_preconditioner_from_samples
 
 jax.config.update("jax_enable_x64", True)
