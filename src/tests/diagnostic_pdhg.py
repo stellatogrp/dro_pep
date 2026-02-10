@@ -13,7 +13,7 @@ import cvxpy as cp
 jax.config.update('jax_enable_x64', True)
 
 from learning.trajectories_pdhg import problem_data_to_pdhg_trajectories
-from learning.pep_construction_chambolle_pock import (
+from learning.pep_constructions import (
     construct_chambolle_pock_pep_data,
     chambolle_pock_pep_data_to_numpy,
 )

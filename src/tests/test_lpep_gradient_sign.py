@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from learning.jax_clarabel_layer import pep_clarabel_solve
-from learning.pep_construction import construct_gd_pep_data
+from learning.pep_constructions import construct_gd_pep_data
 from learning.adam_optimizers import AdamWMin
 
 
@@ -135,7 +135,7 @@ class TestClarabelSolveWrapperGradient:
         from learning.jax_clarabel_layer import (
             clarabel_solve_wrapper, ClarabelSolveData, jax_canonicalize_pep
         )
-        from learning.pep_construction import construct_gd_pep_data
+        from learning.pep_constructions import construct_gd_pep_data
         
         mu, L, R, K_max = 1.0, 10.0, 1.0, 8
         t_test = 0.18
@@ -186,7 +186,7 @@ class TestClarabelSolveWrapperGradient:
         This is where we've seen the sign flip.
         """
         from learning.jax_clarabel_layer import pep_clarabel_solve
-        from learning.pep_construction import construct_gd_pep_data
+        from learning.pep_constructions import construct_gd_pep_data
         
         mu, L, R, K_max = 1.0, 10.0, 1.0, 8
         t_test = 0.2

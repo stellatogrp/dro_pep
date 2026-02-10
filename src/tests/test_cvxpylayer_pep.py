@@ -14,7 +14,7 @@ import cvxpy as cp
 jax.config.update('jax_enable_x64', True)
 
 from learning.cvxpylayers_setup import create_full_pep_layer
-from learning.pep_construction import construct_gd_pep_data, pep_data_to_numpy
+from learning.pep_constructions import construct_gd_pep_data, pep_data_to_numpy
 
 
 class TestCvxpyLayerPep:

@@ -330,7 +330,7 @@ class TestSCSCanonicalization:
             problem_data_to_gd_trajectories,
             compute_preconditioner_from_samples,
         )
-        from learning.pep_construction import construct_gd_pep_data, pep_data_to_numpy
+        from learning.pep_constructions import construct_gd_pep_data, pep_data_to_numpy
         import clarabel
         
         # Simple gradient descent PEP problem
@@ -454,7 +454,7 @@ class TestSCSCanonicalization:
             problem_data_to_gd_trajectories,
             compute_preconditioner_from_samples,
         )
-        from learning.pep_construction import construct_gd_pep_data, pep_data_to_numpy
+        from learning.pep_constructions import construct_gd_pep_data, pep_data_to_numpy
         import clarabel
         
         def solve_scs(A_scs, b_scs, c_scs, cone_info_scs):
@@ -588,7 +588,7 @@ class TestSCSCanonicalization:
             problem_data_to_gd_trajectories,
             compute_preconditioner_from_samples,
         )
-        from learning.pep_construction import construct_gd_pep_data
+        from learning.pep_constructions import construct_gd_pep_data
         
         # Problem parameters
         np.random.seed(42)

@@ -16,7 +16,7 @@ import clarabel
 import scipy.sparse as spa
 
 from learning.numpy_clarabel_layer import numpy_canonicalize_pep
-from learning.pep_construction import construct_gd_pep_data, pep_data_to_numpy
+from learning.pep_constructions import construct_gd_pep_data, pep_data_to_numpy
 
 
 class TestNumpyCanonicalPep:

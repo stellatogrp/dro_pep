@@ -11,7 +11,7 @@ import cvxpy as cp
 from functools import partial
 from tqdm import trange
 
-from learning.pep_construction_lasso import (
+from learning.pep_constructions import (
     construct_ista_pep_data,
     construct_fista_pep_data,
     ista_pep_data_to_numpy,

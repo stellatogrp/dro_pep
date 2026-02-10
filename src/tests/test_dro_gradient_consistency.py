@@ -19,7 +19,7 @@ from learning.trajectories_gd_fgm import (
     dro_pep_obj_jax,
 )
 from learning.cvxpylayers_setup import create_full_dro_exp_layer
-from learning.pep_construction import construct_gd_pep_data
+from learning.pep_constructions import construct_gd_pep_data
 from learning.jax_clarabel_layer import dro_clarabel_solve
 
 

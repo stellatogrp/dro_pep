@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from learning.interpolation_conditions import (
+from learning.pep_constructions import (
     smooth_strongly_convex_interp,
     smooth_strongly_convex_interp_consecutive
 )
@@ -321,7 +321,7 @@ class TestConvexInterp(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        from learning.interpolation_conditions import convex_interp
+        from learning.pep_constructions import convex_interp
         self.convex_interp = convex_interp
         
         self.n_points = 3
@@ -405,7 +405,7 @@ class TestProximalGradientInterp(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        from learning.interpolation_conditions import (
+        from learning.pep_constructions import (
             smooth_strongly_convex_proximal_gradient_interp
         )
         self.prox_grad_interp = smooth_strongly_convex_proximal_gradient_interp

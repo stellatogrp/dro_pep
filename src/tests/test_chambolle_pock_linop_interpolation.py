@@ -10,7 +10,7 @@ import numpy as np
 import jax.numpy as jnp
 import cvxpy as cp
 
-from learning.pep_construction_chambolle_pock_linop import construct_chambolle_pock_pep_data
+from learning.pep_constructions import construct_chambolle_pock_pep_data
 
 
 def test_chambolle_pock_linop_interpolation():

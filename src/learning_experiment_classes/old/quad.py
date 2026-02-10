@@ -9,7 +9,7 @@ import logging
 import time
 from functools import partial
 
-from learning.pep_construction import (
+from learning.pep_constructions import (
     construct_gd_pep_data,
     construct_fgm_pep_data,
     pep_data_to_numpy,

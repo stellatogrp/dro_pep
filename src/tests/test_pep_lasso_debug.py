@@ -19,11 +19,9 @@ from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction, ConvexFunction
 from PEPit.primitive_steps import proximal_step
 
-from learning.interpolation_conditions import (
+from learning.pep_constructions import (
     smooth_strongly_convex_interp,
     convex_interp,
-)
-from learning.pep_construction_lasso import (
     construct_ista_pep_data,
     construct_fista_pep_data,
     ista_pep_data_to_numpy,

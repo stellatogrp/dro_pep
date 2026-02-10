@@ -301,7 +301,7 @@ class TestAgainstClarabelCanonicalizer:
         dim = 10  # Dimension of the problem
         
         # Generate trajectories and PEP data using GD for simplicity
-        from learning.pep_construction import construct_gd_pep_data
+        from learning.pep_constructions import construct_gd_pep_data
         
         # Step sizes
         t = 0.1 * np.ones(K_max)
@@ -470,7 +470,7 @@ class TestJaxCanonicalization:
         N = 4
         dim = 5
         
-        from learning.pep_construction import construct_gd_pep_data
+        from learning.pep_constructions import construct_gd_pep_data
         from learning.trajectories_gd_fgm import problem_data_to_gd_trajectories
         import jax.numpy as jnp
         
@@ -631,7 +631,7 @@ class TestDroClarabelSolve:
         
         # Import functions from quad.py for proper data generation
         from learning_experiment_classes.quad import get_Q_samples, get_z0_samples
-        from learning.pep_construction import construct_gd_pep_data
+        from learning.pep_constructions import construct_gd_pep_data
         from learning.trajectories_gd_fgm import (
             problem_data_to_gd_trajectories, compute_preconditioner_from_samples
         )

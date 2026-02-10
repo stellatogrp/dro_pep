@@ -1,20 +1,51 @@
+"""
+JAX-compatible PEP data construction for Chambolle-Pock algorithm.
+
+Constructs PEP constraint matrices for primal-dual optimization with
+linear operators.
+"""
+
 import jax
 import jax.numpy as jnp
 from functools import partial
+
 from .interpolation_conditions import convex_interp
 
-@partial(jax.jit, static_argnames=['K_max'])
-def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
+
+@partial(jax.jit, static_argnames=['K_max', 'composition_type'])
+def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
+                                       composition_type='final'):
     """
     Construct PEP for Chambolle-Pock with P-norm (Lyapunov) Initial Condition.
-    
+
+    Note: Only 'final' composition is currently supported for Chambolle-Pock
+    due to the complex cross-terms in the gap objective.
+
     Fixes applied:
     1. P-norm Initial Condition: Added explicit basis vector for K(dx0) to handle
        the cross-term -2<K(x0-xs), y0-ys> correctly.
     2. Adjoint Consistency: Enforces <Ku, p> = <u, K.T p> for ALL operator pairs.
     3. Solution Bound: Constraints ||x*||^2 + ||y*||^2 <= B^2 to prevent unboundedness.
     4. Objective Construction: Uses stationarity substitutions <K xK, y*> = <xK, -df(x*)>.
+
+    Args:
+        tau: Primal step sizes - scalar or vector of length K_max
+        sigma: Dual step sizes - scalar or vector of length K_max
+        theta: Extrapolation parameters - scalar or vector of length K_max
+        M: Operator norm bound (||K|| <= M)
+        R: Initial radius bound for P-norm
+        K_max: Number of iterations
+        composition_type: 'final' only (weighted not yet implemented)
+
+    Returns:
+        pep_data tuple
     """
+    if composition_type != 'final':
+        raise NotImplementedError(
+            f"Chambolle-Pock composition_type='{composition_type}' not yet implemented. "
+            "Only 'final' is currently supported due to complex cross-terms in gap objective."
+        )
+
     # 1. Setup Parameters
     tau_vec = jnp.broadcast_to(tau, (K_max,))
     sigma_vec = jnp.broadcast_to(sigma, (K_max,))
@@ -37,12 +68,12 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     idx_dy0 = idx_c; idx_c+=1
     idx_xs  = idx_c; idx_c+=1
     idx_ys  = idx_c; idx_c+=1
-    
+
     idx_gf1_start = idx_c; idx_c += (K_max + 2)
     idx_gh_start  = idx_c; idx_c += (K_max + 2)
-    
-    idx_w_start = idx_c; idx_c += K_max 
-    idx_z_start = idx_c; idx_c += K_max 
+
+    idx_w_start = idx_c; idx_c += K_max
+    idx_z_start = idx_c; idx_c += K_max
 
     # Analysis Vectors
     idx_K_xK  = idx_c; idx_c+=1  # K * x_K
@@ -51,17 +82,17 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
 
     def gf1_vec(k): return eyeG[idx_gf1_start + k]
     def gh_vec(k): return eyeG[idx_gh_start + k]
-    def w_vec(k): return eyeG[idx_w_start + k] 
-    def z_vec(k): return eyeG[idx_z_start + (k-1)] 
+    def w_vec(k): return eyeG[idx_w_start + k]
+    def z_vec(k): return eyeG[idx_z_start + (k-1)]
 
     # 3. Algorithm Trace
     n_points = K_max + 2
     idx_saddle = K_max + 1
-    
+
     repX_f1 = jnp.zeros((n_points, dimG))
     repG_f1 = jnp.zeros((n_points, dimG))
     repF_f1 = jnp.zeros((n_points, dimF1))
-    
+
     repY_h = jnp.zeros((n_points, dimG))
     repG_h = jnp.zeros((n_points, dimG))
     repF_h = jnp.zeros((n_points, dimF_h))
@@ -112,7 +143,7 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     # -- Saddle Point --
     repX_f1 = repX_f1.at[idx_saddle].set(jnp.zeros(dimG))
     repG_f1 = repG_f1.at[idx_saddle].set(gf1_vec(idx_saddle))
-    repF_f1 = repF_f1.at[idx_saddle].set(jnp.zeros(dimF1)) 
+    repF_f1 = repF_f1.at[idx_saddle].set(jnp.zeros(dimF1))
 
     repY_h = repY_h.at[idx_saddle].set(jnp.zeros(dimG))
     repG_h = repG_h.at[idx_saddle].set(gh_vec(idx_saddle))
@@ -136,11 +167,11 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     # 5. Value Pinning (f(x_*)=0, h(y_*)=0)
     row_f = jnp.zeros(dimF); row_f = row_f.at[idx_saddle].set(1.0)
     row_h = jnp.zeros(dimF); row_h = row_h.at[dimF1 + idx_saddle].set(1.0)
-    
+
     A_zero = jnp.zeros((4, dimG, dimG))
     b_zero = jnp.stack([row_f, -row_f, row_h, -row_h])
     c_zero = jnp.zeros(4)
-    
+
     A_vals = jnp.concatenate([A_vals, A_zero], axis=0)
     b_vals = jnp.concatenate([b_vals, b_zero], axis=0)
     c_vals = jnp.concatenate([c_vals, c_zero], axis=0)
@@ -206,15 +237,15 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
         u_vec, v_vec = pairs_K[i]
         for j in range(n_Kt):
             p_vec, q_vec = pairs_Kt[j]
-            
+
             # <v, p> - <u, q> = 0
             term_vp = 0.5 * (jnp.outer(v_vec, p_vec) + jnp.outer(p_vec, v_vec))
             term_uq = 0.5 * (jnp.outer(u_vec, q_vec) + jnp.outer(q_vec, u_vec))
-            
+
             A_diff = term_vp - term_uq
             adj_A_list.append(A_diff)
             adj_A_list.append(-A_diff)
-            
+
     if adj_A_list:
         A_adj = jnp.stack(adj_A_list)
         b_adj = jnp.zeros((len(adj_A_list), dimF))
@@ -227,16 +258,16 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     # 1/tau ||dx0||^2 + 1/sigma ||dy0||^2 - 2 <K dx0, dy0> <= R^2
     vec_dx0 = eyeG[idx_dx0]
     vec_dy0 = eyeG[idx_dy0]
-    vec_K_dx0 = eyeG[idx_K_dx0] 
-    
+    vec_K_dx0 = eyeG[idx_K_dx0]
+
     term1 = (1.0 / tau_vec[0]) * jnp.outer(vec_dx0, vec_dx0)
     term2 = (1.0 / sigma_vec[0]) * jnp.outer(vec_dy0, vec_dy0)
-    
+
     # Cross term: -2 <K dx0, dy0>
     # Note: jnp.outer(u,v) + jnp.outer(v,u) represents 2*<u,v> in the trace.
     # So multiplying by -1.0 gives -2*<u,v>.
     term3 = -1.0 * (jnp.outer(vec_K_dx0, vec_dy0) + jnp.outer(vec_dy0, vec_K_dx0))
-    
+
     A_init = term1 + term2 + term3
     b_init = jnp.zeros(dimF)
     c_init = -R**2
@@ -245,25 +276,25 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max):
     b_vals = jnp.concatenate([b_vals, b_init[None]], axis=0)
     c_vals = jnp.concatenate([c_vals, jnp.array([c_init])], axis=0)
 
-    # 10. Objective: Gap
+    # 10. Objective: Gap (final iterate only)
     # Gap = f(xK) + h(yK) + <K xK, ys> - <K xs, yK>
     vec_ys = eyeG[idx_ys]
     vec_yK = y_curr  # Use full y_K position, not y_K - y*
-    
+
     # Subst: <K xK, ys> = <xK, -grad_f(xs)>
-    vec_neg_gf1_s = -gf1_vec(idx_saddle) 
-    
+    vec_neg_gf1_s = -gf1_vec(idx_saddle)
+
     # Subst: - <K xs, yK> = - <grad_h(ys), yK>
-    vec_gh_s = gh_vec(idx_saddle)        
-    
+    vec_gh_s = gh_vec(idx_saddle)
+
     A_cross1 = 0.5 * (jnp.outer(x_curr, vec_neg_gf1_s) + jnp.outer(vec_neg_gf1_s, x_curr))
     A_cross2 = -0.5 * (jnp.outer(vec_gh_s, vec_yK) + jnp.outer(vec_yK, vec_gh_s))
-    
+
     A_obj = A_cross1 + A_cross2
-    
+
     idx_f1_K = K_max
     idx_h_K  = K_max
-    
+
     b_obj = jnp.zeros(dimF)
     b_obj = b_obj.at[idx_f1_K].set(1.0)
     b_obj = b_obj.at[dimF1 + idx_h_K].set(1.0)

@@ -14,7 +14,7 @@ import jax.numpy as jnp
 
 jax.config.update('jax_enable_x64', True)
 
-from learning.interpolation_conditions import convex_interp
+from learning.pep_constructions import convex_interp
 from learning.trajectories_pdhg import (
     problem_data_to_pdhg_trajectories,
     compute_pdhg_stepsizes_from_K,

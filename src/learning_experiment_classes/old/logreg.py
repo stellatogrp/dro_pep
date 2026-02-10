@@ -16,7 +16,7 @@ import cvxpy as cp
 from functools import partial
 from tqdm import trange
 
-from learning.pep_construction import (
+from learning.pep_constructions import (
     construct_gd_pep_data,
     construct_fgm_pep_data,
 )
