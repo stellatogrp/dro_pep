@@ -78,6 +78,11 @@ class UnifiedTrainer:
         self.N_batch = cfg.get('N', 50)  # Minibatch size
         self.training_sample_N = cfg.get('training_sample_N', 500)
 
+        # Validation data parameters (for monitoring generalization during training)
+        # Support both old and new naming conventions
+        self.validation_sample_N = cfg.get('out_of_sample_val_N', cfg.get('out_of_sample_N', 100))
+        self.validation_seed = cfg.get('out_of_sample_val_seed', cfg.get('out_of_sample_seed', 10000))
+
         # LDRO-PEP specific parameters
         self.precond_type = cfg.get('precond_type', 'average')
         self.dro_canon_backend = cfg.get('dro_canon_backend', 'manual_jax')
@@ -89,6 +94,7 @@ class UnifiedTrainer:
         # State
         self.optimizer = None
         self.training_data = None
+        self.validation_data = None
         self.n_minibatches = 0
         self.precond_inv = None
 
@@ -117,14 +123,20 @@ class UnifiedTrainer:
         if self.learning_framework in ['l2o', 'ldro-pep']:
             self._presample_training_data(K, K_output_dir)
 
-        # Step 4: Build loss function
+        # Step 4: Pre-sample validation data (for all frameworks)
+        self._presample_validation_data()
+
+        # Step 5: Build loss function
         loss_fn = self._build_loss_function(K, L, mu, R, stepsizes)
 
-        # Step 5: Initialize optimizer
+        # Step 6: Build validation loss function
+        val_loss_fn = self._build_validation_loss_function(K)
+
+        # Step 7: Initialize optimizer
         self._initialize_optimizer(stepsizes)
 
-        # Step 6: Run training loop
-        result = self._run_training_loop(loss_fn, stepsizes, K, csv_path)
+        # Step 8: Run training loop
+        result = self._run_training_loop(loss_fn, val_loss_fn, stepsizes, K, csv_path)
 
         log.info(f"=== Training complete for K={K} ===")
         return result
@@ -310,6 +322,27 @@ class UnifiedTrainer:
         np.savez_compressed(train_data_path, **np_data)
         log.info(f'Saved training set to {train_data_path}')
 
+    def _presample_validation_data(self):
+        """Pre-sample validation set for tracking generalization during training.
+
+        The validation set is held fixed throughout training for consistent monitoring.
+        Validation loss is always computed using the final iterate metric (k=K),
+        regardless of training loss composition.
+        """
+        log.info(f'Pre-sampling {self.validation_sample_N} validation problems...')
+
+        # Create separate key for validation set using configured seed
+        val_key = jax.random.PRNGKey(self.validation_seed)
+
+        # Sample validation set from problem module
+        problem_data, ground_truth = self.problem_module.sample_validation_batch(
+            val_key, self.validation_sample_N
+        )
+
+        # Merge into single dict for convenience
+        self.validation_data = {**problem_data, **ground_truth}
+        log.info(f'Validation set sampled with seed {self.validation_seed}')
+
     def _get_minibatch(self, minibatch_idx: int) -> Dict[str, jnp.ndarray]:
         """Extract minibatch using sliding window.
 
@@ -428,10 +461,11 @@ class UnifiedTrainer:
             trajectories = traj_fn(stepsizes, **full_data, K_max=K, return_Gram_representation=False)
 
             # Extract problem data and ground truth for metric computation
+            ground_truth_keys = self.problem_module.get_ground_truth_keys()
             problem_data = {k: v for k, v in full_data.items()
-                          if k not in ['x_opt', 'f_opt', 'zs', 'fs']}
+                          if k not in ground_truth_keys}
             ground_truth = {k: v for k, v in full_data.items()
-                          if k in ['x_opt', 'f_opt', 'zs', 'fs']}
+                          if k in ground_truth_keys}
 
             # Create metric function
             metric_fn = self.problem_module.create_metric_fn(
@@ -516,6 +550,71 @@ class UnifiedTrainer:
         else:
             raise ValueError(f"Unknown risk_type: {self.risk_type}")
 
+    def _build_validation_loss_function(self, K: int) -> Callable:
+        """Build validation loss function that computes final iterate metric only.
+
+        CRITICAL: Validation loss is ALWAYS the final iterate metric (k=K),
+        regardless of training loss composition. This ensures unbiased
+        generalization performance measurement.
+
+        The validation loss:
+        1. Computes metric at k=K (final iterate) for each validation sample
+        2. Applies the configured risk measure (expectation or CVaR)
+
+        Args:
+            K: Number of algorithm iterations.
+
+        Returns:
+            Validation loss function: stepsizes -> scalar
+        """
+        traj_fn = self.problem_module.get_trajectory_fn(self.alg)
+
+        # Prepare batched and fixed parameters for vmap
+        batched_params = self.problem_module.get_batched_parameters()
+        fixed_params = self.problem_module.get_fixed_parameters()
+
+        batched_data = {k: self.validation_data.get(k + '_batch', self.validation_data.get(k))
+                       for k in batched_params}
+        fixed_data = {k: self.validation_data[k] for k in fixed_params if k in self.validation_data}
+
+        def val_loss_fn(stepsizes):
+            """Compute validation loss on held-out validation set."""
+
+            def compute_single_val_metric(**sample_data):
+                """Compute final iterate metric for a single validation sample."""
+                # Merge fixed data with current sample data
+                full_data = {**fixed_data, **sample_data}
+
+                # Compute trajectories (not Gram representation)
+                trajectories = traj_fn(stepsizes, **full_data, K_max=K, return_Gram_representation=False)
+
+                # Extract problem data and ground truth for metric computation
+                ground_truth_keys = self.problem_module.get_ground_truth_keys()
+                problem_data = {k: v for k, v in full_data.items()
+                              if k not in ground_truth_keys}
+                ground_truth = {k: v for k, v in full_data.items()
+                              if k in ground_truth_keys}
+
+                # Create metric function
+                metric_fn = self.problem_module.create_metric_fn(
+                    trajectories, problem_data, ground_truth, self.pep_obj
+                )
+
+                # ONLY final iterate, always
+                return metric_fn(K)
+
+            # Vmap over batched parameters
+            in_axes_dict = {k: 0 for k in batched_params}
+            vmapped_metric = jax.vmap(compute_single_val_metric, in_axes=in_axes_dict)
+
+            # Compute metrics for all validation samples
+            val_metrics = vmapped_metric(**batched_data)
+
+            # Apply risk measure (same as training)
+            return self._apply_risk_measure(val_metrics)
+
+        return jax.jit(val_loss_fn)
+
     def _initialize_optimizer(self, stepsizes: Stepsizes):
         """Set up optimizer based on cfg.optimizer_type.
 
@@ -562,7 +661,7 @@ class UnifiedTrainer:
         return None
 
     def _run_training_loop(
-        self, loss_fn: Callable, stepsizes: Stepsizes, K: int, csv_path: str
+        self, loss_fn: Callable, val_loss_fn: Callable, stepsizes: Stepsizes, K: int, csv_path: str
     ) -> TrainingResult:
         """Core unified training loop.
 
@@ -570,17 +669,19 @@ class UnifiedTrainer:
         L2O/LDRO-PEP use stochastic SGD with minibatch sampling.
 
         Args:
-            loss_fn: JIT-compiled loss function.
+            loss_fn: JIT-compiled training loss function.
+            val_loss_fn: JIT-compiled validation loss function.
             stepsizes: Initial stepsizes.
             K: Number of algorithm iterations.
             csv_path: Path to save progress CSV.
 
         Returns:
-            TrainingResult with final stepsizes, history, losses, and times.
+            TrainingResult with final stepsizes, history, losses, val_losses, and times.
         """
         # Track history
         all_stepsizes_vals = [stepsizes]
         all_losses = []
+        all_val_losses = []
         all_times = []
 
         # Determine update mask for manual optimizers
@@ -616,17 +717,23 @@ class UnifiedTrainer:
             # Optimizer step
             stepsizes = self._optimizer_step(stepsizes, grads, update_mask)
 
+            # Compute validation loss with updated stepsizes
+            val_loss = float(val_loss_fn(stepsizes))
+            all_val_losses.append(val_loss)
+            log.info(f'  val_loss: {val_loss:.6f}')
+
             # Store updated stepsizes
             all_stepsizes_vals.append(stepsizes)
 
             # Save checkpoint
-            self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_times, csv_path)
+            self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, csv_path)
 
         # Return result
         return TrainingResult(
             stepsizes=stepsizes,
             stepsizes_history=all_stepsizes_vals,
             losses=all_losses,
+            val_losses=all_val_losses,
             times=all_times,
         )
 
@@ -719,7 +826,7 @@ class UnifiedTrainer:
 
     def _save_checkpoint(
         self, stepsizes_history: List[Stepsizes], K_max: int,
-        losses: List[float], times: List[float], csv_path: str
+        losses: List[float], val_losses: List[float], times: List[float], csv_path: str
     ):
         """Save progress to CSV via problem_module.build_stepsizes_dataframe().
 
@@ -727,6 +834,7 @@ class UnifiedTrainer:
             stepsizes_history: Full history of stepsizes including initialization.
             K_max: Number of algorithm iterations.
             losses: List of training loss values.
+            val_losses: List of validation loss values.
             times: List of iteration times in seconds.
             csv_path: Path to save CSV.
         """
@@ -735,6 +843,7 @@ class UnifiedTrainer:
             K_max=K_max,
             alg=self.alg,
             training_losses=losses,
+            validation_losses=val_losses,
             times=times,
         )
         df.to_csv(csv_path, index=False)

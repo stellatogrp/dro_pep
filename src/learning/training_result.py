@@ -16,9 +16,11 @@ class TrainingResult:
         stepsizes: Final learned stepsizes after training
         stepsizes_history: Full history of stepsizes including initialization
         losses: Training loss value at each iteration
+        val_losses: Validation loss value at each iteration (final iterate metric)
         times: Wall-clock time in seconds for each iteration
     """
     stepsizes: Stepsizes
     stepsizes_history: List[Stepsizes]
     losses: List[float]
+    val_losses: List[float]
     times: List[float]

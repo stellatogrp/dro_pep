@@ -252,6 +252,30 @@ class ProblemModule(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_ground_truth_keys(self) -> ParameterNames:
+        """Return names of ground truth keys (optimal solutions and values).
+
+        These keys identify the ground truth data that should be separated
+        from problem parameters when computing metrics. They are returned
+        by sample_training_batch() and sample_validation_batch() in the
+        ground_truth dict.
+
+        The keys should NOT include the '_batch' suffix. For example, if
+        the ground_truth dict contains 'x_opt_batch', this method should
+        return 'x_opt'.
+
+        Examples:
+            Quad: ('zs', 'fs')  # z-star, f-star (optimal point and value)
+            Lasso: ('x_opt', 'f_opt')  # standard optimal solution
+            LogReg: ('x_opt', 'f_opt')
+            PDLP: ('x_opt', 'f_opt')
+
+        Returns:
+            Tuple of ground truth key names (without '_batch' suffix).
+        """
+        pass
+
     def compute_batched_trajectories(
         self,
         stepsizes: Stepsizes,
