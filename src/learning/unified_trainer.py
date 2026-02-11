@@ -66,7 +66,9 @@ class UnifiedTrainer:
         self.alg = cfg.alg
         self.pep_obj = cfg.pep_obj
         self.stepsize_type = cfg.stepsize_type  # 'scalar' or 'vector'
-        self.loss_type_composition = cfg.get('loss_type_composition', 'final')  # For L2O
+        self.training_loss_type_composition = cfg.get('training_loss_type_composition', 'final')
+        self.validation_loss_type_composition = cfg.get('validation_loss_type_composition', 'final')
+        self.decay_rate = cfg.get('decay_rate', 0.9)
 
         # DRO-specific parameters (only used for ldro-pep and l2o with risk measures)
         self.eps = cfg.get('eps', 0.5)
@@ -183,7 +185,9 @@ class UnifiedTrainer:
         def lpep_loss(stepsizes):
             """Compute worst-case PEP objective."""
             # Construct PEP constraint matrices
-            pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj)
+            pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
+                                   composition_type=self.training_loss_type_composition,
+                                   decay_rate=self.decay_rate)
             A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
 
             # Solve worst-case PEP SDP
@@ -201,14 +205,14 @@ class UnifiedTrainer:
             K: Number of algorithm iterations.
 
         Returns:
-            Loss function: (stepsizes, minibatch_idx) -> scalar
+            Loss function: (stepsizes, minibatch) -> scalar
+            Note: minibatch is a dict of data arrays, NOT an index.
         """
         traj_fn = self.problem_module.get_trajectory_fn(self.alg)
 
-        def l2o_loss(stepsizes, minibatch_idx):
+        def l2o_loss(stepsizes, minibatch):
             """Compute trajectory-based loss with risk measure."""
-            # Extract minibatch
-            minibatch = self._get_minibatch(minibatch_idx)
+            # minibatch is already extracted outside JIT boundary
 
             # Compute loss for each sample in batch
             losses = self._compute_batched_trajectory_losses(
@@ -234,7 +238,8 @@ class UnifiedTrainer:
             initial_stepsizes: Initial stepsizes for preconditioner computation.
 
         Returns:
-            Loss function: (stepsizes, minibatch_idx) -> scalar
+            Loss function: (stepsizes, minibatch) -> scalar
+            Note: minibatch is a dict of data arrays, NOT an index.
         """
         # Compute preconditioner from training data (once)
         self._compute_preconditioner(K, initial_stepsizes)
@@ -243,10 +248,9 @@ class UnifiedTrainer:
         traj_fn = self.problem_module.get_trajectory_fn(self.alg)
 
         if self.dro_canon_backend == 'manual_jax':
-            def ldro_pep_loss(stepsizes, minibatch_idx):
+            def ldro_pep_loss(stepsizes, minibatch):
                 """LDRO-PEP pipeline using manual JAX canonicalization."""
-                # Extract minibatch
-                minibatch = self._get_minibatch(minibatch_idx)
+                # minibatch is already extracted outside JIT boundary
 
                 # Compute trajectories for all samples (Gram representations)
                 G_batch, F_batch = self._compute_batched_gram_matrices(
@@ -254,7 +258,9 @@ class UnifiedTrainer:
                 )
 
                 # Compute PEP constraint matrices (depend on stepsizes)
-                pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj)
+                pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
+                                       composition_type=self.training_loss_type_composition,
+                                       decay_rate=self.decay_rate)
                 A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
 
                 # Solve DRO SDP
@@ -451,9 +457,16 @@ class UnifiedTrainer:
         batched_data = {k: minibatch[k] for k in batched_params if k in minibatch}
         fixed_data = {k: minibatch[k] for k in fixed_params if k in minibatch}
 
+        # Fix the keys order for vmap (must use positional args, not **kwargs)
+        batched_keys = tuple(batched_params)
+        in_axes = tuple(0 for _ in batched_keys)
+
         # Build vmap function for computing losses per sample
-        def compute_single_loss(**sample_data):
+        def compute_single_loss(*args):
             """Compute loss for a single problem instance."""
+            # Reconstruct sample_data dict from positional args
+            sample_data = dict(zip(batched_keys, args))
+
             # Merge fixed data with current sample data
             full_data = {**fixed_data, **sample_data}
 
@@ -475,17 +488,18 @@ class UnifiedTrainer:
             # Compute loss based on composition type
             return self._compute_loss_from_metric(metric_fn, K)
 
-        # Vmap over batched parameters
-        in_axes_dict = {k: 0 for k in batched_params}
-        vmapped_loss = jax.vmap(compute_single_loss, in_axes=in_axes_dict)
+        # Vmap over batched parameters using positional args
+        vmapped_loss = jax.vmap(compute_single_loss, in_axes=in_axes)
 
-        # Call with only batched data (fixed data is captured in closure)
-        return vmapped_loss(**batched_data)
+        # Call with batched data in correct order
+        return vmapped_loss(*[batched_data[k] for k in batched_keys])
 
-    def _compute_loss_from_metric(self, metric_fn: Callable[[int], float], K: int) -> float:
+    def _compute_loss_from_metric(
+        self, metric_fn: Callable[[int], float], K: int, loss_type: str = None
+    ) -> float:
         """Compute loss from metric function using specified composition type.
 
-        Supports multiple formulations via cfg.loss_type_composition:
+        Supports multiple formulations:
         - 'final': Only final iterate (original, may cause uniform gradients)
         - 'cumulative': Mean of losses at all iterates
         - 'weighted': Exponentially weighted sum (emphasizes later iterations)
@@ -495,20 +509,24 @@ class UnifiedTrainer:
         Args:
             metric_fn: Function computing metric at iteration k (k=0..K).
             K: Number of algorithm iterations.
+            loss_type: Loss composition type. Defaults to training_loss_type_composition.
 
         Returns:
             Scalar loss value.
         """
-        if self.loss_type_composition == 'final':
+        if loss_type is None:
+            loss_type = self.training_loss_type_composition
+
+        if loss_type == 'final':
             # Original: only final iterate
             return metric_fn(K)
 
-        elif self.loss_type_composition == 'cumulative':
+        elif loss_type == 'cumulative':
             # Mean of losses at all iterates
             all_metrics = jnp.array([metric_fn(k) for k in range(K + 1)])
             return jnp.mean(all_metrics)
 
-        elif self.loss_type_composition == 'weighted':
+        elif loss_type == 'weighted':
             # Exponentially weighted sum (emphasizes later iterations)
             decay_rate = self.cfg.get('l2o_decay_rate', 0.9)
             all_metrics = jnp.array([metric_fn(k) for k in range(K + 1)])
@@ -516,19 +534,19 @@ class UnifiedTrainer:
             weights = weights / jnp.sum(weights)  # Normalize
             return jnp.sum(weights * all_metrics)
 
-        elif self.loss_type_composition == 'per_step':
+        elif loss_type == 'per_step':
             # Per-step loss improvement (sum of improvements)
             all_metrics = jnp.array([metric_fn(k) for k in range(K + 1)])
             improvements = all_metrics[:-1] - all_metrics[1:]  # Positive = improvement
             return -jnp.sum(improvements)  # Negative to minimize
 
-        elif self.loss_type_composition == 'distance_cumulative':
+        elif loss_type == 'distance_cumulative':
             # Cumulative distance to optimum (assumes metric is distance)
             all_metrics = jnp.array([metric_fn(k) for k in range(K + 1)])
             return jnp.sum(all_metrics)
 
         else:
-            raise ValueError(f"Unknown loss_type_composition: {self.loss_type_composition}")
+            raise ValueError(f"Unknown loss_type_composition: {loss_type}")
 
     def _apply_risk_measure(self, losses: jnp.ndarray) -> float:
         """Apply risk measure to batch of losses.
@@ -543,22 +561,19 @@ class UnifiedTrainer:
             return jnp.mean(losses)
         elif self.risk_type == 'cvar':
             # CVaR: average of worst alpha fraction
+            # Use numpy (not jax) for static computation at trace time
             N = losses.shape[0]
-            k = max(int(jnp.ceil(self.alpha * N)), 1)
+            k = max(int(np.ceil(self.alpha * N)), 1)
             sorted_losses = jnp.sort(losses)[::-1]  # Descending order
             return jnp.mean(sorted_losses[:k])
         else:
             raise ValueError(f"Unknown risk_type: {self.risk_type}")
 
     def _build_validation_loss_function(self, K: int) -> Callable:
-        """Build validation loss function that computes final iterate metric only.
-
-        CRITICAL: Validation loss is ALWAYS the final iterate metric (k=K),
-        regardless of training loss composition. This ensures unbiased
-        generalization performance measurement.
+        """Build validation loss function using configured loss composition.
 
         The validation loss:
-        1. Computes metric at k=K (final iterate) for each validation sample
+        1. Computes metric using validation_loss_type_composition for each sample
         2. Applies the configured risk measure (expectation or CVaR)
 
         Args:
@@ -577,11 +592,21 @@ class UnifiedTrainer:
                        for k in batched_params}
         fixed_data = {k: self.validation_data[k] for k in fixed_params if k in self.validation_data}
 
+        # Fix the keys order for vmap (must use positional args, not **kwargs)
+        batched_keys = tuple(batched_params)
+        in_axes = tuple(0 for _ in batched_keys)
+
+        # Capture validation loss type for use in closure
+        val_loss_type = self.validation_loss_type_composition
+
         def val_loss_fn(stepsizes):
             """Compute validation loss on held-out validation set."""
 
-            def compute_single_val_metric(**sample_data):
-                """Compute final iterate metric for a single validation sample."""
+            def compute_single_val_metric(*args):
+                """Compute metric for a single validation sample."""
+                # Reconstruct sample_data dict from positional args
+                sample_data = dict(zip(batched_keys, args))
+
                 # Merge fixed data with current sample data
                 full_data = {**fixed_data, **sample_data}
 
@@ -600,15 +625,14 @@ class UnifiedTrainer:
                     trajectories, problem_data, ground_truth, self.pep_obj
                 )
 
-                # ONLY final iterate, always
-                return metric_fn(K)
+                # Use validation loss type composition
+                return self._compute_loss_from_metric(metric_fn, K, loss_type=val_loss_type)
 
-            # Vmap over batched parameters
-            in_axes_dict = {k: 0 for k in batched_params}
-            vmapped_metric = jax.vmap(compute_single_val_metric, in_axes=in_axes_dict)
+            # Vmap over batched parameters using positional args
+            vmapped_metric = jax.vmap(compute_single_val_metric, in_axes=in_axes)
 
             # Compute metrics for all validation samples
-            val_metrics = vmapped_metric(**batched_data)
+            val_metrics = vmapped_metric(*[batched_data[k] for k in batched_keys])
 
             # Apply risk measure (same as training)
             return self._apply_risk_measure(val_metrics)
@@ -680,9 +704,26 @@ class UnifiedTrainer:
         """
         # Track history
         all_stepsizes_vals = [stepsizes]
-        all_losses = []
-        all_val_losses = []
-        all_times = []
+
+        # Compute initial losses for the starting stepsizes (before any updates)
+        log.info("Computing initial losses for starting stepsizes...")
+        initial_start_time = time.perf_counter()
+
+        if self.learning_framework == 'lpep':
+            initial_loss = float(loss_fn(stepsizes))
+        else:
+            # Use first minibatch for initial loss computation
+            initial_minibatch = self._get_minibatch(0)
+            initial_loss = float(loss_fn(stepsizes, initial_minibatch))
+
+        initial_val_loss = float(val_loss_fn(stepsizes))
+        initial_time = time.perf_counter() - initial_start_time
+
+        log.info(f'  initial_loss: {initial_loss:.6f}, initial_val_loss: {initial_val_loss:.6f}')
+
+        all_losses = [initial_loss]
+        all_val_losses = [initial_val_loss]
+        all_times = [initial_time]
 
         # Determine update mask for manual optimizers
         update_mask = self._get_update_mask(stepsizes)
@@ -704,7 +745,9 @@ class UnifiedTrainer:
                 loss, grads = value_and_grad_fn(stepsizes)
             else:
                 # L2O/LDRO-PEP: stochastic, with minibatch
-                loss, grads = value_and_grad_fn(stepsizes, iter_num)
+                # Extract minibatch OUTSIDE JIT boundary to avoid traced indexing
+                minibatch = self._get_minibatch(iter_num)
+                loss, grads = value_and_grad_fn(stepsizes, minibatch)
 
             iter_time = time.perf_counter() - iter_start_time
 
