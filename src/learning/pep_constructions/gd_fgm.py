@@ -18,9 +18,10 @@ def _create_simple_obj_builder(repX, repG, repF, dimG, dimF, pep_obj):
     """Create objective builder for simple (non-composite) problems.
 
     Args:
-        repX: Array of point representations (n_points+1, dimG)
-        repG: Array of gradient representations (n_points+1, dimG)
-        repF: Array of function value representations (n_points+1, dimF)
+        repX: Array of point representations (n_points, dimG)
+              Contains only algorithm iterates.
+        repG: Array of gradient representations (n_points, dimG)
+        repF: Array of function value representations (n_points, dimF)
         dimG: Dimension of Gram basis
         dimF: Dimension of function value basis
         pep_obj: Performance metric type
@@ -71,7 +72,8 @@ def construct_gd_pep_data(t, mu, L, R, K_max, pep_obj,
     Representation structure:
         - dimG = K_max + 2: columns for [x0-xs, g0, g1, ..., gK]
         - dimF = K_max + 1: entries for [f0-fs, f1-fs, ..., fK-fs]
-        - Points: x0, x1, ..., xK, xs (optimal point last, index K_max+1)
+        - Points: x0, x1, ..., xK (algorithm points only, no stationary point in arrays)
+        - Stationary point constraints computed with explicit zeros
     """
     # Broadcast t to vector if scalar
     t_vec = jnp.broadcast_to(t, (K_max,))
@@ -90,13 +92,13 @@ def construct_gd_pep_data(t, mu, L, R, K_max, pep_obj,
     # repG[i]: representation of g_i in the Gram basis
     # repF[i]: representation of f_i in the function value basis
 
-    # Number of points: K_max + 2 (x0, x1, ..., xK, xs)
-    n_points = K_max + 1  # Algorithm points (excluding xs which is added after)
+    # Number of algorithm points: K_max + 1 (x0, x1, ..., xK)
+    n_points = K_max + 1
 
-    # Initialize arrays for representations
-    repX = jnp.zeros((n_points + 1, dimG))  # +1 for xs
-    repG = jnp.zeros((n_points + 1, dimG))
-    repF = jnp.zeros((n_points + 1, dimF))
+    # Initialize arrays for representations (algorithm points only, no stationary point)
+    repX = jnp.zeros((n_points, dimG))
+    repG = jnp.zeros((n_points, dimG))
+    repF = jnp.zeros((n_points, dimF))
 
     # x0 - xs is the first basis vector (index 0)
     # g0 is the second basis vector (index 1)
@@ -143,16 +145,9 @@ def construct_gd_pep_data(t, mu, L, R, K_max, pep_obj,
 
     repF = jax.lax.fori_loop(0, n_points, set_fvals, repF)
 
-    # Optimal point xs: all zeros in relative representation
-    xs = jnp.zeros(dimG)  # xs - xs = 0
-    gs = jnp.zeros(dimG)  # gs = 0
-    fs = jnp.zeros(dimF)  # fs - fs = 0
-
-    repX = repX.at[n_points].set(xs)
-    repG = repG.at[n_points].set(gs)
-    repF = repF.at[n_points].set(fs)
-
-    # Compute interpolation conditions using the full set
+    # Compute interpolation conditions
+    # Arrays contain only algorithm points; stationary point constraints
+    # are computed with explicit zeros in the interpolation function
     A_vals, b_vals = smooth_strongly_convex_interp(
         repX, repG, repF, mu, L, n_points
     )
@@ -258,7 +253,8 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj,
     Representation structure:
         - dimG = K_max + 2: [y0-ys, g(y0), g(y1), ..., g(y_{K-1}), g(x_K)]
         - dimF = K_max + 1: [f(y0)-fs, f(y1)-fs, ..., f(y_{K-1})-fs, f(x_K)-fs]
-        - Points: y0, y1, ..., y_{K-1}, x_K, ys (n_points = K_max + 1, plus ys)
+        - Points: y0, y1, ..., y_{K-1}, x_K (algorithm points only, no stationary point in arrays)
+        - Stationary point constraints computed with explicit zeros
     """
     # Broadcast t to vector if scalar
     t_vec = jnp.broadcast_to(t, (K_max,))
@@ -274,14 +270,13 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj,
     eyeF = jnp.eye(dimF)
 
     # Number of algorithm points (y0, ..., y_{K-1}, x_K) = K + 1
-    # Total points including ys: K + 2
-    n_points = K_max + 1  # Algorithm points (excluding ys)
+    n_points = K_max + 1
 
-    # Initialize arrays for representations
-    # repY[0..K-1] = y_0..y_{K-1}, repY[K] = x_K, repY[K+1] = ys
-    repY = jnp.zeros((n_points + 1, dimG))  # +1 for ys
-    repG = jnp.zeros((n_points + 1, dimG))
-    repF = jnp.zeros((n_points + 1, dimF))
+    # Initialize arrays for representations (algorithm points only, no stationary point)
+    # repY[0..K-1] = y_0..y_{K-1}, repY[K] = x_K
+    repY = jnp.zeros((n_points, dimG))
+    repG = jnp.zeros((n_points, dimG))
+    repF = jnp.zeros((n_points, dimF))
 
     # Basis vector indices:
     # Index 0: y0-ys
@@ -346,17 +341,9 @@ def construct_fgm_pep_data(t, beta, mu, L, R, K_max, pep_obj,
 
     repF = jax.lax.fori_loop(0, n_points, set_fvals, repF)
 
-    # Optimal point ys: all zeros in relative representation
-    ys = jnp.zeros(dimG)  # ys - ys = 0
-    gs = jnp.zeros(dimG)  # g(ys) = 0
-    fs = jnp.zeros(dimF)  # f(ys) - fs = 0
-
-    repY = repY.at[n_points].set(ys)
-    repG = repG.at[n_points].set(gs)
-    repF = repF.at[n_points].set(fs)
-
     # Compute interpolation conditions using repY, repG, repF
-    # These are now valid (y_k, g(y_k), f(y_k)) triplets
+    # Arrays contain only algorithm points; stationary point constraints
+    # are computed with explicit zeros in the interpolation function
     A_vals, b_vals = smooth_strongly_convex_interp(
         repY, repG, repF, mu, L, n_points
     )

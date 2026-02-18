@@ -20,37 +20,76 @@ from learning.pep_constructions import (
 
 def numpy_smooth_strongly_convex(repX, repG, repF, mu, L):
     """
-    Reference numpy implementation from gd.py for comparison.
+    Reference numpy implementation for comparison.
+
+    Arrays contain only algorithm iterates (no stationary point row).
+    Optimal point constraints are computed with explicit zeros.
+
     Returns A_list, b_list as numpy arrays.
     """
-    n_points = len(repX) - 1
+    n_points = len(repX)  # Number of algorithm points
+    dimG = repX.shape[1]
+    dimF = repF.shape[1]
+
+    # Explicit zeros for stationary point
+    xs = np.zeros(dimG)
+    gs = np.zeros(dimG)
+    fs = np.zeros(dimF)
+
     A_list, b_list = [], []
-    
-    for i in range(n_points + 1):
-        for j in range(n_points + 1):
+    coeff = 1.0 / (2.0 * (1.0 - mu / L))
+
+    def compute_constraint(xi, xj, gi, gj, fi, fj):
+        diff_x = xi - xj
+        diff_g = gi - gj
+        Ai = (1 / 2) * np.outer(gj, diff_x) + (1 / 2) * np.outer(diff_x, gj)
+        Ai += coeff * (
+            (1 / L) * np.outer(diff_g, diff_g)
+            + mu * np.outer(diff_x, diff_x)
+            - (mu / L) * np.outer(diff_g, diff_x)
+            - (mu / L) * np.outer(diff_x, diff_g)
+        )
+        bi = fj - fi
+        return Ai, bi
+
+    # Part 1: Algorithm point pairs (i, j) with i != j
+    for i in range(n_points):
+        for j in range(n_points):
             if i != j:
-                xi, xj = repX[i, :], repX[j, :]
-                gi, gj = repG[i, :], repG[j, :]
-                fi, fj = repF[i, :], repF[j, :]
-                
-                Ai = (1 / 2) * np.outer(gj, xi - xj) + (1 / 2) * np.outer(xi - xj, gj)
-                Ai += 1 / 2 / (1 - (mu / L)) * (
-                    (1 / L) * np.outer(gi - gj, gi - gj)
-                    + mu * np.outer(xi - xj, xi - xj)
-                    - (mu / L) * np.outer(gi - gj, xi - xj)
-                    - (mu / L) * np.outer(xi - xj, gi - gj)
+                Ai, bi = compute_constraint(
+                    repX[i, :], repX[j, :],
+                    repG[i, :], repG[j, :],
+                    repF[i, :], repF[j, :]
                 )
-                bi = fj - fi
-                
                 A_list.append(Ai)
                 b_list.append(bi)
-    
+
+    # Part 2: (i, s) constraints for each algorithm point i
+    for i in range(n_points):
+        Ai, bi = compute_constraint(
+            repX[i, :], xs,
+            repG[i, :], gs,
+            repF[i, :], fs
+        )
+        A_list.append(Ai)
+        b_list.append(bi)
+
+    # Part 3: (s, j) constraints for each algorithm point j
+    for j in range(n_points):
+        Ai, bi = compute_constraint(
+            xs, repX[j, :],
+            gs, repG[j, :],
+            fs, repF[j, :]
+        )
+        A_list.append(Ai)
+        b_list.append(bi)
+
     return np.array(A_list), np.array(b_list)
 
 
 class TestSmoothStronglyConvexInterp(unittest.TestCase):
     """Tests for smooth_strongly_convex_interp function."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.n_points = 3
@@ -58,13 +97,13 @@ class TestSmoothStronglyConvexInterp(unittest.TestCase):
         self.dimF = 4
         self.mu = 0.1
         self.L = 1.0
-        
-        # Create random test data
+
+        # Create random test data (n_points rows, no stationary point)
         np.random.seed(42)
-        self.repX_np = np.random.randn(self.n_points + 1, self.dimG)
-        self.repG_np = np.random.randn(self.n_points + 1, self.dimG)
-        self.repF_np = np.random.randn(self.n_points + 1, self.dimF)
-        
+        self.repX_np = np.random.randn(self.n_points, self.dimG)
+        self.repG_np = np.random.randn(self.n_points, self.dimG)
+        self.repF_np = np.random.randn(self.n_points, self.dimF)
+
         # JAX versions
         self.repX = jnp.array(self.repX_np)
         self.repG = jnp.array(self.repG_np)
@@ -165,7 +204,7 @@ class TestSmoothStronglyConvexInterp(unittest.TestCase):
 
 class TestSmoothStronglyConvexInterpConsecutive(unittest.TestCase):
     """Tests for smooth_strongly_convex_interp_consecutive function."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         self.n_points = 4
@@ -173,11 +212,12 @@ class TestSmoothStronglyConvexInterpConsecutive(unittest.TestCase):
         self.dimF = 3
         self.mu = 0.2
         self.L = 2.0
-        
+
+        # Arrays without stationary point
         np.random.seed(123)
-        self.repX = jnp.array(np.random.randn(self.n_points + 1, self.dimG))
-        self.repG = jnp.array(np.random.randn(self.n_points + 1, self.dimG))
-        self.repF = jnp.array(np.random.randn(self.n_points + 1, self.dimF))
+        self.repX = jnp.array(np.random.randn(self.n_points, self.dimG))
+        self.repG = jnp.array(np.random.randn(self.n_points, self.dimG))
+        self.repF = jnp.array(np.random.randn(self.n_points, self.dimF))
     
     def test_output_shapes(self):
         """Test that output shapes are correct."""
@@ -246,42 +286,45 @@ class TestSmoothStronglyConvexInterpConsecutive(unittest.TestCase):
 
 class TestEdgeCases(unittest.TestCase):
     """Test edge cases and boundary conditions."""
-    
+
     def test_single_point(self):
         """Test with n_points=1 (minimal case)."""
         n_points = 1
         dimG = 3
         dimF = 2
-        
-        repX = jnp.ones((n_points + 1, dimG))
-        repG = jnp.ones((n_points + 1, dimG))
-        repF = jnp.ones((n_points + 1, dimF))
-        
+
+        # Arrays without stationary point
+        repX = jnp.ones((n_points, dimG))
+        repG = jnp.ones((n_points, dimG))
+        repF = jnp.ones((n_points, dimF))
+
         A_vals, b_vals = smooth_strongly_convex_interp(
             repX, repG, repF, 0.1, 1.0, n_points
         )
-        
-        # 2 points, 2 constraints (i,j) pairs with i != j
+
+        # 1 algorithm point + stationary point = 2 constraints: (0, s) and (s, 0)
+        # n_points*(n_points+1) = 1*2 = 2
         self.assertEqual(A_vals.shape[0], 2)
-    
+
     def test_large_L_over_mu_ratio(self):
         """Test with large condition number L/mu."""
         n_points = 2
         dimG = 4
         dimF = 3
-        
-        repX = jnp.array(np.random.randn(n_points + 1, dimG))
-        repG = jnp.array(np.random.randn(n_points + 1, dimG))
-        repF = jnp.array(np.random.randn(n_points + 1, dimF))
-        
+
+        # Arrays without stationary point
+        repX = jnp.array(np.random.randn(n_points, dimG))
+        repG = jnp.array(np.random.randn(n_points, dimG))
+        repF = jnp.array(np.random.randn(n_points, dimF))
+
         # Large condition number
         mu = 0.001
         L = 1000.0
-        
+
         A_vals, b_vals = smooth_strongly_convex_interp(
             repX, repG, repF, mu, L, n_points
         )
-        
+
         # Should not produce NaN or Inf
         self.assertFalse(jnp.any(jnp.isnan(A_vals)))
         self.assertFalse(jnp.any(jnp.isinf(A_vals)))
@@ -292,48 +335,82 @@ class TestEdgeCases(unittest.TestCase):
 def numpy_convex(repX, repG, repF):
     """
     Reference numpy implementation for convex function interpolation.
+
+    Arrays contain only algorithm iterates (no stationary point row).
+    Optimal point constraints are computed with explicit zeros.
+
     Returns A_list, b_list as numpy arrays.
     """
-    n_points = len(repX) - 1
+    n_points = len(repX)  # Number of algorithm points
+    dimG = repX.shape[1]
+    dimF = repF.shape[1]
+
+    # Explicit zeros for stationary point
+    xs = np.zeros(dimG)
+    gs = np.zeros(dimG)
+    fs = np.zeros(dimF)
+
     A_list, b_list = [], []
-    
-    for i in range(n_points + 1):
-        for j in range(n_points + 1):
+
+    def compute_constraint(xi, xj, gj, fi, fj):
+        diff_x = xi - xj
+        Ai = (1 / 2) * np.outer(gj, diff_x) + (1 / 2) * np.outer(diff_x, gj)
+        bi = fj - fi
+        return Ai, bi
+
+    # Part 1: Algorithm point pairs (i, j) with i != j
+    for i in range(n_points):
+        for j in range(n_points):
             if i != j:
-                xi, xj = repX[i, :], repX[j, :]
-                gj = repG[j, :]
-                fi, fj = repF[i, :], repF[j, :]
-                
-                diff_x = xi - xj
-                # Convex: h(xi) - h(xj) - <gj, xi-xj> >= 0
-                # In <= form: <gj, xi-xj> - (h(xi) - h(xj)) <= 0
-                Ai = (1 / 2) * np.outer(gj, diff_x) + (1 / 2) * np.outer(diff_x, gj)
-                bi = fj - fi
-                
+                Ai, bi = compute_constraint(
+                    repX[i, :], repX[j, :],
+                    repG[j, :],
+                    repF[i, :], repF[j, :]
+                )
                 A_list.append(Ai)
                 b_list.append(bi)
-    
+
+    # Part 2: (i, s) constraints for each algorithm point i
+    for i in range(n_points):
+        Ai, bi = compute_constraint(
+            repX[i, :], xs,
+            gs,
+            repF[i, :], fs
+        )
+        A_list.append(Ai)
+        b_list.append(bi)
+
+    # Part 3: (s, j) constraints for each algorithm point j
+    for j in range(n_points):
+        Ai, bi = compute_constraint(
+            xs, repX[j, :],
+            repG[j, :],
+            fs, repF[j, :]
+        )
+        A_list.append(Ai)
+        b_list.append(bi)
+
     return np.array(A_list), np.array(b_list)
 
 
 class TestConvexInterp(unittest.TestCase):
     """Tests for convex_interp function."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         from learning.pep_constructions import convex_interp
         self.convex_interp = convex_interp
-        
+
         self.n_points = 3
         self.dimG = 5
         self.dimF = 4
-        
-        # Create random test data
+
+        # Create random test data (n_points rows, no stationary point)
         np.random.seed(42)
-        self.repX_np = np.random.randn(self.n_points + 1, self.dimG)
-        self.repG_np = np.random.randn(self.n_points + 1, self.dimG)
-        self.repF_np = np.random.randn(self.n_points + 1, self.dimF)
-        
+        self.repX_np = np.random.randn(self.n_points, self.dimG)
+        self.repG_np = np.random.randn(self.n_points, self.dimG)
+        self.repF_np = np.random.randn(self.n_points, self.dimF)
+
         # JAX versions
         self.repX = jnp.array(self.repX_np)
         self.repG = jnp.array(self.repG_np)
@@ -402,33 +479,33 @@ class TestConvexInterp(unittest.TestCase):
 
 class TestProximalGradientInterp(unittest.TestCase):
     """Tests for smooth_strongly_convex_proximal_gradient_interp function."""
-    
+
     def setUp(self):
         """Set up test fixtures."""
         from learning.pep_constructions import (
             smooth_strongly_convex_proximal_gradient_interp
         )
         self.prox_grad_interp = smooth_strongly_convex_proximal_gradient_interp
-        
+
         self.K = 3  # Number of iterations
         self.dimG = 2 * self.K + 3  # Gram basis dimension: 1 + (K+1) + (K+1) = 2K+3
         self.dimF1 = self.K + 1  # f1 function value dimension
         self.dimF2 = self.K + 1  # f2 function value dimension (now includes x0)
         self.mu = 0.1
         self.L = 1.0
-        
+
         # Create random test data for f1 (smooth strongly convex)
-        # f1 has K+2 points: x_0, x_1, ..., x_K, x_s
+        # f1 has K+1 algorithm points: x_0, x_1, ..., x_K (no x_s in arrays)
         np.random.seed(42)
-        self.repX_f1 = jnp.array(np.random.randn(self.K + 2, self.dimG))
-        self.repG_f1 = jnp.array(np.random.randn(self.K + 2, self.dimG))
-        self.repF_f1 = jnp.array(np.random.randn(self.K + 2, self.dimF1))
-        
+        self.repX_f1 = jnp.array(np.random.randn(self.K + 1, self.dimG))
+        self.repG_f1 = jnp.array(np.random.randn(self.K + 1, self.dimG))
+        self.repF_f1 = jnp.array(np.random.randn(self.K + 1, self.dimF1))
+
         # Create random test data for f2 (convex)
-        # f2 has K+2 points: x_0, x_1, ..., x_K, x_s
-        self.repX_f2 = jnp.array(np.random.randn(self.K + 2, self.dimG))
-        self.repG_f2 = jnp.array(np.random.randn(self.K + 2, self.dimG))
-        self.repF_f2 = jnp.array(np.random.randn(self.K + 2, self.dimF2))
+        # f2 has K+1 algorithm points: x_0, x_1, ..., x_K (no x_s in arrays)
+        self.repX_f2 = jnp.array(np.random.randn(self.K + 1, self.dimG))
+        self.repG_f2 = jnp.array(np.random.randn(self.K + 1, self.dimG))
+        self.repF_f2 = jnp.array(np.random.randn(self.K + 1, self.dimF2))
     
     def test_output_shapes(self):
         """Test that output shapes are correct."""
@@ -437,15 +514,15 @@ class TestProximalGradientInterp(unittest.TestCase):
             self.repX_f2, self.repG_f2, self.repF_f2,
             self.mu, self.L, self.K
         )
-        
-        # f1 has K+2 points, so (K+2)*(K+1) constraints
+
+        # f1 has K+1 algorithm points, so n_points*(n_points+1) = (K+1)*(K+2) constraints
         n_points_f1 = self.K + 1
-        expected_f1_constraints = (n_points_f1 + 1) * n_points_f1
-        
-        # f2 has K+2 points, so (K+2)*(K+1) constraints
+        expected_f1_constraints = n_points_f1 * (n_points_f1 + 1)
+
+        # f2 has K+1 algorithm points, so n_points*(n_points+1) = (K+1)*(K+2) constraints
         n_points_f2 = self.K + 1
-        expected_f2_constraints = (n_points_f2 + 1) * n_points_f2
-        
+        expected_f2_constraints = n_points_f2 * (n_points_f2 + 1)
+
         self.assertEqual(A_f1.shape, (expected_f1_constraints, self.dimG, self.dimG))
         self.assertEqual(b_f1.shape, (expected_f1_constraints, self.dimF1))
         self.assertEqual(A_f2.shape, (expected_f2_constraints, self.dimG, self.dimG))
