@@ -228,6 +228,9 @@ class UnifiedTrainer:
                             initial_stepsizes: Stepsizes) -> Callable:
         """Construct DRO SDP loss combining trajectories + PEP constraints.
 
+        The preconditioner is computed per-step from minibatch data, enabling
+        gradient flow through the stepsize parameters.
+
         Supports two backends:
         - manual_jax: Direct diffcp with JAX autodiff (faster, lower memory)
         - cvxpylayers: CvxpyLayers wrapper (slower, higher memory)
@@ -235,27 +238,32 @@ class UnifiedTrainer:
         Args:
             K: Number of algorithm iterations.
             L, mu, R: Problem parameters.
-            initial_stepsizes: Initial stepsizes for preconditioner computation.
+            initial_stepsizes: Initial stepsizes (unused, kept for interface compatibility).
 
         Returns:
             Loss function: (stepsizes, minibatch) -> scalar
             Note: minibatch is a dict of data arrays, NOT an index.
         """
-        # Compute preconditioner from training data (once)
-        self._compute_preconditioner(K, initial_stepsizes)
-
         pep_data_fn = self.problem_module.get_pep_data_fn(self.alg)
         traj_fn = self.problem_module.get_trajectory_fn(self.alg)
 
+        # Closure over precond_type for use inside JIT-compiled function
+        precond_type = self.precond_type
+
         if self.dro_canon_backend == 'manual_jax':
             def ldro_pep_loss(stepsizes, minibatch):
-                """LDRO-PEP pipeline using manual JAX canonicalization."""
+                """LDRO-PEP pipeline with per-step preconditioner."""
                 # minibatch is already extracted outside JIT boundary
 
                 # Compute trajectories for all samples (Gram representations)
+                # G_batch, F_batch depend on current stepsizes
                 G_batch, F_batch = self._compute_batched_gram_matrices(
                     stepsizes, minibatch, traj_fn, K
                 )
+
+                # Compute preconditioner from minibatch (per-step)
+                # This enables gradient flow: stepsizes → G_batch, F_batch → precond_inv
+                precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type)
 
                 # Compute PEP constraint matrices (depend on stepsizes)
                 pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
@@ -267,7 +275,7 @@ class UnifiedTrainer:
                 return dro_scs_solve(
                     A_obj, b_obj, A_vals, b_vals, c_vals,
                     G_batch, F_batch,
-                    self.eps, self.precond_inv,
+                    self.eps, precond_inv,  # Per-step preconditioner
                     risk_type=self.risk_type,
                     alpha=self.alpha,
                 )
