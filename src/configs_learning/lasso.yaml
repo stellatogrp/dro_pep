@@ -7,8 +7,8 @@ R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
 
 # Sample sizes
 N: 5                # Batch size for SGD training
-training_sample_N: 500  # Number of training samples (pre-sampled for sliding window)
-precond_sample_size: 100
+training_sample_N: 10  # Number of training samples (pre-sampled for sliding window)
+precond_sample_size: 5
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
 # Random seeds
@@ -33,14 +33,20 @@ optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
 stepsize_type: "vector" # "scalar" or "vector"
 vector_init: "fixed" # "fixed", "silver", "geometric", "increasing", "decreasing"
 
-# L2O loss type (ONLY affects learning_framework='l2o', NOT 'ldro-pep')
-# 'final': Standard final iterate loss f(x_K) - f_opt
-# 'cumulative': Sum of losses at all iterates (better gradient diversity)
-l2o_loss_type: "weighted"
+# Loss type composition for training and validation
+# Options: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
+# 'final': Only final iterate metric
+# 'weighted': Exponentially weighted sum (emphasizes later iterations)
+# 'cumulative': Mean of metrics at all iterates
+training_loss_type_composition: "weighted"
+validation_loss_type_composition: "final"
+decay_rate: 0.9  # Decay rate for weighted composition (w_k = decay_rate^(K-k))
+
+learn_beta: true  # Whether to learn FISTA beta parameters
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
-K_max: [15]
+K_max: [5]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
@@ -60,7 +66,7 @@ weight_decay: 1e-3  # weight decay for sgd_wd
 output_dir: "learn_dro_outputs"
 
 # Out-of-sample validation/test configuration
-out_of_sample_val_N: 100     # Number of validation samples (in-distribution)
+out_of_sample_val_N: 10     # Number of validation samples (in-distribution)
 out_of_sample_test_N: 200   # Number of test samples (in-distribution)
 out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
 out_of_sample_test_seed: 20000  # Seed for generating test b vectors

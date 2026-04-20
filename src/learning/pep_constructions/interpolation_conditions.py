@@ -11,14 +11,15 @@ from functools import partial
 
 
 @partial(jax.jit, static_argnames=['n_points'])
-def smooth_strongly_convex_interp(repX, repG, repF, mu, L, n_points):
+def smooth_strongly_convex_interp(repX, repG, repF, mu, L, n_points, gs=None):
     """
     Compute interpolation conditions for smooth strongly convex functions.
 
     JAX-compatible version that uses fori_loop for nested iteration.
 
     Arrays contain only algorithm iterates (no stationary point row).
-    Optimal point constraints are computed with explicit zeros.
+    Optimal point constraints are computed using the provided `gs` (or explicit
+    zeros by default).
 
     Args:
         repX: Array of point representations (n_points, dimG)
@@ -28,6 +29,10 @@ def smooth_strongly_convex_interp(repX, repG, repF, mu, L, n_points):
         mu: Strong convexity parameter
         L: Lipschitz constant of gradient
         n_points: Number of algorithm points
+        gs: Optional gradient representation at the stationary point, shape (dimG,).
+            Default None → zeros (correct for single-function minimization).
+            For composite problems (f1 + f2), pass the Gram-basis representation
+            of grad_f1(x_s), which is non-zero in general.
 
     Returns:
         A_vals: Array of constraint matrices (n_points*(n_points+1), dimG, dimG)
@@ -55,9 +60,11 @@ def smooth_strongly_convex_interp(repX, repG, repF, mu, L, n_points):
     # Precompute coefficient for interpolation
     coeff = 1.0 / (2.0 * (1.0 - mu / L))
 
-    # Optimal point: explicit zeros
+    # Optimal point: fs and xs are always zero by construction of the Gram basis.
+    # gs defaults to zero (correct for single-function min); caller overrides for composite.
     xs = jnp.zeros(dimG)
-    gs = jnp.zeros(dimG)
+    if gs is None:
+        gs = jnp.zeros(dimG)
     fs = jnp.zeros(dimF)
 
     def compute_constraint_pair(xi, xj, gi, gj, fi, fj):
@@ -159,7 +166,7 @@ def smooth_strongly_convex_interp(repX, repG, repF, mu, L, n_points):
 
 
 @partial(jax.jit, static_argnames=['n_points'])
-def smooth_strongly_convex_interp_consecutive(repX, repG, repF, mu, L, n_points):
+def smooth_strongly_convex_interp_consecutive(repX, repG, repF, mu, L, n_points, gs=None):
     """
     Compute interpolation conditions for consecutive points only.
 
@@ -186,9 +193,10 @@ def smooth_strongly_convex_interp_consecutive(repX, repG, repF, mu, L, n_points)
     dimG = repX.shape[1]
     dimF = repF.shape[1]
 
-    # Optimal point: explicit zeros
+    # Optimal point: fs and xs are zero by construction; gs defaults to zero.
     xs = jnp.zeros(dimG)
-    gs = jnp.zeros(dimG)
+    if gs is None:
+        gs = jnp.zeros(dimG)
     fs = jnp.zeros(dimF)
 
     # Number of constraints: (n_points-1) for consecutive + n_points for (s, j)
@@ -249,7 +257,7 @@ def smooth_strongly_convex_interp_consecutive(repX, repG, repF, mu, L, n_points)
 
 
 @partial(jax.jit, static_argnames=['n_points'])
-def convex_interp(repX, repG, repF, n_points):
+def convex_interp(repX, repG, repF, n_points, gs=None):
     """
     Compute interpolation conditions for convex functions.
 
@@ -263,7 +271,8 @@ def convex_interp(repX, repG, repF, n_points):
         b_ij = f_j - f_i
 
     Arrays contain only algorithm iterates (no stationary point row).
-    Optimal point constraints are computed with explicit zeros.
+    Optimal point constraints are computed using the provided `gs` (or explicit
+    zeros by default).
 
     Args:
         repX: Array of point representations (n_points, dimG)
@@ -271,6 +280,10 @@ def convex_interp(repX, repG, repF, n_points):
         repG: Array of (sub)gradient representations (n_points, dimG)
         repF: Array of function value representations (n_points, dimF)
         n_points: Number of algorithm points
+        gs: Optional (sub)gradient representation at the stationary point, shape (dimG,).
+            Default None → zeros. For composite problems like Lasso (min f1 + f2),
+            the subgradient h_s of f2 at the stationary point is NOT zero
+            (stationarity gives h_s = -g_s), so the caller must pass it explicitly.
 
     Returns:
         A_vals: Array of constraint matrices (n_points*(n_points+1), dimG, dimG)
@@ -290,9 +303,11 @@ def convex_interp(repX, repG, repF, n_points):
     A_vals = jnp.zeros((num_constraints, dimG, dimG))
     b_vals = jnp.zeros((num_constraints, dimF))
 
-    # Optimal point: explicit zeros
+    # Optimal point: fs and xs are zero by construction; gs defaults to zero.
+    # For composite problems, caller must pass the correct subgradient at x_s.
     xs = jnp.zeros(dimG)
-    gs = jnp.zeros(dimG)
+    if gs is None:
+        gs = jnp.zeros(dimG)
     fs = jnp.zeros(dimF)
 
     def compute_constraint_pair(xi, xj, gj, fi, fj):

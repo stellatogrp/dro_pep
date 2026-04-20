@@ -56,46 +56,49 @@ def compute_preconditioner_from_samples(G_batch, F_batch, precond_type='average'
     if precond_type == 'identity':
         return (jnp.ones(dimG), jnp.ones(dimF))
     
-    # Compute sqrt of diagonals of each G matrix: shape (N, dimG)
+    # G path: diagonals are squared norms, mathematically >= 0.
+    # Double-where idiom avoids NaN gradient at sqrt(0).
     G_diags = jax.vmap(jnp.diag)(G_batch)  # (N, dimG)
-    G_diag_sqrt = jnp.sqrt(jnp.maximum(G_diags, 0.0))  # (N, dimG)
-    
-    # F_batch is already (N, dimF)
-    F_vals = F_batch
-    
+    positive_mask_G = G_diags > 0
+    safe_G_diags = jnp.where(positive_mask_G, G_diags, 1.0)
+    G_diag_sqrt = jnp.where(positive_mask_G, jnp.sqrt(safe_G_diags), 0.0)
+
+    # F path: for composite problems (e.g. Lasso), F_batch entries can be
+    # negative (f2(x_k) < f2(x_s) is possible even though f(x_k) >= f(x_s)).
+    # Taking |F| before aggregation gives a meaningful magnitude estimate and
+    # avoids sqrt-of-negative NaN traps. For positive-only F (Quad/GD), this
+    # matches the previous behavior exactly.
+    F_abs = jnp.abs(F_batch)
+
     if precond_type == 'average':
         avg_G = jnp.mean(G_diag_sqrt, axis=0)  # (dimG,)
-        avg_F = jnp.mean(F_vals, axis=0)       # (dimF,)
+        avg_F = jnp.mean(F_abs, axis=0)        # (dimF,)
     elif precond_type == 'max':
         avg_G = jnp.max(G_diag_sqrt, axis=0)
-        avg_F = jnp.max(F_vals, axis=0)
+        avg_F = jnp.max(F_abs, axis=0)
     elif precond_type == 'min':
         avg_G = jnp.min(G_diag_sqrt, axis=0)
-        avg_F = jnp.min(F_vals, axis=0)
+        avg_F = jnp.min(F_abs, axis=0)
     else:
         avg_G = jnp.ones(dimG)
         avg_F = jnp.ones(dimF)
-    
-    # Replace zeros with 1 before inverting
-    avg_G = jnp.where(avg_G == 0, 1.0, avg_G)
-    avg_F = jnp.where(avg_F == 0, 1.0, avg_F)
-    
-    # Compute preconditioner: (1/avg, 1/sqrt(avg))
-    precond_G = 1.0 / avg_G
-    precond_F = 1.0 / jnp.sqrt(avg_F)
-    
-    # Handle NaN/inf by replacing with 1
-    precond_G = jnp.where(jnp.isnan(precond_G) | jnp.isinf(precond_G), 1.0, precond_G)
-    precond_F = jnp.where(jnp.isnan(precond_F) | jnp.isinf(precond_F), 1.0, precond_F)
-    
-    # Apply scaling factors
-    precond_G = precond_G * dimG
-    precond_F = precond_F * jnp.sqrt(dimF)
-    
-    # Return inverse preconditioner
-    precond_inv_G = 1.0 / precond_G
-    precond_inv_F = 1.0 / precond_F
-    
+
+    # Compute inverse preconditioners using double-where for safe autodiff at zero.
+    # Forward semantics:
+    #   precond_inv_G = avg_G / dimG       if avg_G > 0, else 1 / dimG
+    #   precond_inv_F = sqrt(avg_F)/sqrt(dimF) if avg_F > 0, else 1 / sqrt(dimF)
+    positive_G = avg_G > 0
+    safe_avg_G = jnp.where(positive_G, avg_G, 1.0)
+    precond_inv_G = jnp.where(positive_G, safe_avg_G / dimG, 1.0 / dimG)
+
+    positive_F = avg_F > 0
+    safe_avg_F = jnp.where(positive_F, avg_F, 1.0)
+    precond_inv_F = jnp.where(
+        positive_F,
+        jnp.sqrt(safe_avg_F) / jnp.sqrt(dimF),
+        1.0 / jnp.sqrt(dimF),
+    )
+
     return (precond_inv_G, precond_inv_F)
 
 

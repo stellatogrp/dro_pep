@@ -179,13 +179,16 @@ def construct_ista_pep_data(t, mu, L, R, K_max, pep_obj,
     repG_f2 = repG_f2.at[n_points].set(eyeG[idx_hs, :])  # h_s
     repF_f2 = repF_f2.at[n_points].set(jnp.zeros(dimF2))
 
-    # Compute interpolation conditions
+    # Compute interpolation conditions.
+    # For the composite problem (f1 smooth SC + f2 convex), the stationary point
+    # of f1 + f2 does NOT have zero (sub)gradients for f1 or f2 individually.
+    # Stationarity: g_s + h_s = 0. Pass correct Gram-basis representations.
     A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-        repX_f1, repG_f1, repF_f1, mu, L, n_points
+        repX_f1, repG_f1, repF_f1, mu, L, n_points, gs=eyeG[idx_gs, :]
     )
 
     A_vals_f2, b_vals_f2 = convex_interp(
-        repX_f2, repG_f2, repF_f2, n_points
+        repX_f2, repG_f2, repF_f2, n_points, gs=eyeG[idx_hs, :]
     )
 
     # Combine constraints with F = [F1, F2]
@@ -393,13 +396,15 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj,
     repG_f2 = repG_f2.at[n_f2_points].set(-eyeG[idx_gs, :])  # h_s = -g_s
     repF_f2 = repF_f2.at[n_f2_points].set(jnp.zeros(dimF2))
 
-    # Compute interpolation conditions
+    # Compute interpolation conditions.
+    # Stationarity: g_s + h_s = 0, so h_s = -g_s. No separate h_s basis vector
+    # in FISTA's Gram basis; we represent h_s as -eyeG[idx_gs, :].
     A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-        repY_f1, repG_f1, repF_f1, mu, L, n_f1_points
+        repY_f1, repG_f1, repF_f1, mu, L, n_f1_points, gs=eyeG[idx_gs, :]
     )
 
     A_vals_f2, b_vals_f2 = convex_interp(
-        repX_f2, repG_f2, repF_f2, n_f2_points
+        repX_f2, repG_f2, repF_f2, n_f2_points, gs=-eyeG[idx_gs, :]
     )
 
     # Combine constraints

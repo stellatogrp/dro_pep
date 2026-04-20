@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=24G
+#SBATCH --mem-per-cpu=36G
 # #SBATCH --constraint=intel
 #SBATCH --time=00-05:59:59
 #SBATCH --array=0-359

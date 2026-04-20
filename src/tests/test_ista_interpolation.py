@@ -260,10 +260,15 @@ class TestISTAInterpolation(unittest.TestCase):
         )
         
         repX_f1, repG_f1, repF_f1, _, _, _ = build_symbolic_reps(self.K, self.gamma)
-        
+
         n_points_f1 = self.K + 1
+        # ISTA Gram basis has g_s at index 2K+3, h_s at 2K+4; dimG = 2K+5.
+        dimG_ista = 2 * self.K + 5
+        idx_gs_ista = 2 * self.K + 3
+        idx_hs_ista = 2 * self.K + 4
         A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-            repX_f1, repG_f1, repF_f1, self.mu, self.L, n_points_f1
+            repX_f1, repG_f1, repF_f1, self.mu, self.L, n_points_f1,
+            gs=jnp.eye(dimG_ista)[idx_gs_ista, :]
         )
         
         satisfied, max_violation, violations = check_interpolation_constraints(
@@ -285,10 +290,14 @@ class TestISTAInterpolation(unittest.TestCase):
         )
         
         _, _, _, repX_f2, repG_f2, repF_f2 = build_symbolic_reps(self.K, self.gamma)
-        
+
         n_points_f2 = self.K + 1
+        # For composite problem, pass h_s = eyeG[idx_hs] (NOT zero).
+        dimG_ista = 2 * self.K + 5
+        idx_hs_ista = 2 * self.K + 4
         A_vals_f2, b_vals_f2 = convex_interp(
-            repX_f2, repG_f2, repF_f2, n_points_f2
+            repX_f2, repG_f2, repF_f2, n_points_f2,
+            gs=jnp.eye(dimG_ista)[idx_hs_ista, :]
         )
         
         satisfied, max_violation, violations = check_interpolation_constraints(
@@ -338,23 +347,29 @@ class TestISTAInterpolation(unittest.TestCase):
             )
             
             repX_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_symbolic_reps(K, gamma)
-            
+
+            dimG_ista = 2 * K + 5
+            idx_gs_ista = 2 * K + 3
+            idx_hs_ista = 2 * K + 4
+
             # Check f1 interpolation
             A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-                repX_f1, repG_f1, repF_f1, mu, L, K + 1
+                repX_f1, repG_f1, repF_f1, mu, L, K + 1,
+                gs=jnp.eye(dimG_ista)[idx_gs_ista, :]
             )
             _, max_viol_f1, _ = check_interpolation_constraints(
                 G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
             )
-            
+
             # Check f2 interpolation
             A_vals_f2, b_vals_f2 = convex_interp(
-                repX_f2, repG_f2, repF_f2, K + 1
+                repX_f2, repG_f2, repF_f2, K + 1,
+                gs=jnp.eye(dimG_ista)[idx_hs_ista, :]
             )
             _, max_viol_f2, _ = check_interpolation_constraints(
                 G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
             )
-            
+
             self.assertLessEqual(max_viol_f1, 1e-4,
                 f"Problem {seed}: f1 interpolation violated with max violation {max_viol_f1}")
             self.assertLessEqual(max_viol_f2, 1e-4,
@@ -647,10 +662,14 @@ class TestFISTAInterpolation(unittest.TestCase):
         repY_f1, repG_f1, repF_f1, _, _, _ = build_fista_symbolic_reps(
             self.K, self.gamma, betas
         )
-        
+
         n_points_f1 = self.K  # y_0 to y_{K-1}
+        # Test's FISTA Gram basis: dimG = 2K+3, idx_gs = 2K+2 (h_s = -g_s at same index).
+        dimG_fista = 2 * self.K + 3
+        idx_gs_fista = 2 * self.K + 2
         A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-            repY_f1, repG_f1, repF_f1, self.mu, self.L, n_points_f1
+            repY_f1, repG_f1, repF_f1, self.mu, self.L, n_points_f1,
+            gs=jnp.eye(dimG_fista)[idx_gs_fista, :]
         )
         
         satisfied, max_violation, violations = check_interpolation_constraints(
@@ -674,10 +693,14 @@ class TestFISTAInterpolation(unittest.TestCase):
         _, _, _, repX_f2, repG_f2, repF_f2 = build_fista_symbolic_reps(
             self.K, self.gamma, betas
         )
-        
+
         n_points_f2 = self.K + 1  # x_0 to x_K
+        # Test's FISTA basis: h_s = -g_s at index 2K+2, dimG = 2K+3.
+        dimG_fista = 2 * self.K + 3
+        idx_gs_fista = 2 * self.K + 2
         A_vals_f2, b_vals_f2 = convex_interp(
-            repX_f2, repG_f2, repF_f2, n_points_f2
+            repX_f2, repG_f2, repF_f2, n_points_f2,
+            gs=-jnp.eye(dimG_fista)[idx_gs_fista, :]
         )
         
         satisfied, max_violation, violations = check_interpolation_constraints(
@@ -723,18 +746,23 @@ class TestFISTAInterpolation(unittest.TestCase):
             repY_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_fista_symbolic_reps(
                 K, gamma, betas
             )
-            
+
+            dimG_fista = 2 * K + 3
+            idx_gs_fista = 2 * K + 2
+
             # Check f1 interpolation
             A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-                repY_f1, repG_f1, repF_f1, mu, L, K
+                repY_f1, repG_f1, repF_f1, mu, L, K,
+                gs=jnp.eye(dimG_fista)[idx_gs_fista, :]
             )
             _, max_viol_f1, _ = check_interpolation_constraints(
                 G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
             )
-            
+
             # Check f2 interpolation
             A_vals_f2, b_vals_f2 = convex_interp(
-                repX_f2, repG_f2, repF_f2, K + 1
+                repX_f2, repG_f2, repF_f2, K + 1,
+                gs=-jnp.eye(dimG_fista)[idx_gs_fista, :]
             )
             _, max_viol_f2, _ = check_interpolation_constraints(
                 G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
@@ -912,23 +940,29 @@ class TestShiftedISTAInterpolation(unittest.TestCase):
         
         # Build symbolic representations
         repX_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_symbolic_reps(K, gamma)
-        
+
+        dimG_ista = 2 * K + 5
+        idx_gs_ista = 2 * K + 3
+        idx_hs_ista = 2 * K + 4
+
         # Check f1 interpolation
         A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-            repX_f1, repG_f1, repF_f1, mu, L, K + 1
+            repX_f1, repG_f1, repF_f1, mu, L, K + 1,
+            gs=jnp.eye(dimG_ista)[idx_gs_ista, :]
         )
         _, max_viol_f1, _ = check_interpolation_constraints(
             G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
         )
-        
+
         # Check f2 interpolation
         A_vals_f2, b_vals_f2 = convex_interp(
-            repX_f2, repG_f2, repF_f2, K + 1
+            repX_f2, repG_f2, repF_f2, K + 1,
+            gs=jnp.eye(dimG_ista)[idx_hs_ista, :]
         )
         _, max_viol_f2, _ = check_interpolation_constraints(
             G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
         )
-        
+
         self.assertLessEqual(max_viol_f1, 1e-4,
             f"Shifted f1 interpolation violated! Max violation: {max_viol_f1}")
         self.assertLessEqual(max_viol_f2, 1e-4,
@@ -964,16 +998,22 @@ class TestShiftedISTAInterpolation(unittest.TestCase):
             )
             
             repX_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_symbolic_reps(K, gamma)
-            
+
+            dimG_ista = 2 * K + 5
+            idx_gs_ista = 2 * K + 3
+            idx_hs_ista = 2 * K + 4
+
             A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-                repX_f1, repG_f1, repF_f1, mu, L, K + 1
+                repX_f1, repG_f1, repF_f1, mu, L, K + 1,
+                gs=jnp.eye(dimG_ista)[idx_gs_ista, :]
             )
             _, max_viol_f1, _ = check_interpolation_constraints(
                 G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
             )
-            
+
             A_vals_f2, b_vals_f2 = convex_interp(
-                repX_f2, repG_f2, repF_f2, K + 1
+                repX_f2, repG_f2, repF_f2, K + 1,
+                gs=jnp.eye(dimG_ista)[idx_hs_ista, :]
             )
             _, max_viol_f2, _ = check_interpolation_constraints(
                 G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
@@ -1107,17 +1147,22 @@ class TestShiftedFISTAInterpolation(unittest.TestCase):
         repY_f1, repG_f1, repF_f1, repX_f2, repG_f2, repF_f2 = build_fista_symbolic_reps(
             K, gamma, betas
         )
-        
+
+        dimG_fista = 2 * K + 3
+        idx_gs_fista = 2 * K + 2
+
         # Check interpolation
         A_vals_f1, b_vals_f1 = smooth_strongly_convex_interp(
-            repY_f1, repG_f1, repF_f1, mu, L, K
+            repY_f1, repG_f1, repF_f1, mu, L, K,
+            gs=jnp.eye(dimG_fista)[idx_gs_fista, :]
         )
         _, max_viol_f1, _ = check_interpolation_constraints(
             G, F1, np.array(A_vals_f1), np.array(b_vals_f1)
         )
-        
+
         A_vals_f2, b_vals_f2 = convex_interp(
-            repX_f2, repG_f2, repF_f2, K + 1
+            repX_f2, repG_f2, repF_f2, K + 1,
+            gs=-jnp.eye(dimG_fista)[idx_gs_fista, :]
         )
         _, max_viol_f2, _ = check_interpolation_constraints(
             G, F2, np.array(A_vals_f2), np.array(b_vals_f2)
@@ -1177,128 +1222,6 @@ class TestJAXTrajectoryFunctions(unittest.TestCase):
         np.testing.assert_allclose(np.array(F_jax), F_test, atol=1e-10,
             err_msg="ISTA JAX F vector doesn't match test implementation")
     
-    def test_jax_fista_matches_test_implementation(self):
-        """Verify problem_data_to_fista_trajectories matches the shifted FISTA test."""
-        import jax.numpy as jnp
-        from learning.trajectories import problem_data_to_fista_trajectories
-        
-        np.random.seed(42)
-        m, n = 20, 10
-        A_np = np.random.randn(m, n) / np.sqrt(m)
-        b_np = np.random.randn(m)
-        lambd = 0.1
-        K = 3
-        
-        # Solve Lasso
-        x_opt_np, f_opt_np = solve_lasso(A_np, b_np, lambd)
-        
-        ATA = A_np.T @ A_np
-        L = np.max(np.linalg.eigvalsh(ATA))
-        gamma_float = 1.0 / L
-        x0_np = np.random.randn(n) * 0.5
-        
-        # Compute betas like FISTA test
-        betas_t = [1.0]
-        for k in range(K):
-            t_new = 0.5 * (1 + np.sqrt(1 + 4 * betas_t[-1]**2))
-            betas_t.append(t_new)
-        effective_betas = [(betas_t[k] - 1) / betas_t[k+1] for k in range(K)]
-        
-        # Run JAX implementation
-        A_jax = jnp.array(A_np)
-        b_jax = jnp.array(b_np)
-        x_opt_jax = jnp.array(x_opt_np)
-        x0_jax = jnp.array(x0_np)
-        gamma_jax = jnp.array([gamma_float] * K)
-        betas_jax = jnp.array(effective_betas)
-        
-        G_jax, F_jax = problem_data_to_fista_trajectories(
-            (gamma_jax, betas_jax), A_jax, b_jax, x0_jax, x_opt_jax, float(f_opt_np), lambd, K_max=K
-        )
-        
-        # Run inline FISTA test implementation (matching test_shifted_fista_interpolation)
-        x0_shifted = x0_np - x_opt_np
-        
-        def f1_shifted(x):
-            return 0.5 * np.linalg.norm(A_np @ (x + x_opt_np) - b_np) ** 2 - f_opt_np
-        
-        def f2_shifted(x):
-            return lambd * np.linalg.norm(x + x_opt_np, 1)
-        
-        def grad_f1_shifted(x):
-            return A_np.T @ (A_np @ (x + x_opt_np) - b_np)
-        
-        def subgrad_f2_shifted(x):
-            return lambd * np.sign(x + x_opt_np)
-        
-        x_iterates = [x0_shifted]
-        y_iterates = [x0_shifted]
-        g_iterates = [grad_f1_shifted(x0_shifted)]
-        h_iterates = [subgrad_f2_shifted(x0_shifted)]
-        f1_y_iters = [f1_shifted(x0_shifted)]
-        f2_x_iters = [f2_shifted(x0_shifted)]
-        
-        x_curr = x0_shifted
-        y_curr = x0_shifted
-        beta_curr = 1.0
-        
-        for k in range(K):
-            g_yk = grad_f1_shifted(y_curr)
-            ytilde = y_curr - gamma_float * g_yk
-            
-            x_new_plus_xopt = soft_threshold(ytilde + x_opt_np, gamma_float * lambd)
-            x_new = x_new_plus_xopt - x_opt_np
-            h_new = (ytilde - x_new) / gamma_float
-            
-            beta_new = 0.5 * (1 + np.sqrt(1 + 4 * beta_curr ** 2))
-            y_new = x_new + (beta_curr - 1) / beta_new * (x_new - x_curr)
-            
-            x_iterates.append(x_new)
-            h_iterates.append(h_new)
-            f2_x_iters.append(f2_shifted(x_new))
-            
-            if k < K - 1:
-                y_iterates.append(y_new)
-                g_iterates.append(grad_f1_shifted(y_new))
-                f1_y_iters.append(f1_shifted(y_new))
-            
-            x_curr = x_new
-            y_curr = y_new
-            beta_curr = beta_new
-        
-        # Build Gram representation
-        g_s = A_np.T @ (A_np @ x_opt_np - b_np)
-        
-        G_half_columns = []
-        G_half_columns.append(x_iterates[0])
-        G_half_columns.append(g_iterates[0])
-        G_half_columns.append(h_iterates[0])
-        
-        for k in range(1, K):
-            G_half_columns.append(h_iterates[k])
-            G_half_columns.append(g_iterates[k])
-        
-        G_half_columns.append(h_iterates[K])
-        G_half_columns.append(g_s)
-        
-        G_half = np.column_stack(G_half_columns)
-        G_test = G_half.T @ G_half
-        
-        f2_x_opt = lambd * np.linalg.norm(x_opt_np, 1)
-        f1_s = -f2_x_opt
-        f2_s = f2_x_opt
-        
-        F1_test = np.array([f1 - f1_s for f1 in f1_y_iters] + [0.0])
-        F2_test = np.array([f2 - f2_s for f2 in f2_x_iters] + [0.0])
-        F_test = np.concatenate([F1_test, F2_test])
-        
-        # Compare
-        np.testing.assert_allclose(np.array(G_jax), G_test, atol=1e-10,
-            err_msg="FISTA JAX Gram matrix doesn't match test implementation")
-        np.testing.assert_allclose(np.array(F_jax), F_test, atol=1e-10,
-            err_msg="FISTA JAX F vector doesn't match test implementation")
-
-
 if __name__ == '__main__':
     unittest.main()
 

@@ -287,7 +287,9 @@ def main():
                 exit(1)
             hydra_tags += Learn_PDLP_params[job_idx]
 
-    sys.argv = [sys.argv[0]] + hydra_tags
+    # Preserve user-supplied hydra overrides (args after experiment & target_machine)
+    extra_args = sys.argv[3:]
+    sys.argv = [sys.argv[0]] + hydra_tags + extra_args
     driver()
 
 
