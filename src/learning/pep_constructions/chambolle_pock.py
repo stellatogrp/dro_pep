@@ -152,10 +152,17 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
     # 4. Interpolation Constraints
     # convex_interp expects n_points = number of algorithm points (excluding optimal)
     # We have K_max + 1 iterates (x_0 to x_K_max) + 1 saddle point = K_max + 2 total
-    # So we pass K_max + 1 as the number of algorithm points
+    # So we pass K_max + 1 as the number of algorithm points.
+    #
+    # Pass the saddle-point subgradient basis slots as gs= — analogous to the
+    # ISTA/FISTA fix. Without this, convex_interp defaults to gs=0, which
+    # contradicts the generically-nonzero saddle subgradients gf1_s = -K^T u_s
+    # and gh_s = K x_s required by saddle-point stationarity.
     n_algo_points = K_max + 1
-    A_f1, b_f1 = convex_interp(repX_f1, repG_f1, repF_f1, n_algo_points)
-    A_h, b_h = convex_interp(repY_h, repG_h, repF_h, n_algo_points)
+    A_f1, b_f1 = convex_interp(repX_f1, repG_f1, repF_f1, n_algo_points,
+                               gs=gf1_vec(idx_saddle))
+    A_h, b_h = convex_interp(repY_h, repG_h, repF_h, n_algo_points,
+                             gs=gh_vec(idx_saddle))
 
     b_f1_pad = jnp.concatenate([b_f1, jnp.zeros((b_f1.shape[0], dimF_h))], axis=1)
     b_h_pad  = jnp.concatenate([jnp.zeros((b_h.shape[0], dimF1)), b_h], axis=1)
@@ -182,16 +189,17 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
     # and fails when xs=x_opt, ys=y_opt in original coordinates.
 
     # 6. Gather Operator Pairs
-    # In shifted coordinates (x_s=0, y_s=0), we include TRIVIAL operator pairs
-    # for the saddle point: (0, K@0) = (0, 0). These are valid operator evaluations
-    # that include the saddle point in the PSD constraints.
-    #
-    # The function subgradients gf1_s=c and gh_s=q come from interpolation inequalities,
-    # NOT from these operator pairs.
-
-    # Saddle point operator evaluations (trivial in shifted coordinates)
-    pairs_K.append((eyeG[idx_xs], jnp.zeros(dimG)))     # (x_s, K @ x_s) = (0, 0)
-    pairs_Kt.append((eyeG[idx_ys], jnp.zeros(dimG)))    # (y_s, K^T @ y_s) = (0, 0)
+    # Saddle-point stationarity identities (CP analog of ISTA's g_s + h_s = 0).
+    # The saddle (x_s, u_s) satisfies
+    #     -K^T u_s ∈ ∂f1(x_s)    i.e.,   gf1_s = -K^T u_s
+    #      K   x_s ∈ ∂h(u_s)     i.e.,   gh_s  =  K   x_s
+    # Encode these through operator pairs so the PSD and adjoint blocks see them:
+    #     pairs_K.append((x_s, K x_s))   with K x_s = gh_s
+    #     pairs_Kt.append((u_s, K^T u_s))  with K^T u_s = -gf1_s
+    # This replaces the previous vacuous pairs (x_s, 0) / (u_s, 0) which both
+    # misstated the identity and left gf1_s, gh_s structurally decoupled.
+    pairs_K.append((eyeG[idx_xs], gh_vec(idx_saddle)))      # (x_s, K x_s = gh_s)
+    pairs_Kt.append((eyeG[idx_ys], -gf1_vec(idx_saddle)))   # (u_s, K^T u_s = -gf1_s)
 
     # Initial Condition Observations (K * dx0)
     # Allows us to form the cross term <K dx0, dy0> in the P-norm

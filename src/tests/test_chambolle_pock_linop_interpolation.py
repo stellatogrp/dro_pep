@@ -181,6 +181,17 @@ def test_chambolle_pock_linop_interpolation():
             assert result >= -1e-6, f"Optimal value should be non-negative, got {result}"
             assert problem.status == cp.OPTIMAL or problem.status == cp.OPTIMAL_INACCURATE
 
+            # Canary: compare to PEPit reference. Should match once the
+            # construction is fixed (Phase 2 of the planned bug-fix).
+            from tests.test_chambolle_pock_pepit_reference import pepit_linop_reference
+            pepit_val = pepit_linop_reference(
+                K=K_max, tau=tau, sigma=sigma, theta=theta, L_M=M,
+            )
+            print(f"PEPit reference: {pepit_val:.6e}")
+            assert np.isfinite(result), f"Our SDP returned non-finite {result}"
+            assert np.isclose(result, pepit_val, rtol=0.1), \
+                f"Our SDP {result:.4e} does not match PEPit {pepit_val:.4e} (rtol=0.1)"
+
         else:
             pytest.fail(f"Solver failed with status: {problem.status}")
 

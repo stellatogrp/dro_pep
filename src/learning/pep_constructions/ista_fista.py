@@ -21,6 +21,45 @@ NOTE on composite WC-PEP boundedness (see individual docstrings for detail):
   docstring for the full analysis, diagnosis, and a sketch of the fix.
   Workaround: use `composition_type='final'` for FISTA LPEP, or use the
   `ldro-pep` framework (sample constraints bound the SDP).
+
+NOTE on PEP convention (x_s = 0, F_s = 0):
+The composite obj builder implicitly assumes the stationary point is at
+the origin with zero objective. This is standard PEP practice and is
+valid without loss of generality:
+  - Coordinates are shifted so x_s = 0. The basis uses x_0 - x_s as its
+    first vector, and `xs_rep = jnp.zeros(dimG)`. All interpolation
+    constraints are translation-invariant, so this preserves the problem.
+  - Function values are shifted so F_s = 0. The f1/f2 representation
+    vectors at x_s are set to zeros (no basis slot for f1(x_s), f2(x_s)),
+    making F_s ≡ 0 in the SDP. Equivalent to subtracting F_s from every
+    function value, which doesn't affect gradients/subgradients.
+Under this convention:
+  - `obj_val` returns f1(x_k) + f2(x_k) = F(x_k) - F_s.
+  - `opt_dist_sq_norm` returns outer(x_k, x_k) which is ||x_k - x_s||^2
+    (since x_s = 0 in the shifted basis).
+  - `grad_sq_norm` returns ||g_k + h_k||^2, the composite subgradient norm
+    at x_k (vanishes at x_s via the stationarity constraint g_s + h_s = 0).
+
+NOTE on FISTA non-obj_val metrics with weighted composition (KNOWN ISSUE):
+The composite obj builder indexes into `repX_f1[k]` / `repG_f1[k]`, which
+for FISTA contain y_k / g(y_k) for k < K_max (they only equal x_K / g(x_K)
+at k = K_max). Consequences for FISTA + weighted composition:
+  - `opt_dist_sq_norm` measures ||y_k - x_s||^2 instead of ||x_k - x_s||^2
+    at intermediate iterates — almost certainly not the intended metric.
+  - `grad_sq_norm` computes ||g(y_k) + h_k||^2, mixing a gradient at y_k
+    with a subgradient at x_k — semantically ill-defined.
+  - `obj_val` is unaffected: the objective uses f1(y_k) + f2(x_k), and the
+    PEPit reference for FISTA's weighted performance metric is also
+    defined on (y_k, x_k) pairs in the same way.
+FISTA `final` composition is fine for all three metrics because at
+k = K_max we have repY_f1[K_max] = x_K and repG_f1[K_max] = g(x_K)
+(see lines that set `x_final` at the K_max slot).
+ISTA is unaffected — repX_f1[k] = x_k and repG_f1[k] = g(x_k) throughout.
+Fix (not implemented): pass a separate repX_at_xk / repG_at_xk into the
+obj builder for FISTA so non-obj_val weighted metrics can use x_k, g(x_k)
+at intermediate iterates. Requires additional basis slots for g(x_k) at
+k = 1..K-1 (overlap with the intermediate-iterate interpolation fix
+described in `construct_fista_pep_data`'s KNOWN LIMITATION section).
 """
 
 import jax
@@ -37,6 +76,13 @@ def _create_composite_obj_builder(repX_f1, repG_f1, repF_f1,
                                    dimG, dimF1, dimF2, pep_obj):
     """Create objective builder for composite (f1 + f2) problems.
 
+    Assumes the PEP is set up with x_s = 0 (shifted coords) and F_s = 0
+    (shifted function values); see the module docstring for why this is
+    w.l.o.g. Under that convention:
+        obj_val           -> f1(x_k) + f2(x_k)      (== F(x_k) - F_s)
+        opt_dist_sq_norm  -> <x_k, x_k> via Gram     (== ||x_k - x_s||^2)
+        grad_sq_norm      -> ||g_k + h_k||^2        (composite subgrad norm)
+
     Args:
         repX_f1: Array of point representations for f1
         repG_f1: Array of gradient representations for f1 (gradients g)
@@ -50,6 +96,18 @@ def _create_composite_obj_builder(repX_f1, repG_f1, repF_f1,
 
     Returns:
         obj_builder: Function that takes iteration index k and returns (A_obj_k, b_obj_k)
+
+    KNOWN ISSUE — FISTA non-obj_val metrics with weighted composition:
+        For FISTA, this builder is called with repX_f1 = repY_f1 and
+        repG_f1 = g(y) gradients (+ g(x_K) in the last slot). So at
+        intermediate k < K_max:
+          - `opt_dist_sq_norm` measures ||y_k - x_s||^2, NOT ||x_k - x_s||^2.
+          - `grad_sq_norm` uses g(y_k) + h_k, mixing a gradient at y_k
+            with a subgradient at x_k (semantically wrong).
+        `obj_val` is unaffected (matches PEPit's weighted-metric semantics).
+        `final` composition is unaffected (repY_f1[K_max] = x_K).
+        ISTA is unaffected (repX_f1[k] = x_k throughout).
+        See the module docstring for a fix sketch.
     """
     dimF = dimF1 + dimF2
 
