@@ -19,40 +19,66 @@ base_capacity:
 
 warmstart: False
 
-learning_framework: 'ldro-pep' # 'ldro-pep' or 'l2o' or 'lpep'
+# ----------------------------------------------------------------------------
+# Algorithm / framework
+# ----------------------------------------------------------------------------
+alg: 'cp'                               # PDLP uses Chambolle-Pock
+pep_obj: 'obj_val'                      # duality gap is the only CP metric
+learning_framework: 'ldro-pep'          # 'ldro-pep', 'l2o', or 'lpep'
 
 # Step size configuration
-stepsize_type: "vector"  # "scalar" or "vector"
-vector_init: "fixed"     # "fixed" (TODO: add silver-like schedules for PDHG)
+stepsize_type: "vector"                 # "scalar" or "vector"
+vector_init: "fixed"                    # only 'fixed' supported for CP today
 
 # Which step sizes to learn (PDHG has tau, sigma, theta)
 learn_tau: True
 learn_sigma: True
-learn_theta: True  # Often fixed to 1.0
+learn_theta: True
 
-N: 20
-precond_sample_size: 100
+# ----------------------------------------------------------------------------
+# Loss composition
+# ----------------------------------------------------------------------------
+training_loss_type_composition: "weighted"
+validation_loss_type_composition: "final"
+decay_rate: 0.9
 
-# K_max loop inside quad_run (per-K CSV logging)
-# K_max: [5, 10, 15, 20]
+# ----------------------------------------------------------------------------
+# Batch sampling
+# ----------------------------------------------------------------------------
+N: 20                                   # minibatch size
+training_sample_N: 20                   # total pre-sampled training instances
+precond_sample_size: 100                # M_val / R_val estimation pool
+precond_sample_seed: 20260421
+
+out_of_sample_val_N: 10
+out_of_sample_val_seed: 10000
+out_of_sample_test_N: 20
+out_of_dist_N: 20
+
+# K_max loop inside pdlp_run (per-K CSV logging)
 K_max: [1]
 
 sgd_seed: 500
 
-# Optimization hyperparameters
-# pep_obj: "lagrangian_gap" pdlp only uses this
-dro_obj: "expectation"  # "expectation" or "cvar"
+# ----------------------------------------------------------------------------
+# DRO / SDP
+# ----------------------------------------------------------------------------
+dro_obj: "expectation"                  # "expectation" or "cvar"
 sdp_backend: "diffcp"
-dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+dro_canon_backend: "manual_jax"         # "manual_jax" or "cvxpylayers"
 eps: 0.1
 alpha: 0.1
 precond_type: 'average'
 
+# ----------------------------------------------------------------------------
 # SGD training parameters
+# ----------------------------------------------------------------------------
 optimizer_type: "adamw"
 sgd_iters: 10
-eta_t: 1e-3     # learning rate for stepsizes (descent)
-weight_decay: 1e-3  # weight decay for sgd_wd
+eta_t: 1e-3                             # learning rate for stepsizes
+weight_decay: 1e-3                      # weight decay for sgd_wd
 
+# ----------------------------------------------------------------------------
 # Outputs
+# ----------------------------------------------------------------------------
 output_dir: "learn_dro_outputs"

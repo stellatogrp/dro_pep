@@ -250,6 +250,20 @@ class UnifiedTrainer:
         # Closure over precond_type for use inside JIT-compiled function
         precond_type = self.precond_type
 
+        # Pre-compute the static PSD-block dimensions ONCE outside JIT.
+        # Under a nested-jit call, Python ints returned from the inner jit
+        # (`PSD_shapes`) get traced into jax int arrays, which breaks
+        # `compute_C_d_matrices` (needs `int(dim)`). By capturing the static
+        # dims at build time and closing over them as a Python tuple, we keep
+        # them concrete. CP returns a non-empty PSD_shapes list whose values
+        # depend only on K (static), so this is stable across SGD iterations.
+        _init_pep_data = pep_data_fn(
+            initial_stepsizes, mu, L, R, K, self.pep_obj,
+            composition_type=self.training_loss_type_composition,
+            decay_rate=self.decay_rate,
+        )
+        psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
+
         if self.dro_canon_backend == 'manual_jax':
             def ldro_pep_loss(stepsizes, minibatch):
                 """LDRO-PEP pipeline with per-step preconditioner."""
@@ -269,15 +283,25 @@ class UnifiedTrainer:
                 pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
                                        composition_type=self.training_loss_type_composition,
                                        decay_rate=self.decay_rate)
-                A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+                # Full tuple:
+                # (A_obj, b_obj, A_vals, b_vals, c_vals,
+                #  PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
+                (A_obj, b_obj, A_vals, b_vals, c_vals,
+                 PSD_A_vals, PSD_b_vals, PSD_c_vals, _) = pep_data
 
-                # Solve DRO SDP
+                # Solve DRO SDP. PSD blocks are critical for CP/PDLP (operator-
+                # norm constraints); empty for single-function PEPs like Quad /
+                # ISTA / FISTA (passing empty lists is a no-op there).
                 return dro_scs_solve(
                     A_obj, b_obj, A_vals, b_vals, c_vals,
                     G_batch, F_batch,
                     self.eps, precond_inv,  # Per-step preconditioner
                     risk_type=self.risk_type,
                     alpha=self.alpha,
+                    PSD_A_vals=PSD_A_vals,
+                    PSD_b_vals=PSD_b_vals,
+                    PSD_c_vals=PSD_c_vals,
+                    PSD_mat_dims=psd_mat_dims_static,  # static Python tuple
                 )
 
             return jax.jit(ldro_pep_loss)

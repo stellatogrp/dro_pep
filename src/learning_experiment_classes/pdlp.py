@@ -1,9 +1,673 @@
-"""PDLP problem module for unified learning framework.
+"""PDLP (Primal-Dual for Linear Programs) problem module.
 
-Placeholder - to be implemented.
+Implements `PDLPProblemModule` using the ProblemModule ABC and UnifiedTrainer.
+The underlying algorithm is Chambolle-Pock / PDHG on a capacitated
+facility-location LP relaxation:
+
+    min_x c^T x   s.t.   A_ineq x <= b_ineq,  A_eq x = b_eq,  l <= x <= u
+
+cast as a saddle-point problem with K_mat = [-A_ineq; A_eq],  q = [-b_ineq; b_eq]:
+
+    min_x max_y  L(x, y) = (c^T x + ind_{[l,u]}(x))
+                           + <K x, y>
+                           - (-q^T y + ind_{R^{m1}_+ × R^{m2}}(y))
+
+This module uses:
+- The verified-correct trajectory function
+  `learning/trajectories/cp_lp.py::problem_data_to_cp_lp_trajectories`.
+- The verified-correct PEP construction
+  `learning/pep_constructions/chambolle_pock.py::construct_chambolle_pock_pep_data`.
+- A lifted `FacilityLocationDPP` cvxpy DPP solver for efficient batched LP solving
+  (originally from `learning_experiment_classes/old/pdlp.py`; its sign convention
+  is confirmed to align with the verified CP stationarity).
+
+A matching reference construction is locked down in
+`tests/test_chambolle_pock_facility_location.py` and
+`tests/test_cp_lp_trajectory_module.py`.
 """
 
+import diffcp_patch  # noqa: F401  # Apply COO -> CSC fix for diffcp
+import jax
+import jax.numpy as jnp
+import numpy as np
+import os
+import pandas as pd
+import logging
+import cvxpy as cp
+from functools import partial
+from typing import Any, Callable, Dict, Tuple
+
+from learning.problem_module import (
+    ProblemModule, ProblemData, GroundTruth, Stepsizes, ParameterNames,
+)
+from learning.unified_trainer import UnifiedTrainer
+from learning.pep_constructions import construct_chambolle_pock_pep_data
+from learning.trajectories import problem_data_to_cp_lp_trajectories
+
+jax.config.update("jax_enable_x64", True)
+
+log = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Facility-location problem generation (config-driven)
+# =============================================================================
+
+def generate_facility_location_problem(cfg, n_facilities, key, n_customers):
+    """Generate a random Capacitated Facility Location problem instance."""
+    k_fixed, k_demand, k_trans = jax.random.split(key, 3)
+
+    fixed_costs = jax.random.uniform(
+        k_fixed, shape=(n_facilities,),
+        minval=cfg.fixed_costs.l, maxval=cfg.fixed_costs.u,
+    )
+    demands = jax.random.uniform(
+        k_demand, shape=(n_customers,),
+        minval=cfg.demands.l, maxval=cfg.demands.u,
+    )
+    transportation_costs = jax.random.uniform(
+        k_trans, shape=(n_facilities, n_customers),
+        minval=cfg.transportation_costs.l, maxval=cfg.transportation_costs.u,
+    )
+
+    avg_demand_per_facility = jnp.sum(demands) / n_facilities
+    base_capacities = cfg.base_capacity.base * jnp.ones(n_facilities)
+    capacities = base_capacities * avg_demand_per_facility * cfg.base_capacity.scaling
+
+    return {
+        "fixed_costs": fixed_costs,
+        "capacities": capacities,
+        "demands": demands,
+        "transportation_costs": transportation_costs,
+    }
+
+
+@partial(jax.jit, static_argnames=['n_facilities', 'n_customers'])
+def extract_constraint_matrices(fixed_costs, capacities, demands,
+                                 transportation_costs, n_facilities, n_customers):
+    """Extract (c, A_eq, b_eq, A_ineq, b_ineq, l, u) from problem parameters.
+
+    Variable ordering: [y_1, ..., y_m, x_{11}, ..., x_{mn}].
+    """
+    m = n_facilities
+    n = n_customers
+
+    c = jnp.concatenate([fixed_costs, transportation_costs.flatten()])
+
+    # Equality (demand satisfaction): sum_i x_{ij} = 1 for all j
+    A_eq_y = jnp.zeros((n, m))
+    A_eq_x = jnp.tile(jnp.eye(n), m)
+    A_eq = jnp.hstack([A_eq_y, A_eq_x])
+    b_eq = jnp.ones(n)
+
+    # Capacity: sum_j d_j x_{ij} - s_i y_i <= 0 for all i
+    A_cap_y = -jnp.diag(capacities)
+    A_cap_x = jnp.kron(jnp.eye(m), demands.reshape(1, -1))
+    A_cap = jnp.hstack([A_cap_y, A_cap_x])
+    b_cap = jnp.zeros(m)
+
+    # Linking: x_{ij} - y_i <= 0 for all i, j
+    A_link_y = -jnp.kron(jnp.eye(m), jnp.ones((n, 1)))
+    A_link_x = jnp.eye(m * n)
+    A_link = jnp.hstack([A_link_y, A_link_x])
+    b_link = jnp.zeros(m * n)
+
+    A_ineq = jnp.vstack([A_cap, A_link])
+    b_ineq = jnp.concatenate([b_cap, b_link])
+
+    n_vars = m + m * n
+    l = jnp.zeros(n_vars)
+    u = jnp.ones(n_vars)
+    return c, A_eq, b_eq, A_ineq, b_ineq, l, u
+
+
+# =============================================================================
+# FacilityLocationDPP — cvxpy DPP solver (lifted from old/pdlp.py:186-333).
+# Sign convention here matches the verified CP stationarity identity, as
+# verified in test_chambolle_pock_facility_location.py.
+# =============================================================================
+
+class FacilityLocationDPP:
+    """CVXPY DPP-parametrized LP solver for fast batched facility-location solves."""
+
+    def __init__(self, n, m1, m2):
+        self.n = n
+        self.m1 = m1
+        self.m2 = m2
+
+        self.c_param = cp.Parameter(n)
+        self.Aineq_param = cp.Parameter((m1, n))
+        self.bineq_param = cp.Parameter(m1)
+        self.Aeq_param = cp.Parameter((m2, n))
+        self.beq_param = cp.Parameter(m2)
+        self.l_param = cp.Parameter(n)
+        self.u_param = cp.Parameter(n)
+
+        self.x = cp.Variable(n)
+
+        self.obj = self.c_param.T @ self.x
+        self.constraints = [
+            -self.Aineq_param @ self.x >= -self.bineq_param,
+            self.Aeq_param @ self.x == self.beq_param,
+            self.x >= self.l_param,
+            -self.x >= -self.u_param,
+        ]
+
+        self.prob = cp.Problem(cp.Minimize(self.obj), self.constraints)
+
+    def solve(self, c_np, Aineq_np, bineq_np, Aeq_np, beq_np, l_np, u_np):
+        """Solve LP; return (x_opt, y_opt) with PDHG sign convention.
+
+        y_opt is stacked as [inequality_duals (>=0); -equality_duals].
+        This aligns with K_mat = [-A_ineq; A_eq] and q = [-b_ineq; b_eq]
+        used by the verified CP trajectory module.
+        """
+        self.c_param.value = c_np
+        self.Aineq_param.value = Aineq_np
+        self.bineq_param.value = bineq_np
+        self.Aeq_param.value = Aeq_np
+        self.beq_param.value = beq_np
+        self.l_param.value = l_np
+        self.u_param.value = u_np
+
+        self.prob.solve(solver='CLARABEL')
+
+        x_opt = self.x.value
+
+        # Dual extraction, PDHG sign convention: keep inequality duals as-is,
+        # negate equality duals. See old/pdlp.py:258-287 for derivation.
+        y_ineq = self.constraints[0].dual_value
+        nu_eq = -self.constraints[1].dual_value
+        y_opt = np.concatenate([y_ineq, nu_eq])
+        return x_opt, y_opt
+
+    def solve_batch(self, c_batch_np, Aineq_batch_np, bineq_batch_np,
+                    Aeq_batch_np, beq_batch_np, l_batch_np, u_batch_np):
+        """Solve N LPs in batch. Returns (x_opt_batch, y_opt_batch)."""
+        N = c_batch_np.shape[0]
+        x_opt_batch = np.zeros((N, self.n))
+        y_opt_batch = np.zeros((N, self.m1 + self.m2))
+        for i in range(N):
+            x_opt, y_opt = self.solve(
+                c_batch_np[i], Aineq_batch_np[i], bineq_batch_np[i],
+                Aeq_batch_np[i], beq_batch_np[i], l_batch_np[i], u_batch_np[i],
+            )
+            x_opt_batch[i] = x_opt
+            y_opt_batch[i] = y_opt
+        return x_opt_batch, y_opt_batch
+
+
+# =============================================================================
+# Batched problem generation / stacking (K_mat, q)
+# =============================================================================
+
+def _extract_batched_matrices(problem_batch, n_facilities, n_customers):
+    """Vmapped matrix extraction for a batch of facility-location problems."""
+    extractor = jax.vmap(
+        partial(extract_constraint_matrices,
+                n_facilities=n_facilities, n_customers=n_customers),
+        in_axes=(0, 0, 0, 0),
+    )
+    return extractor(
+        problem_batch["fixed_costs"],
+        problem_batch["capacities"],
+        problem_batch["demands"],
+        problem_batch["transportation_costs"],
+    )
+
+
+def _sample_facility_batch_and_solve(
+    key, cfg, n_facilities, n_customers, N, dpp_solver,
+):
+    """Sample N facility-location instances, extract matrices, solve LPs.
+
+    Returns batched per-sample data:
+      c_batch       (N, n_vars)
+      K_mat_batch   (N, m1+m2, n_vars)   = stack([-A_ineq, A_eq]) per sample
+      q_batch       (N, m1+m2)           = concat([-b_ineq, b_eq]) per sample
+      x_opt_batch   (N, n_vars)
+      y_opt_batch   (N, m1+m2)
+    """
+    keys = jax.random.split(key, N)
+    generate_one = partial(
+        generate_facility_location_problem,
+        cfg=cfg, n_facilities=n_facilities, n_customers=n_customers,
+    )
+    problem_batch = jax.vmap(generate_one)(key=keys)
+
+    c_b, Aeq_b, beq_b, Aineq_b, bineq_b, lb_b, ub_b = _extract_batched_matrices(
+        problem_batch, n_facilities, n_customers,
+    )
+
+    # Solve LPs in batch via DPP (CPU / numpy)
+    x_opt_b_np, y_opt_b_np = dpp_solver.solve_batch(
+        np.asarray(c_b), np.asarray(Aineq_b), np.asarray(bineq_b),
+        np.asarray(Aeq_b), np.asarray(beq_b), np.asarray(lb_b), np.asarray(ub_b),
+    )
+
+    # Stack K_mat = [-A_ineq; A_eq] and q = [-b_ineq; b_eq] per sample.
+    K_mat_b = jnp.concatenate([-Aineq_b, Aeq_b], axis=1)
+    q_b = jnp.concatenate([-bineq_b, beq_b], axis=1)
+
+    return {
+        'c_batch': c_b,
+        'K_mat_batch': K_mat_b,
+        'q_batch': q_b,
+    }, {
+        'x_opt_batch': jnp.asarray(x_opt_b_np),
+        'y_opt_batch': jnp.asarray(y_opt_b_np),
+    }
+
+
+# =============================================================================
+# Module-level trajectory / PEP wrappers
+# =============================================================================
+
+def _make_cp_lp_traj_fn(l, u, m1, m2):
+    """Create a trajectory function for the unified trainer.
+
+    Closes over the box bounds (l, u) and the inequality/equality row counts
+    (m1, m2). The returned fn takes exactly the per-sample batched params:
+    (c, K_mat, q, x_opt, y_opt) plus K_max.
+    """
+    m_total = m1 + m2
+
+    # Fixed interior initial point — always strictly in the primal box and the
+    # dual nonneg cone (for first m1 coords), so gf1_0 = c and gh_0 = -q are
+    # valid subgradients (matches the verified facility-location test).
+    x0 = 0.5 * (l + u)
+    y0 = jnp.concatenate([0.1 * jnp.ones(m1), jnp.zeros(m2)])
+
+    def wrapped_traj_fn(stepsizes, c, K_mat, q, x_opt, y_opt,
+                        K_max, return_Gram_representation=True):
+        return problem_data_to_cp_lp_trajectories(
+            stepsizes, c, K_mat, q, l, u, x_opt, y_opt, x0, y0,
+            K_max, m1,
+            return_Gram_representation=return_Gram_representation,
+        )
+
+    return wrapped_traj_fn
+
+
+def pep_data_fn_cp(stepsizes, mu, L, R, K_max, pep_obj,
+                   composition_type='final', decay_rate=0.9):
+    """Adapter for the uniform UnifiedTrainer pep_data_fn signature.
+
+    For CP, `L` is repurposed as the operator-norm bound M = ||K||_op
+    (a strictly-upper-bounding scalar), while `mu` and `pep_obj` are unused
+    (the CP objective is fixed to the duality gap). `R` is the Lyapunov
+    radius for the P-norm IC.
+    """
+    tau, sigma, theta = stepsizes
+    return construct_chambolle_pock_pep_data(
+        tau=tau, sigma=sigma, theta=theta, M=L, R=R, K_max=K_max,
+        composition_type=composition_type, decay_rate=decay_rate,
+    )
+
+
+# =============================================================================
+# PDLPProblemModule
+# =============================================================================
+
+class PDLPProblemModule(ProblemModule):
+    """Problem module for PDLP (CP/PDHG on facility-location LP relaxations).
+
+    Handles:
+    - Facility-location LP generation (via cfg ranges).
+    - Batched LP solving via cvxpy DPP.
+    - Stacking (K_mat, q) per sample.
+    - Per-sample trajectories via problem_data_to_cp_lp_trajectories.
+    - Per-sample PEP SDP via construct_chambolle_pock_pep_data.
+
+    Parameters bound via closure (not in training_data):
+    - Box bounds l, u (always zeros and ones for facility location).
+    - Inequality / equality row counts m1, m2.
+
+    Batched per-sample parameters: c, K_mat, q, x_opt, y_opt.
+    """
+
+    def __init__(self, cfg: Any):
+        super().__init__(cfg)
+
+        self.n_facilities = int(cfg.n_facilities)
+        self.n_customers = int(cfg.n_customers)
+        self.n_vars = self.n_facilities + self.n_facilities * self.n_customers
+
+        # Row counts of the mixed LP.
+        self.m1 = self.n_facilities + self.n_facilities * self.n_customers  # capacity + linking
+        self.m2 = self.n_customers                                           # demand
+        self.m_total = self.m1 + self.m2
+
+        log.info(
+            f"PDLP: n_facilities={self.n_facilities}, n_customers={self.n_customers}; "
+            f"n_vars={self.n_vars}, m1={self.m1}, m2={self.m2}"
+        )
+
+        # Box bounds are instance-independent for facility-location [0, 1].
+        self.l = jnp.zeros(self.n_vars)
+        self.u = jnp.ones(self.n_vars)
+
+        # DPP solver (reused across all samples).
+        self.dpp_solver = FacilityLocationDPP(self.n_vars, self.m1, self.m2)
+        log.info("Created FacilityLocationDPP solver for batched LP solves")
+
+        # Pre-sample a pool to compute M_val = max ||K_mat||_op and R_val.
+        precond_N = int(cfg.get('precond_sample_size', 100))
+        precond_seed = int(cfg.get('precond_sample_seed', 20260421))
+        log.info(f"Pre-sampling {precond_N} instances to estimate M_val and R_val...")
+        precond_key = jax.random.PRNGKey(precond_seed)
+        pool_problem_data, pool_ground_truth = _sample_facility_batch_and_solve(
+            precond_key, cfg,
+            self.n_facilities, self.n_customers, precond_N, self.dpp_solver,
+        )
+
+        # M_val: upper bound on operator norm across ALL future samples.
+        # The pool gives us an empirical max, but the random-LP distribution
+        # has support beyond any finite pool, so we apply a safety factor.
+        # If any actual training/val sample has ||K||_op > M_val, the PEP's
+        # operator-PSD constraint ||K u||^2 <= M^2 ||u||^2 is violated by
+        # that sample, which makes the DRO SDP unbounded.
+        K_mat_pool = np.asarray(pool_problem_data['K_mat_batch'])
+        pool_op_norms = np.array([
+            np.linalg.norm(K_mat_pool[i], ord=2) for i in range(precond_N)
+        ])
+        m_safety = float(cfg.get('m_safety_factor', 1.3))
+        self.M_val = float(pool_op_norms.max() * m_safety)
+        log.info(
+            f"M_val = {self.M_val:.6f}  "
+            f"(pool max ||K||_op = {pool_op_norms.max():.6f}, "
+            f"min = {pool_op_norms.min():.6f}, safety = {m_safety})"
+        )
+
+        # R_val: Lyapunov (P-norm) radius such that all sample trajectories fit
+        # inside the PEP's IC ball `P-norm^2 <= R^2`. The IC uses the P-norm
+        #     ||dx||^2 / tau + ||dy||^2 / sigma - 2 <K dx, dy>
+        # which with tau = sigma = O(1/M) is typically much larger than the
+        # plain Euclidean norm. Using Euclidean here produces samples OUTSIDE
+        # the PEP feasible set, which makes the DRO SDP unbounded even though
+        # the pure PEP is bounded.
+        #
+        # Compute the P-norm for each pool sample using the INITIAL stepsizes
+        # (tau0 = sigma0 = 0.9 / M_val), then scale up by `r_safety` to cover
+        # stepsize drift during training.
+        x_opt_pool = np.asarray(pool_ground_truth['x_opt_batch'])
+        y_opt_pool = np.asarray(pool_ground_truth['y_opt_batch'])
+        x0_ref = 0.5 * np.ones(self.n_vars)
+        y0_ref = np.concatenate([0.1 * np.ones(self.m1), np.zeros(self.m2)])
+
+        tau0 = 0.9 / self.M_val
+        sigma0 = 0.9 / self.M_val
+        pool_pnorm_sq = np.zeros(precond_N)
+        for i in range(precond_N):
+            dx_i = x0_ref - x_opt_pool[i]
+            dy_i = y0_ref - y_opt_pool[i]
+            K_i = K_mat_pool[i]
+            pool_pnorm_sq[i] = (
+                dx_i @ dx_i / tau0
+                + dy_i @ dy_i / sigma0
+                - 2.0 * (dy_i @ (K_i @ dx_i))
+            )
+        r_safety = float(cfg.get('r_safety_factor', 2.0))
+        max_pnorm_sq = float(np.max(pool_pnorm_sq))
+        self.R_val = float(np.sqrt(max_pnorm_sq) * r_safety)
+        log.info(
+            f"R_val = {self.R_val:.6f}  "
+            f"(max pool P-norm^2 = {max_pnorm_sq:.4f}, sqrt × safety {r_safety})"
+        )
+
+    # -----------------------------------------------------------------------
+    # Sampling
+    # -----------------------------------------------------------------------
+
+    def sample_training_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
+        """Generate + solve N training facility-location instances."""
+        return _sample_facility_batch_and_solve(
+            key, self.cfg,
+            self.n_facilities, self.n_customers, N, self.dpp_solver,
+        )
+
+    def sample_validation_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
+        """Same distribution as training."""
+        return self.sample_training_batch(key, N)
+
+    # -----------------------------------------------------------------------
+    # Trajectory / PEP wiring
+    # -----------------------------------------------------------------------
+
+    def get_trajectory_fn(self, alg: str) -> Callable:
+        if alg != 'cp':
+            raise ValueError(f"PDLP supports only alg='cp'; got {alg!r}")
+        return _make_cp_lp_traj_fn(self.l, self.u, self.m1, self.m2)
+
+    def get_pep_data_fn(self, alg: str) -> Callable:
+        if alg != 'cp':
+            raise ValueError(f"PDLP supports only alg='cp'; got {alg!r}")
+        return pep_data_fn_cp
+
+    # -----------------------------------------------------------------------
+    # Problem parameters / stepsizes
+    # -----------------------------------------------------------------------
+
+    def compute_L_mu_R(self, samples: ProblemData | None = None) -> Tuple[float, float, float]:
+        """Return (M_val, 0.0, R_val). `mu` is a placeholder (no convexity)."""
+        return (self.M_val, 0.0, self.R_val)
+
+    def get_initial_stepsizes(self, alg: str, K: int, L: float, mu: float) -> Stepsizes:
+        """CP stepsizes satisfying tau * sigma * M^2 <= 1 strictly.
+
+        Default: tau = sigma = 0.9 / M, theta = 1.0 (standard CP).
+        """
+        if alg != 'cp':
+            raise ValueError(f"PDLP supports only alg='cp'; got {alg!r}")
+        M = L
+        tau_scalar = 0.9 / M
+        sigma_scalar = 0.9 / M
+        theta_scalar = 1.0
+
+        is_vector = self.cfg.stepsize_type == "vector"
+        if is_vector:
+            tau = jnp.full(K, tau_scalar)
+            sigma = jnp.full(K, sigma_scalar)
+            theta = jnp.full(K, theta_scalar)
+        else:
+            tau = jnp.array(tau_scalar)
+            sigma = jnp.array(sigma_scalar)
+            theta = jnp.array(theta_scalar)
+
+        return (tau, sigma, theta)
+
+    # -----------------------------------------------------------------------
+    # DataFrame formatting
+    # -----------------------------------------------------------------------
+
+    def build_stepsizes_dataframe(
+        self,
+        stepsizes_history: list[Stepsizes],
+        K_max: int,
+        alg: str,
+        training_losses: list[float] | None = None,
+        validation_losses: list[float] | None = None,
+        times: list[float] | None = None,
+    ) -> pd.DataFrame:
+        """Build CSV rows with per-K tau/sigma/theta columns.
+
+        Scalar stepsizes → single tau/sigma/theta columns.
+        Vector stepsizes → tau_k, sigma_k, theta_k for k = 0 .. K_max-1.
+        """
+        tau_sample = stepsizes_history[0][0]
+        is_vector = jnp.ndim(tau_sample) > 0
+
+        data = {'iteration': list(range(len(stepsizes_history)))}
+
+        if training_losses is not None:
+            data['training_loss'] = [float(l) for l in training_losses]
+        if validation_losses is not None:
+            data['validation_loss'] = [float(l) for l in validation_losses]
+        if times is not None:
+            data['iter_time'] = [float(t) for t in times]
+
+        if is_vector:
+            for k in range(K_max):
+                data[f'tau_{k}'] = [float(ss[0][k]) for ss in stepsizes_history]
+                data[f'sigma_{k}'] = [float(ss[1][k]) for ss in stepsizes_history]
+                data[f'theta_{k}'] = [float(ss[2][k]) for ss in stepsizes_history]
+        else:
+            data['tau'] = [float(ss[0]) for ss in stepsizes_history]
+            data['sigma'] = [float(ss[1]) for ss in stepsizes_history]
+            data['theta'] = [float(ss[2]) for ss in stepsizes_history]
+
+        return pd.DataFrame(data)
+
+    # -----------------------------------------------------------------------
+    # Parameter / ground-truth key declarations
+    # -----------------------------------------------------------------------
+
+    def get_batched_parameters(self) -> ParameterNames:
+        return ('c', 'K_mat', 'q', 'x_opt', 'y_opt')
+
+    def get_fixed_parameters(self) -> ParameterNames:
+        return ()
+
+    def get_ground_truth_keys(self) -> ParameterNames:
+        return ('x_opt', 'y_opt')
+
+    def get_gram_dimensions(self, alg: str, K: int) -> Tuple[int, int]:
+        return (4 * K + 11, 2 * (K + 2))
+
+    # -----------------------------------------------------------------------
+    # Batched trajectory computation (vmap)
+    # -----------------------------------------------------------------------
+
+    def compute_batched_trajectories(
+        self,
+        stepsizes: Stepsizes,
+        batched_data: Dict[str, jnp.ndarray],
+        fixed_data: Dict[str, jnp.ndarray],
+        traj_fn: Callable,
+        K_max: int,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """Vmap the trajectory fn over (c, K_mat, q, x_opt, y_opt)."""
+        batch_GF_func = jax.vmap(
+            lambda c, K_mat, q, x_opt, y_opt: traj_fn(
+                stepsizes, c, K_mat, q, x_opt, y_opt, K_max,
+                return_Gram_representation=True,
+            ),
+            in_axes=(0, 0, 0, 0, 0),
+        )
+        return batch_GF_func(
+            batched_data['c'], batched_data['K_mat'], batched_data['q'],
+            batched_data['x_opt'], batched_data['y_opt'],
+        )
+
+    # -----------------------------------------------------------------------
+    # Metric function
+    # -----------------------------------------------------------------------
+
+    def create_metric_fn(
+        self, trajectories: Any, problem_data: ProblemData,
+        ground_truth: GroundTruth, pep_obj: str,
+    ) -> Callable[[int], float]:
+        """Return metric_fn(k) → CP duality gap at iterate k.
+
+        Gap_k = L(v_k, y_s) - L(v_s, y_k)  with L(v, y) = c^T v - y^T K v + q^T y.
+        Only 'obj_val' is supported — other metrics don't have an obvious
+        saddle-problem analog.
+        """
+        if pep_obj != 'obj_val':
+            raise NotImplementedError(
+                f"PDLP only supports pep_obj='obj_val' (duality gap); got {pep_obj!r}"
+            )
+
+        c = problem_data['c']
+        K_mat = problem_data['K_mat']
+        q = problem_data['q']
+        x_opt = ground_truth['x_opt']
+        y_opt = ground_truth['y_opt']
+
+        # trajectories = (v_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter)
+        v_iter = trajectories[0]  # shape (K_max+1, n_vars)
+        y_iter = trajectories[1]  # shape (K_max+1, m1+m2)
+
+        def L(vv, yy):
+            return c @ vv - yy @ K_mat @ vv + q @ yy
+
+        def metric_fn(k):
+            v_k = v_iter[k]
+            y_k = y_iter[k]
+            return L(v_k, y_opt) - L(x_opt, y_k)
+
+        return metric_fn
+
+    # -----------------------------------------------------------------------
+    # Out-of-sample generation
+    # -----------------------------------------------------------------------
+
+    def generate_out_of_sample_data(
+        self, key: jax.Array,
+    ) -> Dict[str, Tuple[ProblemData, GroundTruth]]:
+        """Validation / test sets (in-distribution). OOD uses a different seed."""
+        N_val = int(self.cfg.get('out_of_sample_val_N', 20))
+        N_test = int(self.cfg.get('out_of_sample_test_N', 50))
+        N_ood = int(self.cfg.get('out_of_dist_N', 50))
+
+        key, val_key, test_key, ood_key = jax.random.split(key, 4)
+        val = self.sample_validation_batch(val_key, N_val)
+        test = self.sample_validation_batch(test_key, N_test)
+        # For PDLP, OOD is just a different random seed — same problem class.
+        ood = self.sample_validation_batch(ood_key, N_ood)
+        return {'validation': val, 'test': test, 'ood': ood}
+
+    # -----------------------------------------------------------------------
+    # Algorithm support / validation
+    # -----------------------------------------------------------------------
+
+    def get_supported_algorithms(self) -> list[str]:
+        return ['cp']
+
+    def validate_config(self) -> None:
+        alg = self.cfg.get('alg', 'cp')
+        if alg != 'cp':
+            raise ValueError(
+                f"PDLP supports only alg='cp'; got {alg!r}"
+            )
+
+
+# =============================================================================
+# Entry point
+# =============================================================================
 
 def pdlp_run(cfg):
-    """Run learning experiment for PDLP problems."""
-    raise NotImplementedError("PDLP problem module not yet implemented with UnifiedTrainer")
+    """Run learning experiment for PDLP (Chambolle-Pock on facility-location LP).
+
+    Loops over K_max values, runs training for each K, saves per-K progress CSV.
+    """
+    log.info("=" * 60)
+    log.info("Starting PDLP learning experiment")
+    log.info("=" * 60)
+    log.info(cfg)
+
+    key = jax.random.PRNGKey(cfg.sgd_seed)
+
+    problem_module = PDLPProblemModule(cfg)
+    problem_module.validate_config()
+
+    output_dir = cfg.output_dir
+    os.makedirs(output_dir, exist_ok=True)
+
+    for K in cfg.K_max:
+        log.info(f"=== Starting training for K={K} ===")
+
+        K_output_dir = os.path.join(output_dir, f"K_{K}")
+        os.makedirs(K_output_dir, exist_ok=True)
+        csv_path = os.path.join(K_output_dir, "progress.csv")
+
+        key, train_key = jax.random.split(key)
+        trainer = UnifiedTrainer(problem_module, cfg, train_key)
+        result = trainer.train(K, csv_path, K_output_dir)
+
+        tau0 = result.stepsizes[0]
+        is_vector = jnp.ndim(tau0) > 0
+        tau_str = str(tau0.tolist()) if is_vector else f'{float(tau0):.6f}'
+        log.info(f'K={K} complete. Final tau={tau_str}. Saved to {csv_path}')
+
+    log.info("=== PDLP experiment complete ===")

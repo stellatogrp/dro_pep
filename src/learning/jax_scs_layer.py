@@ -505,8 +505,20 @@ def compute_C_d_matrices(PSD_A_vals, PSD_b_vals, PSD_mat_dims):
         H_vec_dims.append(H_vec)
         PSD_mat_dims_list.append(dim)
 
-        # Use existing SCS helper to get triangle indices (handles ordering correctly)
-        rows, cols = get_scs_lower_tri_indices(dim)
+        # Use NUMPY (not jnp) triu_indices here because `compute_C_d_matrices`
+        # may be called inside an outer jax.jit (e.g. ldro-pep loss). Under jit,
+        # jnp.triu_indices returns traced arrays, which break the Python
+        # `for r, c in zip(...): if r == c:` loop below (needs concrete ints
+        # and Python booleans). Since `dim` is a concrete Python int (the
+        # trainer closes over PSD_shapes as a static tuple), np.triu_indices
+        # yields concrete numpy int arrays — safe for Python control flow AND
+        # for JAX array indexing `PSD_A_vals[m_psd][r, c]` (static indices).
+        # The rest of the function's values stay as JAX traced arrays.
+        # Note: `get_scs_lower_tri_indices` (jnp-based) is left unchanged and
+        # still used by `jax_scs_symm_vectorize`, whose callers pass traced
+        # indices directly into array-indexing ops — those work fine under jit.
+        np_rows_upper, np_cols_upper = np.triu_indices(dim)
+        rows, cols = np_cols_upper, np_rows_upper  # flip to column-major lower (same as get_scs_lower_tri_indices)
 
         curr_C_list = []
         curr_d_list = []

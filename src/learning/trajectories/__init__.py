@@ -26,3 +26,6 @@ from .pdhg import (
     proj_nonneg_first_m1,
     problem_data_to_pdhg_trajectories,
 )
+from .cp_lp import (
+    problem_data_to_cp_lp_trajectories,
+)
