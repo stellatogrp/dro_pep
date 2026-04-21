@@ -10,22 +10,60 @@ import jax.numpy as jnp
 from functools import partial
 
 from .interpolation_conditions import convex_interp
+from .loss_compositions import compose_objective
+
+
+def _create_cp_gap_obj_builder(repX_f1, repY_h, repF_f1, repF_h,
+                               idx_xs, idx_ys,
+                               gf1_s_vec, gh_s_vec,
+                               dimG, dimF1, dimF_h, eyeG):
+    """Build obj_builder(k) encoding the duality gap at iterate k.
+
+    Gap_k = f1(x_k) + h(y_k) + <K x_k, y_s> - <K x_s, y_k>
+          = F_f1[k] + F_h[k] + <x_k, -gf1_s> - <y_k, gh_s>
+    using the saddle-stationarity identities gf1_s = -K^T y_s, gh_s = K x_s
+    (enforced as structural operator-pair constraints in the SDP).
+
+    x_k, y_k are used in ORIGINAL (unshifted) coords — repX_f1 stores
+    (x_k - x_s), so we add eyeG[idx_xs] to recover x_k. Same for y_k.
+    """
+    neg_gf1_s = -gf1_s_vec
+
+    def obj_builder(k):
+        x_k = repX_f1[k] + eyeG[idx_xs]
+        y_k = repY_h[k] + eyeG[idx_ys]
+
+        A1 = 0.5 * (jnp.outer(x_k, neg_gf1_s) + jnp.outer(neg_gf1_s, x_k))
+        A2 = -0.5 * (jnp.outer(gh_s_vec, y_k) + jnp.outer(y_k, gh_s_vec))
+        A_k = A1 + A2
+
+        b_k = jnp.concatenate([repF_f1[k], repF_h[k]])
+
+        return A_k, b_k
+
+    return obj_builder
 
 
 @partial(jax.jit, static_argnames=['K_max', 'composition_type'])
 def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
-                                       composition_type='final'):
+                                       composition_type='final',
+                                       decay_rate=0.9):
     """
     Construct PEP for Chambolle-Pock with P-norm (Lyapunov) Initial Condition.
 
-    Note: Only 'final' composition is currently supported for Chambolle-Pock
-    due to the complex cross-terms in the gap objective.
+    Supports two composition types for the duality-gap performance metric:
+      - 'final':    Gap at the last iterate K_max (single-term objective).
+      - 'weighted': Normalized decay-weighted sum sum_{k=1}^{K_max} w_k * Gap_k
+                    with w_k = decay_rate^(K_max - k) (k=0 is skipped — both
+                    iterate-0 subgradients gf1_0, gh_0 are free and would
+                    unbound the objective; see loss_compositions.py).
 
     Fixes applied:
     1. P-norm Initial Condition: Added explicit basis vector for K(dx0) to handle
        the cross-term -2<K(x0-xs), y0-ys> correctly.
     2. Adjoint Consistency: Enforces <Ku, p> = <u, K.T p> for ALL operator pairs.
-    3. Solution Bound: Constraints ||x*||^2 + ||y*||^2 <= B^2 to prevent unboundedness.
+    3. Saddle stationarity: gf1_s = -K^T y_s and gh_s = K x_s enforced via
+       operator pairs (x_s, gh_s) in pairs_K and (y_s, -gf1_s) in pairs_Kt.
     4. Objective Construction: Uses stationarity substitutions <K xK, y*> = <xK, -df(x*)>.
 
     Args:
@@ -35,16 +73,12 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
         M: Operator norm bound (||K|| <= M)
         R: Initial radius bound for P-norm
         K_max: Number of iterations
-        composition_type: 'final' only (weighted not yet implemented)
+        composition_type: 'final' or 'weighted'
+        decay_rate: Decay for weighted composition (w_k = decay_rate^(K_max - k))
 
     Returns:
         pep_data tuple
     """
-    if composition_type != 'final':
-        raise NotImplementedError(
-            f"Chambolle-Pock composition_type='{composition_type}' not yet implemented. "
-            "Only 'final' is currently supported due to complex cross-terms in gap objective."
-        )
 
     # 1. Setup Parameters
     tau_vec = jnp.broadcast_to(tau, (K_max,))
@@ -284,28 +318,21 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
     b_vals = jnp.concatenate([b_vals, b_init[None]], axis=0)
     c_vals = jnp.concatenate([c_vals, jnp.array([c_init])], axis=0)
 
-    # 10. Objective: Gap (final iterate only)
-    # Gap = f(xK) + h(yK) + <K xK, ys> - <K xs, yK>
-    vec_ys = eyeG[idx_ys]
-    vec_yK = y_curr  # Use full y_K position, not y_K - y*
-
-    # Subst: <K xK, ys> = <xK, -grad_f(xs)>
-    vec_neg_gf1_s = -gf1_vec(idx_saddle)
-
-    # Subst: - <K xs, yK> = - <grad_h(ys), yK>
-    vec_gh_s = gh_vec(idx_saddle)
-
-    A_cross1 = 0.5 * (jnp.outer(x_curr, vec_neg_gf1_s) + jnp.outer(vec_neg_gf1_s, x_curr))
-    A_cross2 = -0.5 * (jnp.outer(vec_gh_s, vec_yK) + jnp.outer(vec_yK, vec_gh_s))
-
-    A_obj = A_cross1 + A_cross2
-
-    idx_f1_K = K_max
-    idx_h_K  = K_max
-
-    b_obj = jnp.zeros(dimF)
-    b_obj = b_obj.at[idx_f1_K].set(1.0)
-    b_obj = b_obj.at[dimF1 + idx_h_K].set(1.0)
+    # 10. Objective: duality gap, dispatched by composition_type.
+    # At iterate k: Gap_k = f1(x_k) + h(y_k) + <K x_k, y_s> - <K x_s, y_k>.
+    # Using saddle stationarity -K^T y_s = gf1_s and K x_s = gh_s (enforced
+    # via operator pairs in Section 6), the cross-terms simplify to
+    #     <K x_k, y_s> = <x_k, -gf1_s>    and    -<K x_s, y_k> = -<y_k, gh_s>,
+    # which avoids needing K@x_k basis slots for intermediate k.
+    obj_builder = _create_cp_gap_obj_builder(
+        repX_f1, repY_h, repF_f1, repF_h,
+        idx_xs, idx_ys,
+        gf1_vec(idx_saddle), gh_vec(idx_saddle),
+        dimG, dimF1, dimF_h, eyeG,
+    )
+    A_obj, b_obj = compose_objective(
+        obj_builder, K_max, composition_type, decay_rate,
+    )
 
     return (A_obj, b_obj, A_vals, b_vals, c_vals,
             PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)

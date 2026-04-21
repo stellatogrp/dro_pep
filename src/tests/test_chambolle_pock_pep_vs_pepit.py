@@ -26,10 +26,12 @@ from tests.test_chambolle_pock_interpolation import (
 )
 
 
-def solve_cp_pep_sdp(tau, sigma, theta, M, R, K_max, verbose=False):
+def solve_cp_pep_sdp(tau, sigma, theta, M, R, K_max, verbose=False,
+                     composition_type='final', decay_rate=0.9):
     """Assemble and solve our PEP SDP with CLARABEL. Return (value, status)."""
     pep_data = construct_chambolle_pock_pep_data(
         tau=tau, sigma=sigma, theta=theta, M=M, R=R, K_max=K_max,
+        composition_type=composition_type, decay_rate=decay_rate,
     )
     (A_obj, b_obj, A_vals, b_vals, c_vals,
      PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes) = pep_data
