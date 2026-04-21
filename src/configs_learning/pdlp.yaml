@@ -47,8 +47,8 @@ decay_rate: 0.9
 # ----------------------------------------------------------------------------
 N: 20                                   # minibatch size
 training_sample_N: 20                   # total pre-sampled training instances
-precond_sample_size: 100                # M_val / R_val estimation pool
-precond_sample_seed: 20260421
+mr_estimation_size: 100                 # pool size for estimating M_val and R_val
+mr_estimation_seed: 20260421
 
 out_of_sample_val_N: 10
 out_of_sample_val_seed: 10000

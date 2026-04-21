@@ -6,9 +6,8 @@ lambd: 0.4
 R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
 
 # Sample sizes
-N: 5                # Batch size for SGD training
-training_sample_N: 10  # Number of training samples (pre-sampled for sliding window)
-precond_sample_size: 5
+N: 10                # Batch size for SGD training
+training_sample_N: 200  # Number of training samples (pre-sampled for sliding window)
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
 # Random seeds

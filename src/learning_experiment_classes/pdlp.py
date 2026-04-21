@@ -352,13 +352,13 @@ class PDLPProblemModule(ProblemModule):
         log.info("Created FacilityLocationDPP solver for batched LP solves")
 
         # Pre-sample a pool to compute M_val = max ||K_mat||_op and R_val.
-        precond_N = int(cfg.get('precond_sample_size', 100))
-        precond_seed = int(cfg.get('precond_sample_seed', 20260421))
-        log.info(f"Pre-sampling {precond_N} instances to estimate M_val and R_val...")
-        precond_key = jax.random.PRNGKey(precond_seed)
+        mr_N = int(cfg.get('mr_estimation_size', 100))
+        mr_seed = int(cfg.get('mr_estimation_seed', 20260421))
+        log.info(f"Pre-sampling {mr_N} instances to estimate M_val and R_val...")
+        mr_key = jax.random.PRNGKey(mr_seed)
         pool_problem_data, pool_ground_truth = _sample_facility_batch_and_solve(
-            precond_key, cfg,
-            self.n_facilities, self.n_customers, precond_N, self.dpp_solver,
+            mr_key, cfg,
+            self.n_facilities, self.n_customers, mr_N, self.dpp_solver,
         )
 
         # M_val: upper bound on operator norm across ALL future samples.
@@ -369,7 +369,7 @@ class PDLPProblemModule(ProblemModule):
         # that sample, which makes the DRO SDP unbounded.
         K_mat_pool = np.asarray(pool_problem_data['K_mat_batch'])
         pool_op_norms = np.array([
-            np.linalg.norm(K_mat_pool[i], ord=2) for i in range(precond_N)
+            np.linalg.norm(K_mat_pool[i], ord=2) for i in range(mr_N)
         ])
         m_safety = float(cfg.get('m_safety_factor', 1.3))
         self.M_val = float(pool_op_norms.max() * m_safety)
@@ -390,8 +390,8 @@ class PDLPProblemModule(ProblemModule):
         x0_ref = 0.5 * np.ones(self.n_vars)
         y0_ref = np.concatenate([0.1 * np.ones(self.m1), np.zeros(self.m2)])
 
-        pool_euc_sq = np.zeros(precond_N)
-        for i in range(precond_N):
+        pool_euc_sq = np.zeros(mr_N)
+        for i in range(mr_N):
             dx_i = x0_ref - x_opt_pool[i]
             dy_i = y0_ref - y_opt_pool[i]
             pool_euc_sq[i] = dx_i @ dx_i + dy_i @ dy_i

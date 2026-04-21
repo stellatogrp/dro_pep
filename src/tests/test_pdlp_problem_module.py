@@ -51,7 +51,7 @@ def _load_pdlp_cfg(**overrides):
 def test_pdlp_module_instantiates():
     cfg = _load_pdlp_cfg(
         n_facilities=2, n_customers=3,
-        precond_sample_size=5,
+        mr_estimation_size=5,
     )
     module = PDLPProblemModule(cfg)
     assert module.n_vars == 2 + 2 * 3
@@ -70,7 +70,7 @@ def test_pdlp_module_instantiates():
 def test_pdlp_sample_training_batch_shapes():
     cfg = _load_pdlp_cfg(
         n_facilities=2, n_customers=3,
-        precond_sample_size=5,
+        mr_estimation_size=5,
     )
     module = PDLPProblemModule(cfg)
 
@@ -100,7 +100,7 @@ def test_pdlp_batched_trajectory_satisfies_pep(K_max):
     """Every sample's (G_i, F_i) satisfies every CP PEP scalar + PSD constraint."""
     cfg = _load_pdlp_cfg(
         n_facilities=2, n_customers=3,
-        precond_sample_size=5,
+        mr_estimation_size=5,
         K_max=[K_max],
     )
     module = PDLPProblemModule(cfg)
@@ -170,7 +170,7 @@ def test_pdlp_batched_trajectory_satisfies_pep(K_max):
 def test_pdlp_metric_fn_duality_gap():
     cfg = _load_pdlp_cfg(
         n_facilities=2, n_customers=3,
-        precond_sample_size=5,
+        mr_estimation_size=5,
     )
     module = PDLPProblemModule(cfg)
 

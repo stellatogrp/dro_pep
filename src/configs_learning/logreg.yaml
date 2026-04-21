@@ -16,7 +16,6 @@ eps_std: 0.1            # Standard deviation for label noise
 N: 20                   # Batch size for SGD training
 L_sample_size: 1000     # Number of A samples for worst-case L computation
 R_sample_size: 100      # Number of (A, b) samples for R computation
-precond_sample_size: 100  # Number of samples for preconditioner
 
 # Random seeds
 seed: 50                # SGD randomness
