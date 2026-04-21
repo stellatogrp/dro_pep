@@ -160,7 +160,7 @@ class UnifiedTrainer:
                 - L2O/LDRO-PEP: loss_fn(stepsizes, minibatch_idx) -> scalar
         """
         if self.learning_framework == 'lpep':
-            return self._build_lpep_loss(K, L, mu, R)
+            return self._build_lpep_loss(K, L, mu, R, initial_stepsizes)
         elif self.learning_framework == 'l2o':
             return self._build_l2o_loss(K)
         elif self.learning_framework == 'ldro-pep':
@@ -168,30 +168,53 @@ class UnifiedTrainer:
         else:
             raise ValueError(f"Unknown learning_framework: {self.learning_framework}")
 
-    def _build_lpep_loss(self, K: int, L: float, mu: float, R: float) -> Callable:
+    def _build_lpep_loss(self, K: int, L: float, mu: float, R: float,
+                         initial_stepsizes: Stepsizes) -> Callable:
         """Construct deterministic PEP loss (no samples).
 
         Uses wc_pep_scs_solve for worst-case performance estimation.
 
+        For PEP constructions that produce PSD blocks (CP / PDLP), those
+        blocks are forwarded so the SDP is structurally complete. PSD
+        dimensions are precomputed once outside jit (same static-closure
+        pattern used in LDRO-PEP) so `compute_C_d_matrices` sees concrete
+        Python ints under nested jit.
+
         Args:
             K: Number of algorithm iterations.
             L, mu, R: Problem parameters.
+            initial_stepsizes: Used to probe pep_data_fn once at build time
+                to capture the static PSD block dimensions.
 
         Returns:
             Loss function: stepsizes -> scalar
         """
         pep_data_fn = self.problem_module.get_pep_data_fn(self.alg)
 
+        _init_pep_data = pep_data_fn(
+            initial_stepsizes, mu, L, R, K, self.pep_obj,
+            composition_type=self.training_loss_type_composition,
+            decay_rate=self.decay_rate,
+        )
+        psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
+
         def lpep_loss(stepsizes):
             """Compute worst-case PEP objective."""
-            # Construct PEP constraint matrices
-            pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
-                                   composition_type=self.training_loss_type_composition,
-                                   decay_rate=self.decay_rate)
-            A_obj, b_obj, A_vals, b_vals, c_vals = pep_data[:5]
+            pep_data = pep_data_fn(
+                stepsizes, mu, L, R, K, self.pep_obj,
+                composition_type=self.training_loss_type_composition,
+                decay_rate=self.decay_rate,
+            )
+            (A_obj, b_obj, A_vals, b_vals, c_vals,
+             PSD_A_vals, PSD_b_vals, PSD_c_vals, _) = pep_data
 
-            # Solve worst-case PEP SDP
-            return wc_pep_scs_solve(A_obj, b_obj, A_vals, b_vals, c_vals)
+            return wc_pep_scs_solve(
+                A_obj, b_obj, A_vals, b_vals, c_vals,
+                PSD_A_vals=PSD_A_vals,
+                PSD_b_vals=PSD_b_vals,
+                PSD_c_vals=PSD_c_vals,
+                PSD_mat_dims=psd_mat_dims_static,
+            )
 
         return jax.jit(lpep_loss)
 

@@ -1053,103 +1053,112 @@ def jax_scs_canonicalize_dro_cvar(
 def jax_scs_canonicalize_wc_pep(
     # PEP data
     A_obj, b_obj, A_vals, b_vals, c_vals,
+    # PSD block data (optional)
+    PSD_A_vals=None, PSD_b_vals=None, PSD_mat_dims=None,
+    C_symvecs=None, d_vecs=None, H_vec_dims=None,
 ):
     """
     Pure JAX canonicalization of Worst-Case PEP to SCS form.
-    
-    Minimizes -c^T y subject to:
+
+    Without PSD blocks, minimizes -c^T y subject to:
       1. -B^T y = -b_obj  (Equality / Zero Cone)
       2. y >= 0           (Non-negative Cone)
-      3. A^* y >= A_obj   (PSD Cone, based on logic from DRO code)
-    
-    Args:
-        A_obj: (S_mat, S_mat) - Constant matrix for PSD constraint
-        b_obj: (V,) - Constant vector for equality constraint
-        A_vals: (M, S_mat, S_mat) - Tensor of matrices multiplying y
-        b_vals: (V, M) - Matrix multiplying y in equality constraint
-        c_vals: (M,) - Objective coefficients for y
-        
-    Returns:
-        A_dense: Dense constraint matrix (total_rows, x_dim)
-        b: RHS vector
-        c: Objective vector
-        x_dim: Dimension of decision variable (M)
-        cone_info: Dict with cone dimensions for SCS
+      3. A^* y >= A_obj   (PSD Cone)
+
+    With PSD blocks (e.g., CP operator-norm constraints), adds a per-block
+    auxiliary matrix H_m (vectorized length H_vec_m) that couples into the
+    equality and main PSD constraints, plus H_m >> 0:
+      1'. -B^T y + sum_m d_vecs[m] @ H[m] = -b_obj
+      3'. -A^* y + sum_m C_symvecs[m] @ H[m] + s = -A_obj,   s >> 0 (main PSD)
+      4.  -scaledI_H[m] @ H[m] + s_H[m] = 0, s_H[m] >> 0 (H PSD cones)
+
+    Backward compatibility: PSD_A_vals=None bypasses all H-related code,
+    producing the same A/b/c/cone_info as the pre-PSD implementation.
     """
     # Get dimensions
     M = A_vals.shape[0]        # Dimension of variable y
-    S_mat = A_obj.shape[0]     # Size of PSD matrix (rows/cols)
+    S_mat = A_obj.shape[0]     # Size of main PSD matrix
     V = b_obj.shape[0]         # Number of equality constraints
     S_vec = S_mat * (S_mat + 1) // 2
-    
-    # Decision variable dimension (only y)
-    x_dim = M
-    
-    # 1. Build objective vector c (minimize -c_vals^T y)
-    c_out = -c_vals
-    
-    # 2. Precompute symmetric vectorizations using SCS format
-    # Corresponds to RHS of PSD constraint
-    A_obj_svec = jax_scs_symm_vectorize(A_obj, jnp.sqrt(2.0)) # (S_vec,)
-    
-    # Corresponds to LHS coefficients of y in PSD constraint
-    # Vectorize each M matrix in A_vals
-    A_vals_svec = jax.vmap(lambda A: jax_scs_symm_vectorize(A, jnp.sqrt(2.0)))(A_vals) # (M, S_vec)
-    
-    # =========================================================================
-    # Build constraint blocks
-    # SCS form: Ax + s = b, s in Cone
-    # =========================================================================
-    
-    # 1. Equality constraints (Zero Cone): -B^T y = -b_obj
-    # Corresponds to: (-B^T) @ y + 0 = -b_obj
-    Bm_T = b_vals.T  # (M, V) -> Transpose -> (V, M)
-    eq_rows = -Bm_T
+
+    # Handle PSD constraint dimensions
+    if PSD_A_vals is None or C_symvecs is None:
+        M_psd = 0
+        H_vec_dims_local = []
+        H_vec_sum = 0
+        PSD_mat_dims_local = []
+    else:
+        M_psd = len(C_symvecs)
+        H_vec_dims_local = list(H_vec_dims) if H_vec_dims is not None \
+            else [int(C_symvecs[m].shape[1]) for m in range(M_psd)]
+        H_vec_sum = sum(H_vec_dims_local)
+        PSD_mat_dims_local = list(PSD_mat_dims) if PSD_mat_dims is not None else []
+
+    # Decision variable: x = [y (M), H_1 (H_vec_1), ..., H_M_psd (H_vec_M_psd)]
+    x_dim = M + H_vec_sum
+    H_start = M
+    H_rel_offsets = [0]
+    for m in range(M_psd):
+        H_rel_offsets.append(H_rel_offsets[-1] + H_vec_dims_local[m])
+
+    def H_idx(m_psd, j):
+        return H_start + H_rel_offsets[m_psd] + j
+
+    # Objective: minimize -c_vals^T y (H components have zero coefficient)
+    c_out = jnp.zeros(x_dim).at[:M].set(-c_vals)
+
+    # Precompute SCS-format symmetric vectorizations
+    A_obj_svec = jax_scs_symm_vectorize(A_obj, jnp.sqrt(2.0))                              # (S_vec,)
+    A_vals_svec = jax.vmap(lambda A: jax_scs_symm_vectorize(A, jnp.sqrt(2.0)))(A_vals)     # (M, S_vec)
+
+    # 1. Zero cone (V rows): -B^T y + sum_m d_vecs[m] @ H[m] = -b_obj
+    Bm_T = b_vals.T  # (V, M)
+    eq_rows = jnp.zeros((V, x_dim)).at[:, :M].set(-Bm_T)
+    for m in range(M_psd):
+        h0, h1 = H_idx(m, 0), H_idx(m, H_vec_dims_local[m])
+        eq_rows = eq_rows.at[:, h0:h1].set(d_vecs[m])
     eq_b = -b_obj
-    
-    # 2. Non-negative constraints (Linear Cone): y >= 0
-    # Corresponds to: (-I) @ y + s = 0 => s = y. s >= 0 -> y >= 0.
-    nonneg_rows = -jnp.eye(M)
+
+    # 2. Non-negative cone (M rows): y >= 0
+    nonneg_rows = jnp.zeros((M, x_dim)).at[:, :M].set(-jnp.eye(M))
     nonneg_b = jnp.zeros(M)
-    
-    # 3. PSD constraints (PSD Cone): -A^* y + s = -A_obj
-    # Corresponds to: s = A^* y - A_obj. s in PSD => A^* y >= A_obj
-    # Coefficients for y are -A_vals_svec^T
-    Am_T = A_vals_svec.T # (S_vec, M)
-    psd_rows = -Am_T
+
+    # 3. Main PSD cone (S_vec rows): -A^* y + sum_m C_symvecs[m] @ H[m] + s = -A_obj
+    Am_T = A_vals_svec.T  # (S_vec, M)
+    psd_rows = jnp.zeros((S_vec, x_dim)).at[:, :M].set(-Am_T)
+    for m in range(M_psd):
+        h0, h1 = H_idx(m, 0), H_idx(m, H_vec_dims_local[m])
+        psd_rows = psd_rows.at[:, h0:h1].set(C_symvecs[m])
     psd_b = -A_obj_svec
-    
-    # =========================================================================
-    # Combine all blocks
-    # SCS cone ordering: zero (z), nonneg (l), SOC (q), PSD (s)
-    # =========================================================================
-    
-    A_dense = jnp.vstack([
-        eq_rows,      # V rows
-        nonneg_rows,  # M rows
-        psd_rows      # S_vec rows
-    ])
-    
-    b = jnp.concatenate([
-        eq_b,
-        nonneg_b,
-        psd_b
-    ])
-    
-    # Cone info for SCS
+
+    # 4. H PSD cones (H_vec_m rows each): -scaledI_H @ H[m] + s = 0, s >> 0
+    H_psd_rows_list = []
+    for m in range(M_psd):
+        H_vec = H_vec_dims_local[m]
+        H_mat = int((-1 + math.sqrt(1 + 8 * H_vec)) / 2)
+        scaledI_H = jax_scs_scaled_off_triangles(jnp.ones((H_mat, H_mat)), jnp.sqrt(2.0))
+        block = jnp.zeros((H_vec, x_dim))
+        h0, h1 = H_idx(m, 0), H_idx(m, H_vec)
+        block = block.at[:, h0:h1].set(-scaledI_H)
+        H_psd_rows_list.append(block)
+    H_psd_rows = jnp.vstack(H_psd_rows_list) if H_psd_rows_list else jnp.zeros((0, x_dim))
+    H_psd_b = jnp.zeros(H_vec_sum)
+
+    # Combine: SCS cone ordering z -> l -> s (no SOC in WC-PEP)
+    A_dense = jnp.vstack([eq_rows, nonneg_rows, psd_rows, H_psd_rows])
+    b = jnp.concatenate([eq_b, nonneg_b, psd_b, H_psd_b])
+
     cone_info = {
-        'z': V,           # Equality constraints
-        'l': M,           # Non-negative y
-        'q': [],          # No SOC constraints
-        's': [S_mat],     # Single PSD cone of size S_mat
-        
-        # Metadata for convenience
+        'z': V,
+        'l': M,
+        'q': [],
+        's': [S_mat] + PSD_mat_dims_local,
         'M': M,
         'V': V,
         'S_mat': S_mat,
         'S_vec': S_vec,
     }
-    
+
     return A_dense, b, c_out, x_dim, cone_info
 
 
@@ -1347,52 +1356,77 @@ def dro_cvar_scs_solve(
 def wc_pep_scs_solve(
     # PEP data
     A_obj, b_obj, A_vals, b_vals, c_vals,
+    # PSD block data (optional; required for CP/PDLP PEPs)
+    PSD_A_vals=None,
+    PSD_b_vals=None,
+    PSD_c_vals=None,
+    PSD_mat_dims=None,
 ):
     """
     Full differentiable WC-PEP solve using SCS + diffcp.
-    
+
     Args:
-        A_obj, b_obj, A_vals, b_vals, c_vals: PEP constraint data
-    
+        A_obj, b_obj, A_vals, b_vals, c_vals: PEP scalar constraint data
+        PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_mat_dims: PSD block data
+            (per-block coefficient tensors). When None or empty, behaves
+            identically to the pre-PSD implementation — Quad / Lasso /
+            LogReg / Huber / ISTA / FISTA all have empty PSD lists and
+            take the fast path.
+
     Returns:
         obj_val: Optimal WC-PEP objective value (scalar, differentiable)
     """
-    # Compute static dimensions from input shapes (not traced)
-    M = A_vals.shape[0]      # Dimension of y
-    S_mat = A_obj.shape[0]   # PSD matrix size
-    V = b_obj.shape[0]       # Number of equality constraints
-    
-    # Cone info computed from static dimensions
-    # Structure: 
-    #   z: Equality (-B^T y = -b)
-    #   l: Nonnegative (y >= 0)
-    #   q: SOC (None for WC-PEP)
-    #   s: PSD (A^* y >= A_obj)
+    # Static dimensions
+    M = A_vals.shape[0]
+    S_mat = A_obj.shape[0]
+    V = b_obj.shape[0]
+
+    # Handle PSD constraint dimensions
+    if PSD_A_vals is not None and len(PSD_A_vals) > 0:
+        M_psd = len(PSD_A_vals)
+        log.info(f"[WC PEP] PSD constraints present: M_psd={M_psd}")
+        for m in range(M_psd):
+            log.info(f"  PSD[{m}]: shape={PSD_A_vals[m].shape}, mat_dim={PSD_mat_dims[m]}")
+        C_symvecs, d_vecs, H_vec_dims, PSD_mat_dims_list = compute_C_d_matrices(
+            PSD_A_vals, PSD_b_vals, PSD_mat_dims
+        )
+        H_vec_sum = sum(H_vec_dims)
+    else:
+        M_psd = 0
+        H_vec_sum = 0
+        H_vec_dims = []
+        PSD_mat_dims_list = []
+        C_symvecs = None
+        d_vecs = None
+        log.info("[WC PEP] No PSD constraints")
+
+    # Cone structure: z -> l -> s = [S_mat] + H block sizes
     cone_info = {
         'z': V,
         'l': M,
-        'q': [],          # No SOC constraints in standard WC-PEP
-        's': [S_mat],     # Single PSD cone
+        'q': [],
+        's': [S_mat] + PSD_mat_dims_list,
     }
-    
-    # Calculate A shape from cone dimensions
-    # m = z + l + sum(q) + sum(s_vec)
-    m = cone_info['z'] + cone_info['l'] + sum(cone_info['q']) + sum([s*(s+1)//2 for s in cone_info['s']])
-    x_dim = M
-    A_shape = (m, x_dim)
-    
-    # Create static data for cones BEFORE canonicalization
+
+    m_rows = cone_info['z'] + cone_info['l'] + sum([s * (s + 1) // 2 for s in cone_info['s']])
+    x_dim = M + H_vec_sum
+    A_shape = (m_rows, x_dim)
+
+    log.info(f"[WC PEP] Cone structure: z={cone_info['z']}, l={cone_info['l']}, "
+             f"s={cone_info['s']}")
+    log.info(f"[WC PEP] Problem size: A.shape={A_shape}, x_dim={x_dim}")
+
     static_data = SCSSolveData(cone_info, A_shape)
-    
-    # Canonicalize to SCS form (this can be traced)
-    # Uses the function defined in the previous step
+
+    PSD_mat_dims_to_pass = PSD_mat_dims_list if M_psd else None
     A_dense, b, c, _, _ = jax_scs_canonicalize_wc_pep(
-        A_obj, b_obj, A_vals, b_vals, c_vals
+        A_obj, b_obj, A_vals, b_vals, c_vals,
+        PSD_A_vals, PSD_b_vals, PSD_mat_dims_to_pass,
+        C_symvecs, d_vecs, H_vec_dims,
     )
-    
-    # Solve with custom VJP
+
     obj_val = scs_solve_wrapper(static_data, A_dense, b, c)
-    
+
     return obj_val
 
 
