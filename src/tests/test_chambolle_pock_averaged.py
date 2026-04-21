@@ -36,11 +36,8 @@ def wc_chambolle_pock_averaged_iterate(tau, sigma, theta, n, L_M=1., verbose=1):
     x0 = problem.set_initial_point()
     u0 = problem.set_initial_point()
     
-    # Constrain initial distance to the saddle point
-    # We use the standard Euclidean norm for simplicity, though PDHG 
-    # is naturally contractive in the norm ||z||_M where M depends on tau/sigma.
-    initial_term = (x0 - xs)**2 / tau + (u0 - us)**2 / sigma - 2 * (u0 - us) * M.gradient(x0 - xs)
-    problem.set_initial_condition(initial_term  <= 1)
+    # Constrain initial distance to the saddle point (Euclidean ball).
+    problem.set_initial_condition((x0 - xs)**2 + (u0 - us)**2 <= 1)
 
     # 4. Run the Algorithm (No Averaging)
     x = x0

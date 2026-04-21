@@ -9,8 +9,13 @@ our custom construction, and (b) downstream tests comparing
 Formulation: min_x max_u  f1(x) + <K x, u> - h(u)
 Saddle conditions: -K^T u_s ∈ ∂f1(x_s), K x_s ∈ ∂h(u_s)
 Metric: duality gap at the LAST iterate (not averaged).
-Initial condition: P-norm Lyapunov
-    (x0 - xs)^2 / tau + (u0 - us)^2 / sigma - 2 (u0 - us) K(x0 - xs) <= 1
+Initial condition: Euclidean ball
+    (x0 - xs)^2 + (u0 - us)^2 <= 1
+
+(The prior form was the P-norm Lyapunov IC
+    (x0-xs)^2/tau + (u0-us)^2/sigma - 2(u0-us)K(x0-xs) <= 1;
+ it was dropped after the PEPit probe in test_cp_ic_boundedness_probe.py
+ verified this weaker Euclidean IC keeps the CP PEP bounded.)
 """
 
 import pytest
@@ -40,10 +45,7 @@ def _wc_cp_last_iterate_linop(tau, sigma, theta, n, L_M=1.0, verbose=0):
 
     x0 = problem.set_initial_point()
     u0 = problem.set_initial_point()
-    initial_term = ((x0 - xs) ** 2 / tau
-                    + (u0 - us) ** 2 / sigma
-                    - 2 * (u0 - us) * K.gradient(x0 - xs))
-    problem.set_initial_condition(initial_term <= 1)
+    problem.set_initial_condition((x0 - xs) ** 2 + (u0 - us) ** 2 <= 1)
 
     x, u = x0, u0
     for _ in range(n):
@@ -158,10 +160,7 @@ def _wc_cp_weighted_linop(tau, sigma, theta, K, L_M=1.0,
 
     x0 = problem.set_initial_point()
     u0 = problem.set_initial_point()
-    initial_term = ((x0 - xs) ** 2 / tau
-                    + (u0 - us) ** 2 / sigma
-                    - 2 * (u0 - us) * K_op.gradient(x0 - xs))
-    problem.set_initial_condition(initial_term <= 1)
+    problem.set_initial_condition((x0 - xs) ** 2 + (u0 - us) ** 2 <= 1)
 
     iterates_x = [x0]
     iterates_u = [u0]

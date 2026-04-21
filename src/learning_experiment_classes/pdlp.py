@@ -379,40 +379,28 @@ class PDLPProblemModule(ProblemModule):
             f"min = {pool_op_norms.min():.6f}, safety = {m_safety})"
         )
 
-        # R_val: Lyapunov (P-norm) radius such that all sample trajectories fit
-        # inside the PEP's IC ball `P-norm^2 <= R^2`. The IC uses the P-norm
-        #     ||dx||^2 / tau + ||dy||^2 / sigma - 2 <K dx, dy>
-        # which with tau = sigma = O(1/M) is typically much larger than the
-        # plain Euclidean norm. Using Euclidean here produces samples OUTSIDE
-        # the PEP feasible set, which makes the DRO SDP unbounded even though
-        # the pure PEP is bounded.
-        #
-        # Compute the P-norm for each pool sample using the INITIAL stepsizes
-        # (tau0 = sigma0 = 0.9 / M_val), then scale up by `r_safety` to cover
-        # stepsize drift during training.
+        # R_val: Euclidean radius such that all sample trajectories fit inside
+        # the PEP's IC ball `||dx||^2 + ||du||^2 <= R^2`. The IC is stepsize-
+        # and K-independent (verified bounded via the PEPit probe in
+        # tests/test_cp_ic_boundedness_probe.py), so this computation runs
+        # once at setup and never needs updating when stepsizes move during
+        # LDRO-PEP training.
         x_opt_pool = np.asarray(pool_ground_truth['x_opt_batch'])
         y_opt_pool = np.asarray(pool_ground_truth['y_opt_batch'])
         x0_ref = 0.5 * np.ones(self.n_vars)
         y0_ref = np.concatenate([0.1 * np.ones(self.m1), np.zeros(self.m2)])
 
-        tau0 = 0.9 / self.M_val
-        sigma0 = 0.9 / self.M_val
-        pool_pnorm_sq = np.zeros(precond_N)
+        pool_euc_sq = np.zeros(precond_N)
         for i in range(precond_N):
             dx_i = x0_ref - x_opt_pool[i]
             dy_i = y0_ref - y_opt_pool[i]
-            K_i = K_mat_pool[i]
-            pool_pnorm_sq[i] = (
-                dx_i @ dx_i / tau0
-                + dy_i @ dy_i / sigma0
-                - 2.0 * (dy_i @ (K_i @ dx_i))
-            )
-        r_safety = float(cfg.get('r_safety_factor', 2.0))
-        max_pnorm_sq = float(np.max(pool_pnorm_sq))
-        self.R_val = float(np.sqrt(max_pnorm_sq) * r_safety)
+            pool_euc_sq[i] = dx_i @ dx_i + dy_i @ dy_i
+        r_safety = float(cfg.get('r_safety_factor', 1.2))
+        max_euc_sq = float(np.max(pool_euc_sq))
+        self.R_val = float(np.sqrt(max_euc_sq) * r_safety)
         log.info(
             f"R_val = {self.R_val:.6f}  "
-            f"(max pool P-norm^2 = {max_pnorm_sq:.4f}, sqrt × safety {r_safety})"
+            f"(max pool Euclidean^2 = {max_euc_sq:.4f}, sqrt × safety {r_safety})"
         )
 
     # -----------------------------------------------------------------------

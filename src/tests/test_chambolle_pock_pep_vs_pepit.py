@@ -98,16 +98,14 @@ def test_pep_matches_pepit(K_max):
 def test_lp_trajectory_gap_bounded_by_pep(K_max, seed):
     """A concrete LP CP trajectory's gap at iterate K must be <= PEP worst case.
 
-    Requires the LP trajectory to satisfy the IC (P-norm <= R^2). We scale the
-    trajectory's initial point to sit inside the unit P-norm ball.
+    Requires the LP trajectory to satisfy the IC (Euclidean: ||dx||^2 + ||dy||^2 <= R^2).
+    We scale the trajectory's initial point to sit inside the unit Euclidean ball.
     """
     m, n = 3, 5
     A, b, c, x_feas = generate_lp(m=m, n=n, seed=seed)
     xs, ys = solve_lp(A, b, c)
 
-    # Initial point chosen to SATISFY the IC (P-norm <= 1) so comparison is fair.
-    # IC: (x0-xs)^2/tau + (y0-ys)^2/sigma - 2(y0-ys)^T (-A)(x0-xs) <= 1
-    # Simplest: pick small deviation from saddle, then compute its P-norm and rescale.
+    # Initial point chosen to SATISFY the IC (||dx||^2 + ||dy||^2 <= 1) so comparison is fair.
     rng = np.random.default_rng(seed + 100)
     dx = rng.standard_normal(n) * 0.1
     dy = rng.standard_normal(m) * 0.1
@@ -116,11 +114,10 @@ def test_lp_trajectory_gap_bounded_by_pep(K_max, seed):
     x0 = xs + dx
     y0 = ys + dy
 
-    # Compute P-norm and rescale dx, dy so P-norm exactly ≤ 1.
-    Kdx = -A @ dx
-    pnorm_sq = (dx @ dx) / CANONICAL_TAU + (dy @ dy) / CANONICAL_SIGMA - 2 * (dy @ Kdx)
-    if pnorm_sq > 0:
-        scale = 1.0 / np.sqrt(pnorm_sq * 1.01)   # within ball with 1% margin
+    # Compute Euclidean norm and rescale dx, dy so ||dx||^2 + ||dy||^2 <= 1.
+    euc_sq = dx @ dx + dy @ dy
+    if euc_sq > 0:
+        scale = 1.0 / np.sqrt(euc_sq * 1.01)   # within ball with 1% margin
         dx = dx * scale; dy = dy * scale
         dx = np.where(xs + dx < 0, -xs + 1e-6, dx)  # Still non-negative
         x0 = xs + dx; y0 = ys + dy

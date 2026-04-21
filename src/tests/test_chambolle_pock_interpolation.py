@@ -357,7 +357,7 @@ def test_lp_trajectory_satisfies_cp_interpolation(K_max, seed):
     #   [0 .. 2 * n_algo_points * (n_algo_points + 1) - 1]  = f1 + h interp
     #   next 4 rows = value pinning
     #   next block = adjoint consistency
-    #   last row = P-norm IC
+    #   last row = Euclidean IC
     n_algo = K_max + 1
     n_interp_per_fn = n_algo * (n_algo + 1)  # convex_interp output count
     n_f1_interp = n_interp_per_fn

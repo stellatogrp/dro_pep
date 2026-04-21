@@ -80,11 +80,10 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         x0 = jnp.array(np.random.randn(n) * 0.5)
         y0 = jnp.array(np.abs(np.random.randn(m) * 0.3))  # non-negative
 
-        # Compute initial radius for P-norm
+        # Compute initial radius for Euclidean IC (||dx0||^2 + ||dy0||^2 <= R^2)
         dx0 = x0 - x_opt
         dy0 = y0 - y_opt
-        K_dx0 = K_mat @ dx0
-        R_sq = jnp.sum(dx0**2) / tau + jnp.sum(dy0**2) / sigma - 2 * jnp.dot(K_dx0, dy0)
+        R_sq = jnp.sum(dx0**2) + jnp.sum(dy0**2)
         R = jnp.sqrt(jnp.maximum(R_sq, 1.0))
 
         # Get trajectory
@@ -345,11 +344,10 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         x0 = jnp.array(np.random.randn(n) * 0.3)
         y0 = jnp.array([0.2, 0.3, 0.1, 0.05])  # first m1 non-negative
 
-        # Compute actual initial radius for P-norm
+        # Compute actual initial radius for Euclidean IC (||dx0||^2 + ||dy0||^2 <= R^2)
         dx0 = x0 - x_opt
         dy0 = y0 - y_opt
-        K_dx0 = K_mat @ dx0
-        R_sq = jnp.sum(dx0**2) / tau + jnp.sum(dy0**2) / sigma - 2 * jnp.dot(K_dx0, dy0)
+        R_sq = jnp.sum(dx0**2) + jnp.sum(dy0**2)
         R = float(jnp.sqrt(jnp.maximum(R_sq, 1.0)))
 
         stepsizes = (jnp.array(tau), jnp.array(sigma), jnp.array(theta))
@@ -629,8 +627,7 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
         # Get PEP constraints
         dx0 = x0 - x_opt
         dy0 = y0 - y_opt
-        K_dx0 = K_mat @ dx0
-        R_sq = jnp.sum(dx0**2) / tau + jnp.sum(dy0**2) / sigma - 2 * jnp.dot(K_dx0, dy0)
+        R_sq = jnp.sum(dx0**2) + jnp.sum(dy0**2)
         R = float(jnp.sqrt(jnp.maximum(R_sq, 1.0)))
 
         pep_data = construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max)
@@ -703,7 +700,7 @@ class TestPDHGLinopTrajectories(unittest.TestCase):
             print(f"    Indices {num_interp_per_func}-{2*num_interp_per_func-1}: h (dual) interpolation")
             print(f"    Indices {2*num_interp_per_func}-{2*num_interp_per_func+3}: value pinning")
             print(f"    Index {2*num_interp_per_func+4}: solution bound")
-            print(f"    Remaining: adjoint consistency + P-norm IC")
+            print(f"    Remaining: adjoint consistency + Euclidean IC")
 
             print(f"\n  Decoding violated constraints:")
             for idx in violated_indices[:10]:

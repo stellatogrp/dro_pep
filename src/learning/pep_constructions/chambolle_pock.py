@@ -49,7 +49,14 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
                                        composition_type='final',
                                        decay_rate=0.9):
     """
-    Construct PEP for Chambolle-Pock with P-norm (Lyapunov) Initial Condition.
+    Construct PEP for Chambolle-Pock with a Euclidean-ball initial condition:
+        ||x0 - xs||^2 + ||u0 - us||^2 <= R^2.
+
+    Prior form was the P-norm (Lyapunov) IC
+        ||dx||^2/tau + ||du||^2/sigma - 2<K dx, du> <= R^2
+    which baked stepsizes and K into the IC. The Euclidean form is
+    decoupled and was confirmed to keep the PEP bounded via the PEPit
+    probe in tests/test_cp_ic_boundedness_probe.py.
 
     Supports two composition types for the duality-gap performance metric:
       - 'final':    Gap at the last iterate K_max (single-term objective).
@@ -58,20 +65,18 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
                     iterate-0 subgradients gf1_0, gh_0 are free and would
                     unbound the objective; see loss_compositions.py).
 
-    Fixes applied:
-    1. P-norm Initial Condition: Added explicit basis vector for K(dx0) to handle
-       the cross-term -2<K(x0-xs), y0-ys> correctly.
-    2. Adjoint Consistency: Enforces <Ku, p> = <u, K.T p> for ALL operator pairs.
-    3. Saddle stationarity: gf1_s = -K^T y_s and gh_s = K x_s enforced via
-       operator pairs (x_s, gh_s) in pairs_K and (y_s, -gf1_s) in pairs_Kt.
-    4. Objective Construction: Uses stationarity substitutions <K xK, y*> = <xK, -df(x*)>.
+    Structural constraints:
+    - Adjoint Consistency: Enforces <Ku, p> = <u, K.T p> for ALL operator pairs.
+    - Saddle stationarity: gf1_s = -K^T y_s and gh_s = K x_s enforced via
+      operator pairs (x_s, gh_s) in pairs_K and (y_s, -gf1_s) in pairs_Kt.
+    - Objective Construction: Uses stationarity substitutions <K xK, y*> = <xK, -df(x*)>.
 
     Args:
         tau: Primal step sizes - scalar or vector of length K_max
         sigma: Dual step sizes - scalar or vector of length K_max
         theta: Extrapolation parameters - scalar or vector of length K_max
         M: Operator norm bound (||K|| <= M)
-        R: Initial radius bound for P-norm
+        R: Euclidean initial radius bound
         K_max: Number of iterations
         composition_type: 'final' or 'weighted'
         decay_rate: Decay for weighted composition (w_k = decay_rate^(K_max - k))
@@ -112,7 +117,7 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
     # Analysis Vectors
     idx_K_xK  = idx_c; idx_c+=1  # K * x_K
     idx_Kt_yK = idx_c; idx_c+=1  # K^T * y_K
-    idx_K_dx0 = idx_c; idx_c+=1  # K * dx0 (For P-norm IC)
+    idx_K_dx0 = idx_c; idx_c+=1  # K * dx0 (declared via pairs_K for operator-norm coherence; unused in the Euclidean IC)
 
     def gf1_vec(k): return eyeG[idx_gf1_start + k]
     def gh_vec(k): return eyeG[idx_gh_start + k]
@@ -235,8 +240,10 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
     pairs_K.append((eyeG[idx_xs], gh_vec(idx_saddle)))      # (x_s, K x_s = gh_s)
     pairs_Kt.append((eyeG[idx_ys], -gf1_vec(idx_saddle)))   # (u_s, K^T u_s = -gf1_s)
 
-    # Initial Condition Observations (K * dx0)
-    # Allows us to form the cross term <K dx0, dy0> in the P-norm
+    # Declare (dx0, K*dx0) as a K-pair so the operator-norm PSD block sees it.
+    # Vestigial from the prior P-norm IC cross-term; harmless under the
+    # current Euclidean IC (the corresponding basis vector simply does not
+    # appear in any other constraint).
     pairs_K.append((eyeG[idx_dx0], eyeG[idx_K_dx0]))
 
     # Final Iterate Observations
@@ -296,21 +303,17 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
         b_vals = jnp.concatenate([b_vals, b_adj], axis=0)
         c_vals = jnp.concatenate([c_vals, c_adj], axis=0)
 
-    # 9. P-Norm Initial Condition (Lyapunov)
-    # 1/tau ||dx0||^2 + 1/sigma ||dy0||^2 - 2 <K dx0, dy0> <= R^2
+    # 9. Euclidean Initial Condition
+    # ||dx0||^2 + ||du0||^2 <= R^2
+    # (Replaces the prior P-norm Lyapunov form
+    #  (1/tau)||dx0||^2 + (1/sigma)||du0||^2 - 2<K dx0, du0> <= R^2.
+    #  The weaker Euclidean IC was verified to keep the CP PEP bounded via
+    #  the PEPit probe in tests/test_cp_ic_boundedness_probe.py and removes
+    #  the stepsize coupling that complicated PDLP LDRO-PEP training.)
     vec_dx0 = eyeG[idx_dx0]
     vec_dy0 = eyeG[idx_dy0]
-    vec_K_dx0 = eyeG[idx_K_dx0]
 
-    term1 = (1.0 / tau_vec[0]) * jnp.outer(vec_dx0, vec_dx0)
-    term2 = (1.0 / sigma_vec[0]) * jnp.outer(vec_dy0, vec_dy0)
-
-    # Cross term: -2 <K dx0, dy0>
-    # Note: jnp.outer(u,v) + jnp.outer(v,u) represents 2*<u,v> in the trace.
-    # So multiplying by -1.0 gives -2*<u,v>.
-    term3 = -1.0 * (jnp.outer(vec_K_dx0, vec_dy0) + jnp.outer(vec_dy0, vec_K_dx0))
-
-    A_init = term1 + term2 + term3
+    A_init = jnp.outer(vec_dx0, vec_dx0) + jnp.outer(vec_dy0, vec_dy0)
     b_init = jnp.zeros(dimF)
     c_init = -R**2
 

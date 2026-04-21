@@ -28,7 +28,7 @@ The test:
   4. Evaluates every scalar and PSD constraint and asserts they hold.
   5. Separately asserts the PEP objective equals the real Lagrangian gap.
 
-As with test_chambolle_pock_interpolation.py, the P-norm IC is reported but
+As with test_chambolle_pock_interpolation.py, the Euclidean IC is reported but
 not asserted — the trajectory's IC value is an instance-dependent radius, not
 an interpolation condition.
 """
