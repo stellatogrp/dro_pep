@@ -11,6 +11,16 @@ ISTA/FISTA optimize composite problems: min f1(x) + f2(x)
 Key difference from GD: requires TWO sets of interpolation conditions:
 1. f1 interpolation: smooth strongly convex conditions (gradients g)
 2. f2 interpolation: convex conditions (subgradients h)
+
+NOTE on composite WC-PEP boundedness (see individual docstrings for detail):
+- ISTA weighted composition: bounded (after `compose_weighted` skips k=0 to
+  avoid the free h_0 subgradient unbounding f(x_0)).
+- FISTA weighted composition: bounded for K <= 2, UNBOUNDED for K >= 3 due
+  to a missing set of f1 interpolation constraints at the intermediate
+  algorithm iterates x_2, ..., x_{K-1}. See `construct_fista_pep_data`
+  docstring for the full analysis, diagnosis, and a sketch of the fix.
+  Workaround: use `composition_type='final'` for FISTA LPEP, or use the
+  `ldro-pep` framework (sample constraints bound the SDP).
 """
 
 import jax
@@ -274,6 +284,66 @@ def construct_fista_pep_data(t, beta, mu, L, R, K_max, pep_obj,
 
     Returns:
         pep_data tuple
+
+    KNOWN LIMITATION (weighted composition, K >= 3)
+    -----------------------------------------------
+    The weighted-composition LPEP solve is UNBOUNDED for FISTA with K >= 3
+    because the PEP is missing f1 interpolation at the intermediate
+    algorithm iterates x_2, ..., x_{K-1} (where y_k != x_k starts at k=2:
+    beta_0 = 0 is built in by lam_0=1, but beta_k > 0 for k >= 1).
+
+    Why this doesn't affect `final` composition or K <= 2
+    -----------------------------------------------------
+    - `final` only uses f1(x_K), which IS in the PEP (x_K is an f1 interp
+      point), so `final` composition is bounded for all K.
+    - K=1: weighted sum is over k=1 only, which is x_K. Same as final.
+    - K=2: beta_0 = 0 so y_1 = x_1, and the weighted sum uses f1(y_1) +
+      f2(x_1) = f1(x_1) + f2(x_1) as a mathematical identity. Bounded.
+    - K >= 3: y_k != x_k for k >= 2, and our PEP's f1 interpolation points
+      are only {y_0, ..., y_{K-1}, x_K, x_s}. The weighted objective term
+      at k in {2,...,K-1} pulls on f1(y_k) (which IS in the PEP) plus
+      f2(x_k) (also in the PEP via f2's own interp set). But PEPit's
+      equivalent performance metric uses f1(x_k) + f2(x_k), and PEPit's
+      internal f1 interpolation set DOES include x_2, ..., x_{K-1}
+      (verified empirically: for K=5 weighted, PEPit holds f1 at 10 points
+      vs our 7). Those additional pairwise smooth-strongly-convex f1
+      constraints between the y-set and x-set are what bound the PEP in
+      PEPit. Without them, our SDP is under-constrained and the WC
+      objective is unbounded.
+
+    Why not `compose_weighted`'s skip-k=0 fix (in loss_compositions.py)
+    ------------------------------------------------------------------
+    The k=0 skip addresses a separate issue: the free subgradient h_0 at
+    x_0 makes f(x_0) unbounded in any composite PEP (affects ISTA too, and
+    the k=0 fix handles it there). FISTA K >= 3 is unbounded even after
+    skipping k=0 because of the intermediate-iterate interpolation gap
+    described above, which is specific to FISTA's momentum-induced
+    divergence between y_k and x_k.
+
+    Fix sketch (not yet implemented; requires moderate Gram-basis growth)
+    --------------------------------------------------------------------
+    Add f1 interpolation at x_k for k = 2, ..., K-1. This requires:
+      - K-2 new Gram basis slots for g(x_2), ..., g(x_{K-1}):
+            dimG: 2K+4  ->  3K+2
+      - K-2 new dimF1 slots for f1(x_2), ..., f1(x_{K-1}):
+            dimF1: K+2  ->  2K
+      - Extend `smooth_strongly_convex_interp` over the combined point set
+        {y_0, ..., y_{K-1}, x_1, ..., x_K, x_s}. Note y_0=x_0 and y_1=x_1
+        always (beta_0=0 by convention); those pairs can be elided to save
+        slots.
+      - Extend the objective builder so the weighted sum at iteration k
+        (k < K) pulls on f1(x_k) instead of f1(y_k). This matches PEPit's
+        semantic definition of the composite performance metric
+        sum_k w_k * (f1(x_k) + f2(x_k) - Fs).
+    For K=5 the Gram basis grows from 14 to 17 slots (~20%). The final
+    composition path is unaffected (f1 at x_K is already present).
+
+    Workarounds for now
+    -------------------
+    - Use `composition_type='final'` for FISTA LPEP. This is bounded and
+      well-tested (see tests/test_pep_lasso_debug.py).
+    - Use `learning_framework='ldro-pep'` (not 'lpep'): DRO's sample-based
+      constraints bound the SDP even when the pure WC-PEP is unbounded.
     """
     # Broadcast t to vector if scalar
     t_vec = jnp.broadcast_to(t, (K_max,))
