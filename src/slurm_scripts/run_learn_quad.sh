@@ -23,4 +23,5 @@ module load anaconda3/2025.12
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
+cd "$(dirname "$0")/.."
 python run_learning_experiment.py Quad cluster

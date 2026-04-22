@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=PDLP
+#SBATCH --job-name=Lasso
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=108G
+#SBATCH --mem-per-cpu=24G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-07:59:59
-#SBATCH --array=0-11
-#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/PDLP/runs/%A.txt
+#SBATCH --time=00-00:59:59
+#SBATCH --array=0-2
+#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1
@@ -23,4 +23,5 @@ module load anaconda3/2025.12
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
-python run_learning_experiment.py PDLP cluster
+cd "$(dirname "$0")/.."
+python run_learning_l2o_experiment.py Lasso cluster learning_framework=l2o

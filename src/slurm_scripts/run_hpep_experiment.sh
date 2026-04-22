@@ -1,13 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=Lasso
+#SBATCH --job-name=HPEP
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=108G
-# #SBATCH --constraint=intel
-#SBATCH --time=00-07:59:59
-#SBATCH --array=0-14
-#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=80G
+#SBATCH --time=01-01:59:59
+#SBATCH --array=0-1
+#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Huber/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1
@@ -18,9 +17,9 @@
 # export xla_force_host_platform_device_count=1
 
 module purge
-module load intel-mkl/2024.2
-module load anaconda3/2025.12
+module load anaconda3/2024.10
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
-python run_learning_experiment.py Lasso cluster
+cd "$(dirname "$0")/.."
+python run_pep_experiment.py Huber cluster

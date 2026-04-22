@@ -288,6 +288,13 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
     # since jax.custom_vjp doesn't support closures with non-JAX objects
     _adjoint_cache = {}
     
+    tol_gap_abs=1e-5
+    tol_gap_rel=1e-5
+    tol_feas=1e-5
+    reduced_tol_gap_abs=1e-4
+    reduced_tol_gap_rel=1e-4
+    reduced_tol_feas=1e-4
+
     @jax.custom_vjp
     def _solve(A_dense, b, c):
         # Forward pass: call diffcp via pure_callback
@@ -305,6 +312,12 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                     solve_method='CLARABEL',
                     direct_solve_method=get_direct_solve_method(),
                     verbose=False,
+                    tol_gap_abs=tol_gap_abs,
+                    tol_gap_rel=tol_gap_rel,
+                    tol_feas=tol_feas,
+                    reduced_tol_gap_abs=reduced_tol_gap_abs,
+                    reduced_tol_gap_rel=reduced_tol_gap_rel,
+                    reduced_tol_feas=reduced_tol_feas,
                 )
                 x = result["x"]
                 y = result["y"]
@@ -356,6 +369,12 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                     solve_method='CLARABEL',
                     direct_solve_method=get_direct_solve_method(),
                     verbose=False,
+                    tol_gap_abs=tol_gap_abs,
+                    tol_gap_rel=tol_gap_rel,
+                    tol_feas=tol_feas,
+                    reduced_tol_gap_abs=reduced_tol_gap_abs,
+                    reduced_tol_gap_rel=reduced_tol_gap_rel,
+                    reduced_tol_feas=reduced_tol_feas,
                 )
                 x = result["x"]
                 y = result["y"]
