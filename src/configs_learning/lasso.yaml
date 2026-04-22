@@ -7,7 +7,7 @@ R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
 
 # Sample sizes
 N: 10                # Batch size for SGD training
-training_sample_N: 250  # Number of training samples (pre-sampled for sliding window)
+training_sample_N: 1000  # Number of training samples (pre-sampled for sliding window)
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
 # Random seeds
@@ -66,8 +66,9 @@ output_dir: "learn_dro_outputs"
 
 # Out-of-sample validation/test configuration
 out_of_sample_val_N: 100     # Number of validation samples (in-distribution)
-out_of_sample_test_N: 200   # Number of test samples (in-distribution)
+out_of_sample_test_N: 250   # Number of test samples (in-distribution)
 out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
 out_of_sample_test_seed: 20000  # Seed for generating test b vectors
 out_of_dist_N: 200         # Number of out-of-distribution test samples
 out_of_dist_seed: 30000     # Seed for generating out-of-distribution b vectors
+training_seed: 40000        # Seed for generating training b vectors (used by run_sample_creation.py)

@@ -1,11 +1,19 @@
 """
-Out-of-Sample Test Set Generation Runner.
+Sample Creation Runner.
 
-Generates and saves out-of-sample test problems (Q matrices and z0 vectors)
-for consistent evaluation across different algorithms.
+Generates training, validation, test, and out-of-distribution problem
+instances in a unified on-disk format. Lasso writes:
+
+    A_in_dist.npz                  # key: A
+    A_out_of_dist.npz              # key: A
+    training_set.npz               # keys: b_batch, x_opt_batch, f_opt_batch
+    validation_set.npz             # keys: b_batch, x_opt_batch, f_opt_batch
+    test_set.npz                   # keys: b_batch, x_opt_batch, f_opt_batch
+    ood_set.npz                    # keys: b_batch, x_opt_batch, f_opt_batch
+    out_of_sample_metadata.npz
 
 Usage:
-    Local:   python run_out_of_sample.py Quad local
+    Local:   python run_sample_creation.py Lasso local
 """
 import hydra
 import logging
@@ -14,8 +22,8 @@ import sys
 
 log = logging.getLogger(__name__)
 
-from learning_experiment_classes.lasso import lasso_out_of_sample_run as lasso_run
-from learning_experiment_classes.logreg import logreg_out_of_sample_run as logreg_run
+from learning_experiment_classes.lasso import lasso_sample_creation_run as lasso_run
+# from learning_experiment_classes.logreg import logreg_out_of_sample_run as logreg_run
 from learning_experiment_classes.quad import quad_out_of_sample_run as quad_run
 
 
@@ -41,7 +49,7 @@ func_driver_map = {
 }
 
 base_dir_map = {
-    'Lasso': 'out_of_sample_outputs/Lasso',
+    'Lasso': 'sample_creation_outputs/Lasso',
     'LogReg': 'out_of_sample_outputs/LogReg',
     'Quad': 'out_of_sample_outputs/Quad',
 }
@@ -49,8 +57,8 @@ base_dir_map = {
 
 def main():
     if len(sys.argv) < 3:
-        print('Usage: python run_out_of_sample.py <experiment> <cluster|local>')
-        print('  experiment: Quad')
+        print('Usage: python run_sample_creation.py <experiment> <cluster|local>')
+        print('  experiment: Lasso, LogReg, or Quad')
         print('  target: cluster or local')
         exit(0)
 
@@ -72,7 +80,6 @@ def main():
     base_dir = f'{base_dir}/{base_dir_map[experiment]}'
     driver = func_driver_map[experiment]
 
-    # Out-of-sample generation: simple run without SLURM complexity
     hydra_tags = [
         f'hydra.run.dir={base_dir}/${{now:%Y-%m-%d}}/${{now:%H-%M-%S}}',
         'hydra.job.chdir=True'
@@ -84,4 +91,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
