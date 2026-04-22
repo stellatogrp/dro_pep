@@ -642,6 +642,10 @@ def pdlp_run(cfg):
     output_dir = cfg.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    key, train_key = jax.random.split(key)
+    trainer = UnifiedTrainer(problem_module, cfg, train_key)
+    trainer.prepare_data(save_dir=output_dir)
+
     for K in cfg.K_max:
         log.info(f"=== Starting training for K={K} ===")
 
@@ -649,8 +653,6 @@ def pdlp_run(cfg):
         os.makedirs(K_output_dir, exist_ok=True)
         csv_path = os.path.join(K_output_dir, "progress.csv")
 
-        key, train_key = jax.random.split(key)
-        trainer = UnifiedTrainer(problem_module, cfg, train_key)
         result = trainer.train(K, csv_path, K_output_dir)
 
         tau0 = result.stepsizes[0]

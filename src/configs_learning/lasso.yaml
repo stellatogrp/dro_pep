@@ -7,7 +7,7 @@ R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
 
 # Sample sizes
 N: 10                # Batch size for SGD training
-training_sample_N: 200  # Number of training samples (pre-sampled for sliding window)
+training_sample_N: 250  # Number of training samples (pre-sampled for sliding window)
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
 # Random seeds
@@ -24,7 +24,7 @@ b_noise_std: 1e-2
 z0_type: 'zero'
 
 # Type of learning framework
-learning_framework: 'l2o'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
 
 # Algorithm and optimizer type (selected by Slurm job index)
 alg: "ista"            # ista or fista
@@ -45,7 +45,7 @@ learn_beta: true  # Whether to learn FISTA beta parameters
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
-K_max: [5]
+K_max: [5, 10, 15]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
@@ -65,7 +65,7 @@ weight_decay: 1e-3  # weight decay for sgd_wd
 output_dir: "learn_dro_outputs"
 
 # Out-of-sample validation/test configuration
-out_of_sample_val_N: 10     # Number of validation samples (in-distribution)
+out_of_sample_val_N: 100     # Number of validation samples (in-distribution)
 out_of_sample_test_N: 200   # Number of test samples (in-distribution)
 out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
 out_of_sample_test_seed: 20000  # Seed for generating test b vectors

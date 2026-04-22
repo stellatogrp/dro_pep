@@ -902,21 +902,22 @@ def lasso_run(cfg):
     output_dir = cfg.output_dir
     os.makedirs(output_dir, exist_ok=True)
 
+    # Create the trainer once; pre-sample training + validation data once.
+    # Both are K-independent, so sharing across K avoids redundant work.
+    problem_module.validate_config()
+    key, train_key = jax.random.split(key)
+    trainer = UnifiedTrainer(problem_module, cfg, train_key)
+    trainer.prepare_data(save_dir=output_dir)
+
     # Loop over K_max values
     for K in cfg.K_max:
         log.info(f"=== Starting training for K={K} ===")
-
-        # Validate config for this K
-        problem_module.validate_config()
 
         # Create output directory for this K
         K_output_dir = os.path.join(output_dir, f"K_{K}")
         os.makedirs(K_output_dir, exist_ok=True)
         csv_path = os.path.join(K_output_dir, "progress.csv")
 
-        # Create trainer and run
-        key, train_key = jax.random.split(key)
-        trainer = UnifiedTrainer(problem_module, cfg, train_key)
         result = trainer.train(K, csv_path, K_output_dir)
 
         # Log final stepsizes

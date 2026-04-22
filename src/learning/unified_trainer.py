@@ -121,12 +121,10 @@ class UnifiedTrainer:
         stepsizes = self.problem_module.get_initial_stepsizes(self.alg, K, L, mu)
         log.info(f"Initial stepsizes: {stepsizes}")
 
-        # Step 3: Pre-sample training data (for L2O/LDRO-PEP only)
-        if self.learning_framework in ['l2o', 'ldro-pep']:
-            self._presample_training_data(K, K_output_dir)
-
-        # Step 4: Pre-sample validation data (for all frameworks)
-        self._presample_validation_data()
+        # Step 3+4: Pre-sample training + validation data (idempotent).
+        # Data is K-independent; callers that hoist prepare_data() above the
+        # K-loop pay this cost once per experiment, not once per K.
+        self.prepare_data(save_dir=K_output_dir)
 
         # Step 5: Build loss function
         loss_fn = self._build_loss_function(K, L, mu, R, stepsizes)
@@ -340,45 +338,46 @@ class UnifiedTrainer:
                 "Must be 'manual_jax' or 'cvxpylayers'."
             )
 
-    def _presample_training_data(self, K: int, K_output_dir: str = None):
-        """Pre-sample training set and set up minibatch access.
+    def prepare_data(self, save_dir: str = None) -> None:
+        """One-time pre-sampling of training + validation data. Idempotent.
+
+        Training data and validation data are K-independent, so this method
+        should be called ONCE per experiment — hoisted above the K-loop by
+        the runners. `train(K)` also calls this as a safety net, but on
+        subsequent calls both branches become no-ops because self.training_data
+        and self.validation_data are already populated.
 
         Args:
-            K: Number of algorithm iterations (for logging).
-            K_output_dir: Optional directory to save training data.
+            save_dir: Optional directory to save training data to
+                (as `training_set.npz`). Pass the top-level `output_dir`.
         """
+        if self.learning_framework in ['l2o', 'ldro-pep'] and self.training_data is None:
+            self._presample_training_data(save_dir=save_dir)
+        if self.validation_data is None:
+            self._presample_validation_data()
+
+    def _presample_training_data(self, save_dir: str = None):
+        """Pre-sample training set and set up minibatch access."""
         log.info(f'Pre-sampling {self.training_sample_N} training problems...')
 
-        # Validate divisibility
         assert self.training_sample_N % self.N_batch == 0, \
             f"training_sample_N ({self.training_sample_N}) must be divisible by N_batch ({self.N_batch})"
 
-        # Sample training set from problem module
         self.key, sample_key = jax.random.split(self.key)
         problem_data, ground_truth = self.problem_module.sample_training_batch(
             sample_key, self.training_sample_N
         )
-
-        # Merge into single dict for convenience
         self.training_data = {**problem_data, **ground_truth}
 
-        # Compute number of minibatches
         self.n_minibatches = self.training_sample_N // self.N_batch
         log.info(f'Number of minibatches per epoch: {self.n_minibatches}')
 
-        # Optionally save training set to disk
-        if K_output_dir is not None:
-            self._save_training_data(K_output_dir)
+        if save_dir is not None:
+            self._save_training_data(save_dir)
 
-    def _save_training_data(self, K_output_dir: str):
-        """Save pre-sampled training data to disk for reproducibility.
-
-        Args:
-            K_output_dir: Directory to save training data.
-        """
-        # Save all training data arrays
-        train_data_path = os.path.join(K_output_dir, 'training_set.npz')
-        # Convert JAX arrays to numpy for saving
+    def _save_training_data(self, save_dir: str):
+        """Save pre-sampled training data to disk for reproducibility."""
+        train_data_path = os.path.join(save_dir, 'training_set.npz')
         np_data = {k: np.array(v) for k, v in self.training_data.items()}
         np.savez_compressed(train_data_path, **np_data)
         log.info(f'Saved training set to {train_data_path}')

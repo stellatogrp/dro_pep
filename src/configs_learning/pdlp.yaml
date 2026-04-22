@@ -45,18 +45,18 @@ decay_rate: 0.9
 # ----------------------------------------------------------------------------
 # Batch sampling
 # ----------------------------------------------------------------------------
-N: 20                                   # minibatch size
-training_sample_N: 20                   # total pre-sampled training instances
+N: 10                                   # minibatch size
+training_sample_N: 250                   # total pre-sampled training instances
 mr_estimation_size: 100                 # pool size for estimating M_val and R_val
 mr_estimation_seed: 20260421
 
-out_of_sample_val_N: 10
+out_of_sample_val_N: 100
 out_of_sample_val_seed: 10000
-out_of_sample_test_N: 20
+out_of_sample_test_N: 200
 out_of_dist_N: 20
 
 # K_max loop inside pdlp_run (per-K CSV logging)
-K_max: [1]
+K_max: [5, 10, 15]
 
 sgd_seed: 500
 
@@ -74,7 +74,7 @@ precond_type: 'average'
 # SGD training parameters
 # ----------------------------------------------------------------------------
 optimizer_type: "adamw"
-sgd_iters: 10
+sgd_iters: 1000
 eta_t: 1e-3                             # learning rate for stepsizes
 weight_decay: 1e-3                      # weight decay for sgd_wd
 
