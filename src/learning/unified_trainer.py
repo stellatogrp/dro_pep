@@ -120,23 +120,24 @@ class UnifiedTrainer:
         # Step 2: Initialize stepsizes
         stepsizes = self.problem_module.get_initial_stepsizes(self.alg, K, L, mu)
         log.info(f"Initial stepsizes: {stepsizes}")
+        sqrt_stepsizes = tuple(jnp.sqrt(jnp.asarray(s)) for s in stepsizes)
 
         # Step 3+4: Pre-sample training + validation data (idempotent).
         # Data is K-independent; callers that hoist prepare_data() above the
         # K-loop pay this cost once per experiment, not once per K.
         self.prepare_data(save_dir=K_output_dir)
 
-        # Step 5: Build loss function
+        # Step 5: Build loss function (probe with raw stepsizes for static PSD dims)
         loss_fn = self._build_loss_function(K, L, mu, R, stepsizes)
 
         # Step 6: Build validation loss function
         val_loss_fn = self._build_validation_loss_function(K)
 
-        # Step 7: Initialize optimizer
-        self._initialize_optimizer(stepsizes)
+        # Step 7: Initialize optimizer on sqrt-reparameterized params
+        self._initialize_optimizer(sqrt_stepsizes)
 
         # Step 8: Run training loop
-        result = self._run_training_loop(loss_fn, val_loss_fn, stepsizes, K, csv_path)
+        result = self._run_training_loop(loss_fn, val_loss_fn, sqrt_stepsizes, K, csv_path)
 
         log.info(f"=== Training complete for K={K} ===")
         return result
@@ -196,8 +197,9 @@ class UnifiedTrainer:
         )
         psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
 
-        def lpep_loss(stepsizes):
+        def lpep_loss(sqrt_stepsizes):
             """Compute worst-case PEP objective."""
+            stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
             pep_data = pep_data_fn(
                 stepsizes, mu, L, R, K, self.pep_obj,
                 composition_type=self.training_loss_type_composition,
@@ -231,8 +233,9 @@ class UnifiedTrainer:
         """
         traj_fn = self.problem_module.get_trajectory_fn(self.alg)
 
-        def l2o_loss(stepsizes, minibatch):
+        def l2o_loss(sqrt_stepsizes, minibatch):
             """Compute trajectory-based loss with risk measure."""
+            stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
             # minibatch is already extracted outside JIT boundary
 
             # Compute loss for each sample in batch
@@ -286,8 +289,9 @@ class UnifiedTrainer:
         psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
 
         if self.dro_canon_backend == 'manual_jax':
-            def ldro_pep_loss(stepsizes, minibatch):
+            def ldro_pep_loss(sqrt_stepsizes, minibatch):
                 """LDRO-PEP pipeline with per-step preconditioner."""
+                stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
                 # minibatch is already extracted outside JIT boundary
 
                 # Compute trajectories for all samples (Gram representations)
@@ -653,8 +657,9 @@ class UnifiedTrainer:
         # Capture validation loss type for use in closure
         val_loss_type = self.validation_loss_type_composition
 
-        def val_loss_fn(stepsizes):
+        def val_loss_fn(sqrt_stepsizes):
             """Compute validation loss on held-out validation set."""
+            stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
 
             def compute_single_val_metric(*args):
                 """Compute metric for a single validation sample."""
@@ -739,38 +744,46 @@ class UnifiedTrainer:
         return None
 
     def _run_training_loop(
-        self, loss_fn: Callable, val_loss_fn: Callable, stepsizes: Stepsizes, K: int, csv_path: str
+        self, loss_fn: Callable, val_loss_fn: Callable, sqrt_stepsizes: Stepsizes, K: int, csv_path: str
     ) -> TrainingResult:
         """Core unified training loop.
+
+        The optimizer holds sqrt_stepsizes; the loss functions square them
+        before passing to the algorithm. History, checkpoints, and the
+        returned TrainingResult contain the actual (squared) stepsizes so
+        external consumers see unchanged semantics.
 
         LPEP uses deterministic GD (no minibatch sampling).
         L2O/LDRO-PEP use stochastic SGD with minibatch sampling.
 
         Args:
-            loss_fn: JIT-compiled training loss function.
-            val_loss_fn: JIT-compiled validation loss function.
-            stepsizes: Initial stepsizes.
+            loss_fn: JIT-compiled training loss function (expects sqrt params).
+            val_loss_fn: JIT-compiled validation loss function (expects sqrt params).
+            sqrt_stepsizes: Initial sqrt-reparameterized params.
             K: Number of algorithm iterations.
             csv_path: Path to save progress CSV.
 
         Returns:
-            TrainingResult with final stepsizes, history, losses, val_losses, and times.
+            TrainingResult with final actual stepsizes, history, losses, val_losses, and times.
         """
-        # Track history
-        all_stepsizes_vals = [stepsizes]
+        def to_actual(sqrt_s):
+            return tuple(s ** 2 for s in sqrt_s)
+
+        # Track history (in actual stepsize form for external consumers)
+        all_stepsizes_vals = [to_actual(sqrt_stepsizes)]
 
         # Compute initial losses for the starting stepsizes (before any updates)
         log.info("Computing initial losses for starting stepsizes...")
         initial_start_time = time.perf_counter()
 
         if self.learning_framework == 'lpep':
-            initial_loss = float(loss_fn(stepsizes))
+            initial_loss = float(loss_fn(sqrt_stepsizes))
         else:
             # Use first minibatch for initial loss computation
             initial_minibatch = self._get_minibatch(0)
-            initial_loss = float(loss_fn(stepsizes, initial_minibatch))
+            initial_loss = float(loss_fn(sqrt_stepsizes, initial_minibatch))
 
-        initial_val_loss = float(val_loss_fn(stepsizes))
+        initial_val_loss = float(val_loss_fn(sqrt_stepsizes))
         initial_time = time.perf_counter() - initial_start_time
 
         log.info(f'  initial_loss: {initial_loss:.6f}, initial_val_loss: {initial_val_loss:.6f}')
@@ -780,28 +793,28 @@ class UnifiedTrainer:
         all_times = [initial_time]
 
         # Determine update mask for manual optimizers
-        update_mask = self._get_update_mask(stepsizes)
+        update_mask = self._get_update_mask(sqrt_stepsizes)
 
-        # Create value_and_grad function
+        # Create value_and_grad function (gradients are w.r.t. sqrt_stepsizes)
         value_and_grad_fn = jax.value_and_grad(loss_fn)
 
         # Training iterations
         n_iters = self.sgd_iters
         for iter_num in range(n_iters):
-            # Log progress
-            self._log_iteration(iter_num, stepsizes, K)
+            # Log progress (shows actual stepsize = sqrt_stepsize ** 2)
+            self._log_iteration(iter_num, sqrt_stepsizes, K)
 
             # Compute loss and gradients
             iter_start_time = time.perf_counter()
 
             if self.learning_framework == 'lpep':
                 # LPEP: deterministic, no minibatch
-                loss, grads = value_and_grad_fn(stepsizes)
+                loss, grads = value_and_grad_fn(sqrt_stepsizes)
             else:
                 # L2O/LDRO-PEP: stochastic, with minibatch
                 # Extract minibatch OUTSIDE JIT boundary to avoid traced indexing
                 minibatch = self._get_minibatch(iter_num)
-                loss, grads = value_and_grad_fn(stepsizes, minibatch)
+                loss, grads = value_and_grad_fn(sqrt_stepsizes, minibatch)
 
             iter_time = time.perf_counter() - iter_start_time
 
@@ -811,115 +824,107 @@ class UnifiedTrainer:
             all_losses.append(float(loss))
             all_times.append(iter_time)
 
-            # Optimizer step
-            stepsizes = self._optimizer_step(stepsizes, grads, update_mask)
+            # Optimizer step (on sqrt params)
+            sqrt_stepsizes = self._optimizer_step(sqrt_stepsizes, grads, update_mask)
 
             # Compute validation loss with updated stepsizes
-            val_loss = float(val_loss_fn(stepsizes))
+            val_loss = float(val_loss_fn(sqrt_stepsizes))
             all_val_losses.append(val_loss)
             log.info(f'  val_loss: {val_loss:.6f}')
 
-            # Store updated stepsizes
-            all_stepsizes_vals.append(stepsizes)
+            # Store updated stepsizes (actual form)
+            all_stepsizes_vals.append(to_actual(sqrt_stepsizes))
 
             # Save checkpoint
             self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, csv_path)
 
-        # Return result
+        # Return result (actual stepsize form)
         return TrainingResult(
-            stepsizes=stepsizes,
+            stepsizes=to_actual(sqrt_stepsizes),
             stepsizes_history=all_stepsizes_vals,
             losses=all_losses,
             val_losses=all_val_losses,
             times=all_times,
         )
 
-    def _log_iteration(self, iter_num: int, stepsizes: Stepsizes, K: int):
+    def _log_iteration(self, iter_num: int, sqrt_stepsizes: Stepsizes, K: int):
         """Log current iteration progress.
+
+        Logs the algorithmic stepsize (sqrt_stepsize ** 2), not the raw param.
 
         Args:
             iter_num: Current iteration number.
-            stepsizes: Current stepsizes.
+            sqrt_stepsizes: Current sqrt-reparameterized params.
             K: Number of algorithm iterations.
         """
-        t = stepsizes[0]
+        actual_stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+        t = actual_stepsizes[0]
         is_vector_t = jnp.ndim(t) > 0
-        has_beta = len(stepsizes) > 1
+        has_beta = len(actual_stepsizes) > 1
 
         t_log = f'{t:.5f}' if not is_vector_t else '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
 
         if has_beta:
-            beta = stepsizes[1]
+            beta = actual_stepsizes[1]
             beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
             log.info(f'K={K}, iter={iter_num}, t={t_log}, beta={beta_log}')
         else:
             log.info(f'K={K}, iter={iter_num}, t={t_log}')
 
     def _optimizer_step(
-        self, stepsizes: Stepsizes, grads: Stepsizes, update_mask: List[bool] | None
+        self, sqrt_stepsizes: Stepsizes, grads: Stepsizes, update_mask: List[bool] | None
     ) -> Stepsizes:
-        """Execute one optimizer step with projection.
+        """Execute one optimizer step on sqrt-reparameterized params.
+
+        No projection is needed: the loss functions square sqrt_stepsizes
+        before use, so nonnegativity of the algorithmic stepsize is guaranteed
+        regardless of the sign of sqrt_stepsize.
 
         Args:
-            stepsizes: Current stepsizes.
-            grads: Gradients w.r.t. stepsizes.
+            sqrt_stepsizes: Current sqrt-reparameterized params.
+            grads: Gradients w.r.t. sqrt_stepsizes.
             update_mask: Optional mask for selective parameter updates.
 
         Returns:
-            Updated stepsizes (projected to nonnegative).
+            Updated sqrt_stepsizes.
         """
         if self.optimizer_type == 'vanilla_sgd':
-            # Manual SGD with projection
             if update_mask is None:
-                stepsizes = tuple(
-                    jnp.maximum(s - self.eta_t * ds, 1e-6)
-                    for s, ds in zip(stepsizes, grads)
+                sqrt_stepsizes = tuple(
+                    s - self.eta_t * ds
+                    for s, ds in zip(sqrt_stepsizes, grads)
                 )
             else:
-                stepsizes = tuple(
-                    jnp.maximum(s - self.eta_t * ds, 1e-6) if should_update else s
-                    for s, ds, should_update in zip(stepsizes, grads, update_mask)
+                sqrt_stepsizes = tuple(
+                    s - self.eta_t * ds if should_update else s
+                    for s, ds, should_update in zip(sqrt_stepsizes, grads, update_mask)
                 )
 
         elif self.optimizer_type == 'adamw':
-            # AdamWMin optimizer
-            x_params = [jnp.array(s) for s in stepsizes]
+            x_params = [jnp.array(s) for s in sqrt_stepsizes]
             grads_x = list(grads)
             x_new = self.optimizer.step(
                 x_params=x_params,
                 grads_x=grads_x,
-                proj_x_fn=self._project_stepsizes,
             )
-            stepsizes = tuple(x_new)
+            sqrt_stepsizes = tuple(x_new)
 
         elif self.optimizer_type == 'sgd_wd':
-            # SGD with weight decay
             if update_mask is None:
-                stepsizes = tuple(
-                    jnp.maximum(s - self.eta_t * (ds + self.weight_decay * s), 1e-6)
-                    for s, ds in zip(stepsizes, grads)
+                sqrt_stepsizes = tuple(
+                    s - self.eta_t * (ds + self.weight_decay * s)
+                    for s, ds in zip(sqrt_stepsizes, grads)
                 )
             else:
-                stepsizes = tuple(
-                    jnp.maximum(s - self.eta_t * (ds + self.weight_decay * s), 1e-6) if should_update else s
-                    for s, ds, should_update in zip(stepsizes, grads, update_mask)
+                sqrt_stepsizes = tuple(
+                    s - self.eta_t * (ds + self.weight_decay * s) if should_update else s
+                    for s, ds, should_update in zip(sqrt_stepsizes, grads, update_mask)
                 )
 
         else:
             raise ValueError(f"Unknown optimizer_type: {self.optimizer_type}")
 
-        return stepsizes
-
-    def _project_stepsizes(self, stepsizes: List[jnp.ndarray]) -> List[jnp.ndarray]:
-        """Project stepsizes to be nonnegative.
-
-        Args:
-            stepsizes: List of stepsize arrays.
-
-        Returns:
-            Projected stepsizes (list of arrays).
-        """
-        return [jnp.maximum(s, 1e-6) for s in stepsizes]
+        return sqrt_stepsizes
 
     def _save_checkpoint(
         self, stepsizes_history: List[Stepsizes], K_max: int,

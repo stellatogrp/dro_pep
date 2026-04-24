@@ -19,7 +19,6 @@ log = logging.getLogger(__name__)
 
 from learning_experiment_classes.lasso import lasso_run
 from learning_experiment_classes.logreg import logreg_run
-from learning_experiment_classes.pdlp import pdlp_run
 from learning_experiment_classes.quad import quad_run
 from itertools import product
 
@@ -32,11 +31,6 @@ def lasso_driver(cfg):
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='logreg.yaml')
 def logreg_driver(cfg):
     logreg_run(cfg)
-
-
-@hydra.main(version_base='1.2', config_path='configs_learning', config_name='pdlp.yaml')
-def pdlp_driver(cfg):
-    pdlp_run(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='quad.yaml')
@@ -108,22 +102,14 @@ def conditional_product(common_options, conditional_groups):
 
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
-    ['learning_framework=ldro-pep'],
+    ['learning_framework=l2o'],
     ['alg=vanilla_gd'],
     ['pep_obj=obj_val'],
-    # ['dro_obj=expectation'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
-    ['stepsize_type=vector'],
-    ['vector_init=fixed', 'vector_init=silver'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
+    ['dro_obj=expectation'],
     ['mu=1'],
     ['N=20'],
     ['sgd_iters=500'],
-    ['eta_t=1e-2', 'eta_t=1e-3', 'eta_t=1e-4'],
-    ['weight_decay=1e-3', 'weight_decay=1e-4', 'weight_decay=1e-5'],
-    # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-    ['K_max=[10]', 'K_max=[15]'],
+    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
 # Parameter combinations for Slurm array jobs
@@ -137,17 +123,16 @@ Learn_Quad_params = conditional_product(
         # },
         # {
         #     'stepsize_type=scalar': ['vector_init=fixed'],
-        #     'stepsize_type=vector': ['vector_init=fixed', 'vector_init=silver'],
+        #     'stepsize_type=vector': ['vector_init=fixed'],
         # },
     ]
 )
 
 LogReg_options = [
-    ['learning_framework=ldro-pep'],
+    ['learning_framework=l2o'],
     ['alg=vanilla_gd'],
     ['pep_obj=obj_val'],
     ['dro_obj=expectation'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
     ['N=20'],
     ['sgd_iters=500'],
     ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
@@ -159,27 +144,15 @@ Learn_LogReg_params = conditional_product(
 )
 
 Lasso_options = [
-    ['learning_framework=ldro-pep'],
+    ['learning_framework=lpep'],
     ['alg=ista'],
-    # ['N=20'],
-    ['training_sample_N=100',
-     'training_sample_N=200',
-     'training_sample_N=300',
-     'training_sample_N=400',
-     'training_sample_N=500',
-     'training_sample_N=600',
-     'training_sample_N=700',
-     'training_sample_N=800',
-     'training_sample_N=900',
-     'training_sample_N=1000'],
     ['dro_obj=expectation'],
-    ['sgd_iters=500'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
-    # ['eta_t=1e-5', 'eta_t=1e-4', 'eta_t=1e-3'],
-    ['eta_t=1e-4', 'eta_t=1e-3'],
+    ['sgd_iters=1000'],
+    ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
     ['weight_decay=1e-5', 'weight_decay=1e-4', 'weight_decay=1e-3'],
     # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-    ['K_max=[15]'],
+    # ['K_max=[11, 12, 13, 14, 15]'],
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
 ]
 
 Learn_Lasso_params = conditional_product(
@@ -196,50 +169,22 @@ Learn_Lasso_params = conditional_product(
     ]
 )
 
-PDLP_options = [
-    ['N=20'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
-    ['sgd_iters=200'],
-    ['eps=0.1', 'eps=1.0', 'eps=10.0'],
-    ['K_max=[5]', 'K_max=[10]'],
-]
-
-Learn_PDLP_params = conditional_product(
-    common_options=PDLP_options,
-    conditional_groups=[],
-)
-
-LogReg_options = [
-    ['alg=vanilla_gd'],
-    ['pep_obj=obj_val'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
-    ['N=20'],
-    ['sgd_iters=500'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-]
-
 func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
     'LogReg': logreg_driver,
-    'PDLP': pdlp_driver,
 }
 
 base_dir_map = {
-    'Quad': 'learn_dro_outputs/Quad',
-    'Lasso': 'learn_dro_outputs/Lasso',
-    'LogReg': 'learn_dro_outputs/LogReg',
-    'PDLP': 'learn_dro_outputs/PDLP'
+    'Quad': 'learn_lpep_outputs/Quad',
+    'Lasso': 'learn_lpep_outputs/Lasso',
+    'LogReg': 'learn_lpep_outputs/LogReg',
 }
 
 
 def main():
     print('len of Learn_Quad_params:', len(Learn_Quad_params))
     print('len of Learn_Lasso_params:', len(Learn_Lasso_params))
-    print('len of Learn_PDLP_params:', len(Learn_PDLP_params))
     # exit(0)
     if len(sys.argv) < 3:
         print('Usage: python run_learning_experiment.py <experiment> <cluster|local>')
@@ -296,15 +241,8 @@ def main():
                 log.error(f'job_idx {job_idx} >= len(Learn_LogReg_params) {len(Learn_LogReg_params)}')
                 exit(1)
             hydra_tags += Learn_LogReg_params[job_idx]
-        if experiment == 'PDLP':
-            if job_idx >= len(Learn_PDLP_params):
-                log.error(f'job_idx {job_idx} >= len(Learn_PDLP_params) {len(Learn_PDLP_params)}')
-                exit(1)
-            hydra_tags += Learn_PDLP_params[job_idx]
 
-    # Preserve user-supplied hydra overrides (args after experiment & target_machine)
-    extra_args = sys.argv[3:]
-    sys.argv = [sys.argv[0]] + hydra_tags + extra_args
+    sys.argv = [sys.argv[0]] + hydra_tags
     driver()
 
 

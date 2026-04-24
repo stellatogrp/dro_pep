@@ -3,11 +3,11 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-# #SBATCH --mem-per-cpu=18G
-#SBATCH --mem=24G
+# # SBATCH --mem-per-cpu=4G
+#SBATCH --mem=2G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-02:15:59
-#SBATCH --array=0-3
+#SBATCH --time=00-02:59:59
+#SBATCH --array=0-8
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
@@ -26,4 +26,4 @@ module load anaconda3/2025.12
 conda activate algover
 
 # cd "$(dirname "$0")/.."
-python run_learning_experiment.py Lasso cluster
+python run_learning_lpep_experiment.py Lasso cluster

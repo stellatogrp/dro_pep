@@ -146,10 +146,23 @@ Learn_LogReg_params = conditional_product(
 Lasso_options = [
     ['learning_framework=l2o'],
     ['alg=ista'],
-    ['N=20'],
+    # ['N=20'],
+    ['training_sample_N=100',
+     'training_sample_N=200',
+     'training_sample_N=300',
+     'training_sample_N=400',
+     'training_sample_N=500',
+     'training_sample_N=600',
+     'training_sample_N=700',
+     'training_sample_N=800',
+     'training_sample_N=900',
+     'training_sample_N=1000'],
     ['dro_obj=expectation'],
-    ['sgd_iters=500'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['sgd_iters=1000'],
+    # ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
+    ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
+    ['weight_decay=1e-5', 'weight_decay=1e-4', 'weight_decay=1e-3'],
+    # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
 Learn_Lasso_params = conditional_product(

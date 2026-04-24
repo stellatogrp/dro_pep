@@ -403,6 +403,38 @@ def _make_fista_traj_fn(A_jax, lambd):
     return wrapped_traj_fn
 
 
+def _load_and_subsample(npz_path, N, seed, dataset_label):
+    """Load a saved problem-instance bundle and subsample N aligned rows.
+
+    Samples indices once with a seeded np.random.Generator and applies them
+    uniformly across b_batch, x_opt_batch, f_opt_batch so row alignment is
+    preserved (row i refers to the same problem across all fields). If N
+    exceeds the available rows, returns all rows and logs a warning.
+
+    Returns (b, x_opt, f_opt) as jnp.ndarrays, or None if the file is missing
+    (caller falls back to fresh sampling).
+    """
+    if not os.path.isfile(npz_path):
+        return None
+    d = np.load(npz_path)
+    total = int(d['b_batch'].shape[0])
+    if N >= total:
+        log.warning(
+            f"{dataset_label}: requested N={N} but {npz_path} has only "
+            f"{total} rows; using all {total}."
+        )
+        idx = np.arange(total)
+    else:
+        rng = np.random.default_rng(int(seed))
+        idx = rng.choice(total, size=N, replace=False)
+    log.info(f"{dataset_label}: loaded {len(idx)} problems from {npz_path}")
+    return (
+        jnp.asarray(d['b_batch'][idx]),
+        jnp.asarray(d['x_opt_batch'][idx]),
+        jnp.asarray(d['f_opt_batch'][idx]),
+    )
+
+
 # =============================================================================
 # LassoProblemModule class
 # =============================================================================
@@ -436,9 +468,17 @@ class LassoProblemModule(ProblemModule):
         """
         super().__init__(cfg)
 
-        # Generate A matrix (fixed across all samples)
-        log.info(f"Generating A matrix with seed={cfg.A_seed}")
-        self.A_np = generate_A(cfg.A_seed, cfg.m, cfg.n)
+        # Load A if a data_source_dir is configured and A_in_dist.npz exists;
+        # otherwise generate A fresh from the configured seed.
+        data_source_dir = cfg.get('data_source_dir', None)
+        A_path = (os.path.join(data_source_dir, 'A_in_dist.npz')
+                  if data_source_dir is not None else None)
+        if A_path is not None and os.path.isfile(A_path):
+            self.A_np = np.load(A_path)['A']
+            log.info(f"Loaded in-distribution A from {A_path}, shape: {self.A_np.shape}")
+        else:
+            log.info(f"Generating A matrix with seed={cfg.A_seed}")
+            self.A_np = generate_A(cfg.A_seed, cfg.m, cfg.n)
         self.A_jax = jnp.array(self.A_np)
 
         # Compute L, mu from A^T A eigenvalues
@@ -472,19 +512,32 @@ class LassoProblemModule(ProblemModule):
     def sample_training_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Generate N training Lasso problem instances.
 
-        Generates b vectors, solves each Lasso problem via CVXPY to get
-        optimal solutions and values. Does NOT include A in the returned
-        dicts (A is bound in trajectory function closures).
+        When `data_source_dir` is configured and `training_set.npz` is present
+        under it, load N rows from there (seeded by `training_seed`). Otherwise
+        generate fresh b vectors and solve via CVXPY for x_opt / f_opt.
 
         Args:
-            key: JAX random key for reproducible sampling.
+            key: JAX random key for reproducible sampling (unused on load path).
             N: Number of problem instances to generate.
 
         Returns:
             problem_data: {'b_batch': (N, m)}
             ground_truth: {'x_opt_batch': (N, n), 'f_opt_batch': (N,)}
         """
-        # Generate b vectors
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample(
+                os.path.join(data_source_dir, 'training_set.npz'),
+                N, self.cfg.training_seed, 'training',
+            )
+            if loaded is not None:
+                b_batch, x_opt_batch, f_opt_batch = loaded
+                return (
+                    {'b_batch': b_batch},
+                    {'x_opt_batch': x_opt_batch, 'f_opt_batch': f_opt_batch},
+                )
+
+        # Fresh-sampling path
         b_batch = generate_batch_b_jax(
             key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std
         )
@@ -504,16 +557,52 @@ class LassoProblemModule(ProblemModule):
     def sample_validation_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Generate N validation Lasso problem instances.
 
-        Same distribution as training batch.
+        When `data_source_dir` is configured and `validation_set.npz` is present
+        under it, load N rows from there (seeded by `out_of_sample_val_seed`).
+        Otherwise fall back to fresh sampling from the training distribution.
 
         Args:
-            key: JAX random key for reproducible sampling.
+            key: JAX random key for reproducible sampling (unused on load path).
             N: Number of problem instances to generate.
 
         Returns:
             problem_data: {'b_batch': (N, m)}
             ground_truth: {'x_opt_batch': (N, n), 'f_opt_batch': (N,)}
         """
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample(
+                os.path.join(data_source_dir, 'validation_set.npz'),
+                N, self.cfg.out_of_sample_val_seed, 'validation',
+            )
+            if loaded is not None:
+                b_batch, x_opt_batch, f_opt_batch = loaded
+                return (
+                    {'b_batch': b_batch},
+                    {'x_opt_batch': x_opt_batch, 'f_opt_batch': f_opt_batch},
+                )
+        # Fresh-sampling fallback: same distribution as training
+        return self.sample_training_batch(key, N)
+
+    def sample_test_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
+        """Generate N in-distribution test Lasso problem instances.
+
+        When `data_source_dir` is configured and `test_set.npz` is present
+        under it, load N rows from there (seeded by `out_of_sample_test_seed`).
+        Otherwise fall back to fresh sampling from the training distribution.
+        """
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample(
+                os.path.join(data_source_dir, 'test_set.npz'),
+                N, self.cfg.out_of_sample_test_seed, 'test',
+            )
+            if loaded is not None:
+                b_batch, x_opt_batch, f_opt_batch = loaded
+                return (
+                    {'b_batch': b_batch},
+                    {'x_opt_batch': x_opt_batch, 'f_opt_batch': f_opt_batch},
+                )
         return self.sample_training_batch(key, N)
 
     def get_trajectory_fn(self, alg: str) -> Callable:
@@ -824,7 +913,7 @@ class LassoProblemModule(ProblemModule):
 
         # In-distribution validation and test sets (same A)
         val_data = self.sample_validation_batch(val_key, N_val)
-        test_data = self.sample_validation_batch(test_key, N_test)
+        test_data = self.sample_test_batch(test_key, N_test)
 
         # Out-of-distribution set (different A with scaling=4.0)
         ood_data = self._sample_ood_batch(ood_key, N_ood)
@@ -842,15 +931,31 @@ class LassoProblemModule(ProblemModule):
         normal used for in-distribution. A is generated with a different seed
         (`A_out_of_dist_seed`) but from the same distribution as in-dist.
 
-        Args:
-            key: JAX random key.
-            N: Number of samples.
-
-        Returns:
-            (problem_data, ground_truth) tuple.
+        When `data_source_dir` is configured, prefer loading `ood_set.npz` and
+        `A_out_of_dist.npz` from there.
         """
-        A_ood_seed = self.cfg.A_out_of_dist_seed
-        A_ood_np = generate_A(A_ood_seed, self.cfg.m, self.cfg.n)
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample(
+                os.path.join(data_source_dir, 'ood_set.npz'),
+                N, self.cfg.out_of_dist_seed, 'ood',
+            )
+            if loaded is not None:
+                b_batch, x_opt_batch, f_opt_batch = loaded
+                return (
+                    {'b_batch': b_batch},
+                    {'x_opt_batch': x_opt_batch, 'f_opt_batch': f_opt_batch},
+                )
+
+        # Fresh-sampling path. Prefer a saved OOD A when available.
+        A_ood_path = (os.path.join(data_source_dir, 'A_out_of_dist.npz')
+                      if data_source_dir is not None else None)
+        if A_ood_path is not None and os.path.isfile(A_ood_path):
+            A_ood_np = np.load(A_ood_path)['A']
+            log.info(f"Loaded OOD A from {A_ood_path}, shape: {A_ood_np.shape}")
+        else:
+            A_ood_seed = self.cfg.A_out_of_dist_seed
+            A_ood_np = generate_A(A_ood_seed, self.cfg.m, self.cfg.n)
         A_ood_jax = jnp.array(A_ood_np)
 
         # Generate b vectors using OOD x_samp distribution
