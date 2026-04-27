@@ -30,6 +30,43 @@ log = logging.getLogger(__name__)
 
 
 # =============================================================================
+# data_source_dir loader (mirror of lasso._load_and_subsample)
+# =============================================================================
+
+def _load_and_subsample_quad(npz_path, N, seed, dataset_label):
+    """Load a saved quad problem-instance bundle and subsample N aligned rows.
+
+    Samples indices once with a seeded np.random.Generator and applies them
+    uniformly across Q_batch, z0_batch, zs_batch, fs_batch so row alignment is
+    preserved. If N exceeds the available rows, returns all rows and logs a
+    warning.
+
+    Returns (Q, z0, zs, fs) as jnp.ndarrays, or None if the file is missing
+    (caller falls back to fresh sampling).
+    """
+    if not os.path.isfile(npz_path):
+        return None
+    d = np.load(npz_path)
+    total = int(d['Q_batch'].shape[0])
+    if N >= total:
+        log.warning(
+            f"{dataset_label}: requested N={N} but {npz_path} has only "
+            f"{total} rows; using all {total}."
+        )
+        idx = np.arange(total)
+    else:
+        rng = np.random.default_rng(int(seed))
+        idx = rng.choice(total, size=N, replace=False)
+    log.info(f"{dataset_label}: loaded {len(idx)} problems from {npz_path}")
+    return (
+        jnp.asarray(d['Q_batch'][idx]),
+        jnp.asarray(d['z0_batch'][idx]),
+        jnp.asarray(d['zs_batch'][idx]),
+        jnp.asarray(d['fs_batch'][idx]),
+    )
+
+
+# =============================================================================
 # Module-level helper functions for sampling
 # =============================================================================
 
@@ -245,22 +282,36 @@ class QuadProblemModule(ProblemModule):
     def sample_training_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Generate N training quadratic problem instances.
 
+        When `data_source_dir` is configured and `training_set.npz` is present
+        under it, load N rows from there (seeded by `training_seed`). Otherwise
+        sample fresh via Marchenko-Pastur.
+
         Args:
-            key: JAX random key for reproducible sampling.
+            key: JAX random key for reproducible sampling (unused on load path).
             N: Number of problem instances to generate.
 
         Returns:
             problem_data: {'Q_batch': (N, M, M), 'z0_batch': (N, M)}
             ground_truth: {'zs_batch': (N, M), 'fs_batch': (N,)}
         """
-        # Split key for independent Q and z0 sampling
-        key, k1, k2 = jax.random.split(key, 3)
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_quad(
+                os.path.join(data_source_dir, 'training_set.npz'),
+                N, self.cfg.training_seed, 'training',
+            )
+            if loaded is not None:
+                Q_batch, z0_batch, zs_batch, fs_batch = loaded
+                return (
+                    {'Q_batch': Q_batch, 'z0_batch': z0_batch},
+                    {'zs_batch': zs_batch, 'fs_batch': fs_batch},
+                )
 
-        # Generate N subkeys for each sampling operation
+        # Fresh-sampling path
+        key, k1, k2 = jax.random.split(key, 3)
         Q_subkeys = jax.random.split(k1, N)
         z0_subkeys = jax.random.split(k2, N)
 
-        # Sample Q matrices and z0 vectors
         Q_batch = get_Q_samples(Q_subkeys, self.d_val, self.mu_val, self.L_val, self.M_val)
         z0_batch = get_z0_samples(z0_subkeys, self.M_val, self.R_val)
 
@@ -276,16 +327,52 @@ class QuadProblemModule(ProblemModule):
     def sample_validation_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Generate N validation quadratic problem instances.
 
-        Same distribution as training batch.
+        When `data_source_dir` is configured and `validation_set.npz` is present
+        under it, load N rows from there (seeded by `out_of_sample_val_seed`).
+        Otherwise fall back to fresh sampling from the training distribution.
 
         Args:
-            key: JAX random key for reproducible sampling.
+            key: JAX random key for reproducible sampling (unused on load path).
             N: Number of problem instances to generate.
 
         Returns:
             problem_data: {'Q_batch': (N, M, M), 'z0_batch': (N, M)}
             ground_truth: {'zs_batch': (N, M), 'fs_batch': (N,)}
         """
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_quad(
+                os.path.join(data_source_dir, 'validation_set.npz'),
+                N, self.cfg.out_of_sample_val_seed, 'validation',
+            )
+            if loaded is not None:
+                Q_batch, z0_batch, zs_batch, fs_batch = loaded
+                return (
+                    {'Q_batch': Q_batch, 'z0_batch': z0_batch},
+                    {'zs_batch': zs_batch, 'fs_batch': fs_batch},
+                )
+        # Fresh-sampling fallback: same distribution as training
+        return self.sample_training_batch(key, N)
+
+    def sample_test_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
+        """Generate N in-distribution test quadratic problem instances.
+
+        When `data_source_dir` is configured and `test_set.npz` is present
+        under it, load N rows from there (seeded by `out_of_sample_test_seed`).
+        Otherwise fall back to fresh sampling from the training distribution.
+        """
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_quad(
+                os.path.join(data_source_dir, 'test_set.npz'),
+                N, self.cfg.out_of_sample_test_seed, 'test',
+            )
+            if loaded is not None:
+                Q_batch, z0_batch, zs_batch, fs_batch = loaded
+                return (
+                    {'Q_batch': Q_batch, 'z0_batch': z0_batch},
+                    {'zs_batch': zs_batch, 'fs_batch': fs_batch},
+                )
         return self.sample_training_batch(key, N)
 
     def get_trajectory_fn(self, alg: str) -> Callable:
@@ -551,15 +638,16 @@ class QuadProblemModule(ProblemModule):
             Dict with keys 'validation', 'test', 'ood', each mapping to
             (problem_data, ground_truth) tuple.
         """
-        N_oos = self.cfg.out_of_sample_N
+        N_val = self.cfg.out_of_sample_val_N
+        N_test = self.cfg.out_of_sample_test_N
         N_ood = self.cfg.out_of_dist_N
 
         # Split key for each independent dataset
         key, val_key, test_key, ood_key = jax.random.split(key, 4)
 
         # In-distribution validation and test sets
-        val_data = self.sample_validation_batch(val_key, N_oos)
-        test_data = self.sample_validation_batch(test_key, N_oos)
+        val_data = self.sample_validation_batch(val_key, N_val)
+        test_data = self.sample_test_batch(test_key, N_test)
 
         # Out-of-distribution set (different eigenvalue distribution)
         ood_data = self._sample_ood_batch(ood_key, N_ood)
@@ -573,19 +661,36 @@ class QuadProblemModule(ProblemModule):
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Sample out-of-distribution problems with different eigenvalue distribution.
 
+        When `data_source_dir` is configured and `ood_set.npz` is present under
+        it, load N rows from there (seeded by `out_of_dist_seed`). Otherwise
+        sample fresh via the Beta-eigenvalue OOD sampler.
+
         Args:
-            key: JAX random key.
+            key: JAX random key (unused on load path).
             N: Number of samples.
 
         Returns:
             (problem_data, ground_truth) tuple.
         """
-        key, k1, k2 = jax.random.split(key, 3)
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_quad(
+                os.path.join(data_source_dir, 'ood_set.npz'),
+                N, self.cfg.out_of_dist_seed, 'ood',
+            )
+            if loaded is not None:
+                Q_batch, z0_batch, zs_batch, fs_batch = loaded
+                return (
+                    {'Q_batch': Q_batch, 'z0_batch': z0_batch},
+                    {'zs_batch': zs_batch, 'fs_batch': fs_batch},
+                )
 
+        # Fresh-sampling path
+        key, k1, k2 = jax.random.split(key, 3)
         Q_subkeys = jax.random.split(k1, N)
         z0_subkeys = jax.random.split(k2, N)
 
-        # Use OOD Q sampler (Beta distribution eigenvalues + random rotation)
+        # OOD Q sampler (Beta distribution eigenvalues + random rotation)
         Q_batch = get_out_of_dist_Q_samples(Q_subkeys, self.d_val, self.mu_val, self.L_val)
         z0_batch = get_z0_samples(z0_subkeys, self.d_val, self.R_val)
 
@@ -671,19 +776,31 @@ def quad_run(cfg):
     log.info("=== Experiment complete ===")
 
 
-def quad_out_of_sample_run(cfg):
-    """Generate and save out-of-sample test problems for quadratic functions.
+def quad_sample_creation_run(cfg):
+    """Generate and save all Quad problem-instance sets in a unified format.
 
-    Samples cfg.out_of_sample_N problems, each parameterized by a matrix Q
-    and initial iterate z0. Stores results as compressed numpy arrays.
+    Produces four sets, each as a single .npz with keys
+    `Q_batch`, `z0_batch`, `zs_batch`, `fs_batch`:
+        training_set.npz   (in-distribution, size cfg.training_sample_N)
+        validation_set.npz (in-distribution, size cfg.out_of_sample_val_N)
+        test_set.npz       (in-distribution, size cfg.out_of_sample_test_N)
+        ood_set.npz        (out-of-distribution, size cfg.out_of_dist_N;
+                            Beta-eigenvalue Q with random rotation)
 
-    Output files:
-        - Q_samples.npz: Contains 'Q' array of shape (out_of_sample_N, M, M)
-        - z0_samples.npz: Contains 'z0' array of shape (out_of_sample_N, M)
+    Plus split files for the plot pipeline:
+        Q_test_samples.npz, z0_test_samples.npz
+        Q_out_of_dist_samples.npz, z0_out_of_dist_samples.npz
+        out_of_sample_metadata.npz
+
+    For Quad, the optimum is always at the origin (zs=0, fs=0), so no per-
+    instance solver is required.
 
     Args:
         cfg: Hydra configuration object.
     """
+    log.info("=" * 60)
+    log.info("Generating Quad sample-creation problem sets")
+    log.info("=" * 60)
     log.info(cfg)
 
     # Extract config values
@@ -691,69 +808,78 @@ def quad_out_of_sample_run(cfg):
     mu_val = cfg.mu
     L_val = cfg.L
     R_val = cfg.R
-    N_oos = cfg.out_of_sample_N
-    N_ood = cfg.out_of_dist_N
-    seed = cfg.out_of_sample_seed
+    training_sample_N = cfg.training_sample_N
+    training_seed = cfg.training_seed
+    out_of_sample_val_N = cfg.out_of_sample_val_N
+    out_of_sample_test_N = cfg.out_of_sample_test_N
+    out_of_sample_val_seed = cfg.out_of_sample_val_seed
+    out_of_sample_test_seed = cfg.out_of_sample_test_seed
+    out_of_dist_N = cfg.out_of_dist_N
+    out_of_dist_seed = cfg.out_of_dist_seed
 
-    # Compute matrix width for Marchenko-Pastur
+    # Matrix width for in-dist Marchenko-Pastur sampler. OOD Q uses dim instead
+    # of M_val (preserves existing behavior of get_out_of_dist_Q_samples).
     r_val = (np.sqrt(L_val) - np.sqrt(mu_val)) ** 2 / (np.sqrt(L_val) + np.sqrt(mu_val)) ** 2
     M_val = int(np.round(r_val * d_val))
-    log.info(f"Precomputed matrix width M: {M_val}")
-    log.info(f"Generating out-of-sample problems with seed {seed}")
+    log.info(f"Precomputed matrix width M: {M_val} (in-dist), dim: {d_val} (OOD)")
 
-    # Set random key for reproducible sampling
-    key = jax.random.PRNGKey(seed)
+    def _build_set(name, N, seed, filename, ood=False):
+        log.info(f"Generating {N} {name} problems (seed={seed})...")
+        key = jax.random.PRNGKey(seed)
+        key, k1, k2 = jax.random.split(key, 3)
+        Q_subkeys = jax.random.split(k1, N)
+        z0_subkeys = jax.random.split(k2, N)
 
-    # Split keys for Q and z0 sampling
-    key, k1, k2 = jax.random.split(key, 3)
+        if ood:
+            Q_batch = get_out_of_dist_Q_samples(Q_subkeys, d_val, mu_val, L_val)
+            z0_batch = get_z0_samples(z0_subkeys, d_val, R_val)
+        else:
+            Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
+            z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
 
-    # Sample Q matrices and z0 vectors
-    if cfg.out_of_dist_Q:
-        Q_subkeys = jax.random.split(k1, N_ood)
-        z0_subkeys = jax.random.split(k2, N_ood)
-        log.info(f"Sampling {N_ood} Q matrices out of distribution...")
-        Q_batch = get_out_of_dist_Q_samples(Q_subkeys, d_val, mu_val, L_val)
-        log.info("Sampling z0 vectors...")
-        z0_batch = get_z0_samples(z0_subkeys, d_val, R_val)
-    else:
-        Q_subkeys = jax.random.split(k1, N_oos)
-        z0_subkeys = jax.random.split(k2, N_oos)
-        log.info(f"Sampling {N_oos} Q matrices in distribution...")
-        Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
-        log.info("Sampling z0 vectors...")
-        z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
+        Q_np = np.array(Q_batch)
+        z0_np = np.array(z0_batch)
+        zs_np = np.zeros(z0_np.shape, dtype=z0_np.dtype)
+        fs_np = np.zeros(N, dtype=z0_np.dtype)
 
-    log.info(f"Q_batch shape: {Q_batch.shape}")
-    log.info(f"z0_batch shape: {z0_batch.shape}")
+        np.savez_compressed(
+            filename,
+            Q_batch=Q_np,
+            z0_batch=z0_np,
+            zs_batch=zs_np,
+            fs_batch=fs_np,
+        )
+        log.info(f"Saved {filename} (Q {Q_np.shape}, z0 {z0_np.shape})")
 
-    # Convert from JAX arrays to NumPy arrays
-    Q_np = np.array(Q_batch)
-    z0_np = np.array(z0_batch)
+    _build_set("training",   training_sample_N,    training_seed,           "training_set.npz")
+    _build_set("validation", out_of_sample_val_N,  out_of_sample_val_seed,  "validation_set.npz")
+    _build_set("test",       out_of_sample_test_N, out_of_sample_test_seed, "test_set.npz")
+    _build_set("ood",        out_of_dist_N,        out_of_dist_seed,        "ood_set.npz", ood=True)
 
-    # Save as compressed numpy files (directly in Hydra run directory)
-    Q_path = "Q_samples.npz"
-    z0_path = "z0_samples.npz"
+    # Split files for experiment_plots_icml/quad/create_test_plots.py
+    test = np.load("test_set.npz")
+    np.savez_compressed("Q_test_samples.npz",  Q=test["Q_batch"])
+    np.savez_compressed("z0_test_samples.npz", z0=test["z0_batch"])
 
-    np.savez_compressed(Q_path, Q=Q_np)
-    np.savez_compressed(z0_path, z0=z0_np)
+    ood = np.load("ood_set.npz")
+    np.savez_compressed("Q_out_of_dist_samples.npz",  Q=ood["Q_batch"])
+    np.savez_compressed("z0_out_of_dist_samples.npz", z0=ood["z0_batch"])
 
-    log.info(f"Saved Q samples to {Q_path}")
-    log.info(f"Saved z0 samples to {z0_path}")
-
-    # Also save metadata for reference
     metadata = {
-        'out_of_sample_N': N_oos,
-        'out_of_sample_seed': seed,
+        'training_sample_N': training_sample_N,
+        'training_seed': training_seed,
+        'out_of_sample_val_N': out_of_sample_val_N,
+        'out_of_sample_test_N': out_of_sample_test_N,
+        'out_of_sample_val_seed': out_of_sample_val_seed,
+        'out_of_sample_test_seed': out_of_sample_test_seed,
+        'out_of_dist_N': out_of_dist_N,
+        'out_of_dist_seed': out_of_dist_seed,
         'dim': d_val,
         'mu': mu_val,
         'L': L_val,
         'R': R_val,
         'M': M_val,
-        'Q_shape': Q_batch.shape,
-        'z0_shape': z0_batch.shape,
     }
-    metadata_path = "out_of_sample_metadata.npz"
-    np.savez_compressed(metadata_path, **metadata)
-    log.info(f"Saved metadata to {metadata_path}")
+    np.savez_compressed("out_of_sample_metadata.npz", **metadata)
 
-    log.info("=== Out-of-sample generation complete ===")
+    log.info("=== Quad sample-creation complete ===")
