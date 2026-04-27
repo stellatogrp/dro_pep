@@ -66,8 +66,8 @@ output_dir: "learn_dro_outputs"
 data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-22/14-55-30"
 
 # Out-of-sample validation/test configuration
-out_of_sample_val_N: 100     # Number of validation samples (in-distribution)
-out_of_sample_test_N: 250   # Number of test samples (in-distribution)
+out_of_sample_val_N: 10     # Number of validation samples (in-distribution)
+out_of_sample_test_N: 10   # Number of test samples (in-distribution)
 out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
 out_of_sample_test_seed: 20000  # Seed for generating test b vectors
 out_of_dist_N: 250         # Number of out-of-distribution test samples

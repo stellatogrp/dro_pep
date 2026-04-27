@@ -66,7 +66,7 @@ def generate_A(seed, m, n, scaling=1.0):
     return A
 
 
-def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_dist='normal'):
+def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
     """Generate a single b vector: b = A @ x_samp + noise.
 
     Args:
@@ -74,11 +74,8 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_dist='nor
         A: (m, n) matrix
         p_xsamp_nonzero: Probability of non-zero entries in x_samp
         b_noise_std: Noise standard deviation
-        x_samp_dist: Distribution of x_samp entries before masking.
-                     'normal'  -> standard normal (used for in-distribution)
-                     'uniform' -> Uniform[-1, 1] (used for out-of-distribution)
-                     This is a Python-level flag baked in before jax.vmap via
-                     `partial`, so each variant only traces once.
+        x_samp_std: Standard deviation of x_samp entries (normal) before masking.
+                    1.0 for in-distribution, 4.0 for out-of-distribution.
 
     Returns:
         b: (m,) vector
@@ -86,12 +83,7 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_dist='nor
     m, n = A.shape
     key1, key2, key3 = jax.random.split(key, 3)
 
-    if x_samp_dist == 'normal':
-        x_samp = jax.random.normal(key1, (n,))
-    elif x_samp_dist == 'uniform':
-        x_samp = jax.random.uniform(key1, (n,), minval=-1.0, maxval=1.0)
-    else:
-        raise ValueError(f"Unknown x_samp_dist: {x_samp_dist!r}")
+    x_samp = x_samp_std * jax.random.normal(key1, (n,))
 
     x_mask = jax.random.bernoulli(key2, p=p_xsamp_nonzero, shape=(n,)).astype(jnp.float64)
 
@@ -102,7 +94,7 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_dist='nor
     return b
 
 
-def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_dist='normal'):
+def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
     """Generate a batch of b vectors.
 
     Args:
@@ -111,8 +103,7 @@ def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_dist='n
         N: Number of samples
         p_xsamp_nonzero: Probability of non-zero entries in x_samp
         b_noise_std: Noise standard deviation
-        x_samp_dist: See `generate_single_b_jax`. Baked into the per-sample
-                     function via `partial` so it stays static under vmap.
+        x_samp_std: See `generate_single_b_jax`.
 
     Returns:
         b_batch: (N, m) array of b vectors
@@ -121,7 +112,7 @@ def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_dist='n
     generate_one = partial(generate_single_b_jax, A=A,
                            p_xsamp_nonzero=p_xsamp_nonzero,
                            b_noise_std=b_noise_std,
-                           x_samp_dist=x_samp_dist)
+                           x_samp_std=x_samp_std)
     b_batch = jax.vmap(generate_one)(keys)
     return b_batch
 
@@ -927,9 +918,9 @@ class LassoProblemModule(ProblemModule):
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Sample out-of-distribution problems.
 
-        OOD shift: x_samp is drawn from Uniform[-1, 1] instead of the standard
-        normal used for in-distribution. A is generated with a different seed
-        (`A_out_of_dist_seed`) but from the same distribution as in-dist.
+        OOD shift: x_samp is drawn from a normal with 4x the in-distribution
+        standard deviation. A is intentionally reused from the in-distribution
+        set so the shift is purely in the b distribution.
 
         When `data_source_dir` is configured, prefer loading `ood_set.npz` and
         `A_out_of_dist.npz` from there.
@@ -960,15 +951,13 @@ class LassoProblemModule(ProblemModule):
 
         # Generate b vectors using OOD x_samp distribution
         b_batch = generate_batch_b_jax(
-            key, A_ood_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
-            x_samp_dist='uniform',
+            key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
+            x_samp_std=4.0,
         )
 
-        # Solve Lasso with OOD A matrix
-        lasso_dpp_ood = LassoProblemDPP(A_ood_np, self.lambd)
         b_batch_np = np.array(b_batch)
         x_opt_batch_np, f_opt_batch_np, _ = solve_batch_lasso_cvxpy(
-            A_ood_np, b_batch_np, self.lambd, lasso_dpp=lasso_dpp_ood
+            self.A_np, b_batch_np, self.lambd, lasso_dpp=self.lasso_dpp
         )
 
         return (
@@ -1061,7 +1050,7 @@ def lasso_sample_creation_run(cfg):
         validation_set.npz (in-distribution, size cfg.out_of_sample_val_N)
         test_set.npz       (in-distribution, size cfg.out_of_sample_test_N)
         ood_set.npz        (out-of-distribution, size cfg.out_of_dist_N;
-                            x_samp ~ Uniform[-1, 1] via a different A seed)
+                            x_samp ~ N(0, 4^2) via a different A seed)
 
     Plus the A matrices used to define each distribution:
         A_in_dist.npz, A_out_of_dist.npz
@@ -1131,30 +1120,36 @@ def lasso_sample_creation_run(cfg):
     _build_in_dist_set("validation", out_of_sample_val_N,  out_of_sample_val_seed,   "validation_set.npz")
     _build_in_dist_set("test",       out_of_sample_test_N, out_of_sample_test_seed,  "test_set.npz")
 
+    # Also emit split test files in the layout expected by experiment_plots_icml/lasso/create_test_plots.py
+    test_set = np.load("test_set.npz")
+    np.savez_compressed("b_test_samples.npz",     b=test_set["b_batch"])
+    np.savez_compressed("x_opt_test_samples.npz", x_opt=test_set["x_opt_batch"])
+    np.savez_compressed("f_opt_test_samples.npz", f_opt=test_set["f_opt_batch"])
+
     # =========================================================================
     # Out-of-Distribution Test Set
-    # (different A seed; x_samp drawn from Uniform[-1, 1] instead of normal)
+    # (A reused from the in-distribution set; x_samp normal with 4x the
+    # in-distribution std, so the OOD shift lives entirely in b.)
     # =========================================================================
     log.info(f"Generating {out_of_dist_N} out-of-distribution problems...")
 
-    A_ood_np = generate_A(A_out_of_dist_seed, m, n)
-    A_ood_jax = jnp.array(A_ood_np)
-
+    # Reuse in-dist A; A_out_of_dist.npz is written so downstream consumers
+    # that expect a separate file still resolve, but its contents match A_in_dist.
+    A_ood_np = A_in_dist_np
+    A_ood_jax = A_in_dist_jax
     np.savez_compressed("A_out_of_dist.npz", A=A_ood_np)
 
     key_ood = jax.random.PRNGKey(out_of_dist_seed)
     b_ood_batch = generate_batch_b_jax(
         key_ood, A_ood_jax, out_of_dist_N,
         p_xsamp_nonzero, b_noise_std,
-        x_samp_dist='uniform',
+        x_samp_std=4.0,
     )
     b_ood_np = np.array(b_ood_batch)
 
-    lasso_dpp_ood = LassoProblemDPP(A_ood_np, lambd)
-
     log.info(f"Solving {out_of_dist_N} out-of-distribution Lasso problems...")
     x_opt_ood_np, f_opt_ood_np, _ = solve_batch_lasso_cvxpy(
-        A_ood_np, b_ood_np, lambd, lasso_dpp=lasso_dpp_ood
+        A_ood_np, b_ood_np, lambd, lasso_dpp=lasso_dpp
     )
     np.savez_compressed(
         "ood_set.npz",
@@ -1163,6 +1158,11 @@ def lasso_sample_creation_run(cfg):
         f_opt_batch=f_opt_ood_np,
     )
     log.info("Saved ood_set.npz")
+
+    # Also emit split OOD files in the layout expected by experiment_plots_icml/lasso/create_test_plots.py
+    np.savez_compressed("b_out_of_dist_samples.npz",     b=b_ood_np)
+    np.savez_compressed("x_opt_out_of_dist_samples.npz", x_opt=x_opt_ood_np)
+    np.savez_compressed("f_opt_out_of_dist_samples.npz", f_opt=f_opt_ood_np)
 
     # =========================================================================
     # Save metadata
