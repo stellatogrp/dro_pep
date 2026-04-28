@@ -1,8 +1,8 @@
 # Problem parameters
 mu: 1.
 L: 10.
-R: 20.
-dim: 300
+R: 10.
+dim: 400
 
 # type of learning framework
 learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
@@ -43,13 +43,17 @@ precond_type: 'average'
 learn_beta: True  # True or False depending on if beta is learnable or not
 
 # SGD training parameters
-sgd_iters: 500
+sgd_iters: 1000
 eta_t: 1e-3     # learning rate for stepsizes (descent)
 weight_decay: 1e-3  # weight decay for sgd_wd
 
 # Outputs
 output_dir: "learn_dro_outputs"
-data_source_dir: null  # Set to a previous Quad sample-creation Hydra run dir to reuse its bundles.
+# Set to a previous Quad sample-creation Hydra run dir to reuse its bundles (or null otherwise)
+# R = 10:
+data_source_dir: /scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Quad/2026-04-28/17-10-00
+# R = 20:
+# data_source_dir: /scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Quad/2026-04-27/22-13-28  
 
 # Sample sizes
 training_sample_N: 1000

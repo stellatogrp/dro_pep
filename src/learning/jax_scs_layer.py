@@ -288,11 +288,11 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
     # since jax.custom_vjp doesn't support closures with non-JAX objects
     _adjoint_cache = {}
     
-    tol_gap_abs=1e-5
-    tol_gap_rel=1e-5
-    tol_feas=1e-5
-    reduced_tol_gap_abs=1e-4
-    reduced_tol_gap_rel=1e-4
+    tol_gap_abs=1e-6
+    tol_gap_rel=1e-6
+    tol_feas=1e-6
+    reduced_tol_gap_abs=5e-5
+    reduced_tol_gap_rel=5e-5
     reduced_tol_feas=1e-4
 
     @jax.custom_vjp

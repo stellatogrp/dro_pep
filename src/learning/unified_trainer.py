@@ -777,14 +777,17 @@ class UnifiedTrainer:
         initial_start_time = time.perf_counter()
 
         if self.learning_framework == 'lpep':
-            initial_loss = float(loss_fn(sqrt_stepsizes))
+            initial_loss_arr = loss_fn(sqrt_stepsizes)
         else:
             # Use first minibatch for initial loss computation
             initial_minibatch = self._get_minibatch(0)
-            initial_loss = float(loss_fn(sqrt_stepsizes, initial_minibatch))
+            initial_loss_arr = loss_fn(sqrt_stepsizes, initial_minibatch)
 
-        initial_val_loss = float(val_loss_fn(sqrt_stepsizes))
+        initial_val_loss_arr = val_loss_fn(sqrt_stepsizes)
+        jax.block_until_ready((initial_loss_arr, initial_val_loss_arr))
         initial_time = time.perf_counter() - initial_start_time
+        initial_loss = float(initial_loss_arr)
+        initial_val_loss = float(initial_val_loss_arr)
 
         log.info(f'  initial_loss: {initial_loss:.6f}, initial_val_loss: {initial_val_loss:.6f}')
 
@@ -816,9 +819,11 @@ class UnifiedTrainer:
                 minibatch = self._get_minibatch(iter_num)
                 loss, grads = value_and_grad_fn(sqrt_stepsizes, minibatch)
 
+            jax.block_until_ready((loss, grads))
             iter_time = time.perf_counter() - iter_start_time
 
-            log.info(f'  loss: {float(loss):.6f}, iter_time: {iter_time:.3f}s')
+            grad_norm = float(jnp.sqrt(sum(jnp.sum(g ** 2) for g in grads)))
+            log.info(f'  loss: {float(loss):.6f}, grad_norm: {grad_norm:.6f}, iter_time: {iter_time:.3f}s')
 
             # Store loss and timing
             all_losses.append(float(loss))

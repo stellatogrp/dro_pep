@@ -2,15 +2,17 @@
 #SBATCH --job-name=Quad
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=24G
+#SBATCH --cpus-per-task=1
+# # SBATCH --mem-per-cpu=4G
+#SBATCH --mem=3G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-00:59:59
-#SBATCH --array=0-2
+#SBATCH --time=00-02:29:59
+#SBATCH --array=0-89
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1
+#SBATCH --chdir=/home/vranjan/dro_pep/src
 
 # os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='true'
 # export XLA_PYTHON_CLIENT_MEM_FRACTION='0.30'
@@ -23,5 +25,5 @@ module load anaconda3/2025.12
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
-cd "$(dirname "$0")/.."
+# cd "$(dirname "$0")/.."
 python run_learning_l2o_experiment.py Quad cluster

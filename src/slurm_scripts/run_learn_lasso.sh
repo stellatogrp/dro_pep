@@ -4,10 +4,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 # #SBATCH --mem-per-cpu=18G
-#SBATCH --mem=24G
+#SBATCH --mem=12G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-02:15:59
-#SBATCH --array=0-3
+#SBATCH --time=00-08:15:59
+#SBATCH --array=0-149
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
