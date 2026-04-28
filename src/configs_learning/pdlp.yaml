@@ -17,7 +17,9 @@ base_capacity:
   base: 2.0
   scaling: 1.5
 
-warmstart: False
+# Safety factors applied to the empirical pool max in __init__ / sample creation
+m_safety_factor: 1.3
+r_safety_factor: 1.2
 
 # ----------------------------------------------------------------------------
 # Algorithm / framework
@@ -51,9 +53,15 @@ mr_estimation_size: 100                 # pool size for estimating M_val and R_v
 mr_estimation_seed: 20260421
 
 out_of_sample_val_N: 100
-out_of_sample_val_seed: 10000
 out_of_sample_test_N: 200
 out_of_dist_N: 20
+
+# Seeds for sample-creation generation (also used to deterministically
+# subsample N rows from the saved bundles when `data_source_dir` is set).
+training_seed: 40000
+out_of_sample_val_seed: 10000
+out_of_sample_test_seed: 20000
+out_of_dist_seed: 30000
 
 # K_max loop inside pdlp_run (per-K CSV logging)
 K_max: [5, 10, 15]
@@ -82,3 +90,4 @@ weight_decay: 1e-3                      # weight decay for sgd_wd
 # Outputs
 # ----------------------------------------------------------------------------
 output_dir: "learn_dro_outputs"
+data_source_dir: null  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.

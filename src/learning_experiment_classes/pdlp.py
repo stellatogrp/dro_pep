@@ -198,6 +198,50 @@ class FacilityLocationDPP:
 
 
 # =============================================================================
+# data_source_dir loader (mirror of lasso._load_and_subsample)
+# =============================================================================
+
+def _load_and_subsample_pdlp(npz_path, N, seed, dataset_label):
+    """Load a saved PDLP problem-instance bundle and subsample N aligned rows.
+
+    Samples indices once with a seeded np.random.Generator and applies them
+    uniformly across c_batch, K_mat_batch, q_batch, x_opt_batch, y_opt_batch
+    so row alignment is preserved. If N exceeds the available rows, returns
+    all rows and logs a warning.
+
+    Returns ({c_batch, K_mat_batch, q_batch}, {x_opt_batch, y_opt_batch}) as
+    jnp.ndarrays — the same tuple shape produced by
+    _sample_facility_batch_and_solve. Returns None if the file is missing
+    (caller falls back to fresh sampling).
+    """
+    if not os.path.isfile(npz_path):
+        return None
+    d = np.load(npz_path)
+    total = int(d['c_batch'].shape[0])
+    if N >= total:
+        log.warning(
+            f"{dataset_label}: requested N={N} but {npz_path} has only "
+            f"{total} rows; using all {total}."
+        )
+        idx = np.arange(total)
+    else:
+        rng = np.random.default_rng(int(seed))
+        idx = rng.choice(total, size=N, replace=False)
+    log.info(f"{dataset_label}: loaded {len(idx)} problems from {npz_path}")
+    return (
+        {
+            'c_batch': jnp.asarray(d['c_batch'][idx]),
+            'K_mat_batch': jnp.asarray(d['K_mat_batch'][idx]),
+            'q_batch': jnp.asarray(d['q_batch'][idx]),
+        },
+        {
+            'x_opt_batch': jnp.asarray(d['x_opt_batch'][idx]),
+            'y_opt_batch': jnp.asarray(d['y_opt_batch'][idx]),
+        },
+    )
+
+
+# =============================================================================
 # Batched problem generation / stacking (K_mat, q)
 # =============================================================================
 
@@ -351,6 +395,24 @@ class PDLPProblemModule(ProblemModule):
         self.dpp_solver = FacilityLocationDPP(self.n_vars, self.m1, self.m2)
         log.info("Created FacilityLocationDPP solver for batched LP solves")
 
+        # M_val and R_val: prefer cached values from a sample-creation run when
+        # `data_source_dir` is configured, since the mr-estimation pool itself
+        # costs `mr_estimation_size` CVXPY solves. Fall back to fresh pool
+        # estimation otherwise.
+        data_source_dir = cfg.get('data_source_dir', None)
+        meta_path = (os.path.join(data_source_dir, 'out_of_sample_metadata.npz')
+                     if data_source_dir is not None else None)
+        if meta_path is not None and os.path.isfile(meta_path):
+            meta = np.load(meta_path)
+            if 'M_val' in meta.files and 'R_val' in meta.files:
+                self.M_val = float(meta['M_val'])
+                self.R_val = float(meta['R_val'])
+                log.info(
+                    f"Loaded M_val={self.M_val:.6f} R_val={self.R_val:.6f} "
+                    f"from cached metadata at {meta_path}"
+                )
+                return
+
         # Pre-sample a pool to compute M_val = max ||K_mat||_op and R_val.
         mr_N = int(cfg.get('mr_estimation_size', 100))
         mr_seed = int(cfg.get('mr_estimation_seed', 20260421))
@@ -408,15 +470,64 @@ class PDLPProblemModule(ProblemModule):
     # -----------------------------------------------------------------------
 
     def sample_training_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        """Generate + solve N training facility-location instances."""
+        """Generate + solve N training facility-location instances.
+
+        When `data_source_dir` is configured and `training_set.npz` is present
+        under it, load N rows from there (seeded by `training_seed`). Otherwise
+        sample fresh and solve via CVXPY.
+        """
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_pdlp(
+                os.path.join(data_source_dir, 'training_set.npz'),
+                N, self.cfg.training_seed, 'training',
+            )
+            if loaded is not None:
+                return loaded
         return _sample_facility_batch_and_solve(
             key, self.cfg,
             self.n_facilities, self.n_customers, N, self.dpp_solver,
         )
 
     def sample_validation_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        """Same distribution as training."""
+        """Same distribution as training; loads from data_source_dir when set."""
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_pdlp(
+                os.path.join(data_source_dir, 'validation_set.npz'),
+                N, self.cfg.out_of_sample_val_seed, 'validation',
+            )
+            if loaded is not None:
+                return loaded
         return self.sample_training_batch(key, N)
+
+    def sample_test_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
+        """In-distribution test set; loads from data_source_dir when set."""
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_pdlp(
+                os.path.join(data_source_dir, 'test_set.npz'),
+                N, self.cfg.out_of_sample_test_seed, 'test',
+            )
+            if loaded is not None:
+                return loaded
+        return self.sample_training_batch(key, N)
+
+    def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
+        """Out-of-distribution set. Currently OOD = same distribution, different
+        seed (no distribution shift); a real shift is a future work item."""
+        data_source_dir = self.cfg.get('data_source_dir', None)
+        if data_source_dir is not None:
+            loaded = _load_and_subsample_pdlp(
+                os.path.join(data_source_dir, 'ood_set.npz'),
+                N, self.cfg.out_of_dist_seed, 'ood',
+            )
+            if loaded is not None:
+                return loaded
+        return _sample_facility_batch_and_solve(
+            key, self.cfg,
+            self.n_facilities, self.n_customers, N, self.dpp_solver,
+        )
 
     # -----------------------------------------------------------------------
     # Trajectory / PEP wiring
@@ -593,16 +704,16 @@ class PDLPProblemModule(ProblemModule):
     def generate_out_of_sample_data(
         self, key: jax.Array,
     ) -> Dict[str, Tuple[ProblemData, GroundTruth]]:
-        """Validation / test sets (in-distribution). OOD uses a different seed."""
+        """Validation / test / OOD sets. OOD currently shares the in-distribution
+        sampler with a different seed."""
         N_val = int(self.cfg.get('out_of_sample_val_N', 20))
         N_test = int(self.cfg.get('out_of_sample_test_N', 50))
         N_ood = int(self.cfg.get('out_of_dist_N', 50))
 
         key, val_key, test_key, ood_key = jax.random.split(key, 4)
         val = self.sample_validation_batch(val_key, N_val)
-        test = self.sample_validation_batch(test_key, N_test)
-        # For PDLP, OOD is just a different random seed — same problem class.
-        ood = self.sample_validation_batch(ood_key, N_ood)
+        test = self.sample_test_batch(test_key, N_test)
+        ood = self._sample_ood_batch(ood_key, N_ood)
         return {'validation': val, 'test': test, 'ood': ood}
 
     # -----------------------------------------------------------------------
@@ -661,3 +772,160 @@ def pdlp_run(cfg):
         log.info(f'K={K} complete. Final tau={tau_str}. Saved to {csv_path}')
 
     log.info("=== PDLP experiment complete ===")
+
+
+def pdlp_sample_creation_run(cfg):
+    """Generate and save all PDLP problem-instance sets in a unified format.
+
+    Produces four bundles, each as a single .npz with keys
+    `c_batch`, `K_mat_batch`, `q_batch`, `x_opt_batch`, `y_opt_batch`:
+        training_set.npz   (cfg.training_sample_N,    seed cfg.training_seed)
+        validation_set.npz (cfg.out_of_sample_val_N,  seed cfg.out_of_sample_val_seed)
+        test_set.npz       (cfg.out_of_sample_test_N, seed cfg.out_of_sample_test_seed)
+        ood_set.npz        (cfg.out_of_dist_N,        seed cfg.out_of_dist_seed)
+
+    Plus split files for the (future) plot pipeline (one file per per-instance
+    array, key = array name without `_batch`):
+        c_test_samples.npz, K_mat_test_samples.npz, q_test_samples.npz,
+        x_opt_test_samples.npz, y_opt_test_samples.npz
+        c_out_of_dist_samples.npz, K_mat_out_of_dist_samples.npz,
+        q_out_of_dist_samples.npz, x_opt_out_of_dist_samples.npz,
+        y_opt_out_of_dist_samples.npz
+
+    Plus `out_of_sample_metadata.npz` with M_val, R_val, problem-shape arrays
+    (l, u), and the full set of seeds + sample sizes.
+
+    Args:
+        cfg: Hydra configuration object.
+    """
+    log.info("=" * 60)
+    log.info("Generating PDLP sample-creation problem sets")
+    log.info("=" * 60)
+    log.info(cfg)
+
+    n_facilities = int(cfg.n_facilities)
+    n_customers = int(cfg.n_customers)
+    n_vars = n_facilities + n_facilities * n_customers
+    m1 = n_facilities + n_facilities * n_customers
+    m2 = n_customers
+    log.info(
+        f"PDLP shape: n_facilities={n_facilities}, n_customers={n_customers}; "
+        f"n_vars={n_vars}, m1={m1}, m2={m2}"
+    )
+
+    dpp_solver = FacilityLocationDPP(n_vars, m1, m2)
+
+    training_sample_N = int(cfg.training_sample_N)
+    training_seed = int(cfg.training_seed)
+    out_of_sample_val_N = int(cfg.out_of_sample_val_N)
+    out_of_sample_val_seed = int(cfg.out_of_sample_val_seed)
+    out_of_sample_test_N = int(cfg.out_of_sample_test_N)
+    out_of_sample_test_seed = int(cfg.out_of_sample_test_seed)
+    out_of_dist_N = int(cfg.out_of_dist_N)
+    out_of_dist_seed = int(cfg.out_of_dist_seed)
+
+    def _build_set(name, N, seed, filename):
+        log.info(f"Generating {N} {name} problems (seed={seed})...")
+        key = jax.random.PRNGKey(seed)
+        problem_data, ground_truth = _sample_facility_batch_and_solve(
+            key, cfg, n_facilities, n_customers, N, dpp_solver,
+        )
+        np.savez_compressed(
+            filename,
+            c_batch=np.asarray(problem_data['c_batch']),
+            K_mat_batch=np.asarray(problem_data['K_mat_batch']),
+            q_batch=np.asarray(problem_data['q_batch']),
+            x_opt_batch=np.asarray(ground_truth['x_opt_batch']),
+            y_opt_batch=np.asarray(ground_truth['y_opt_batch']),
+        )
+        log.info(f"Saved {filename}")
+        return problem_data, ground_truth
+
+    train_pd, train_gt = _build_set(
+        "training",   training_sample_N,    training_seed,           "training_set.npz")
+    _build_set(
+        "validation", out_of_sample_val_N,  out_of_sample_val_seed,  "validation_set.npz")
+    _build_set(
+        "test",       out_of_sample_test_N, out_of_sample_test_seed, "test_set.npz")
+    _build_set(
+        "ood",        out_of_dist_N,        out_of_dist_seed,        "ood_set.npz")
+
+    # -------------------------------------------------------------------------
+    # Split files for plot consumers (mirrors lasso/quad split-file convention).
+    # One file per per-instance array; key = array name without `_batch` suffix.
+    # -------------------------------------------------------------------------
+    def _split(bundle_path, suffix):
+        bundle = np.load(bundle_path)
+        for batched_key in ('c_batch', 'K_mat_batch', 'q_batch',
+                            'x_opt_batch', 'y_opt_batch'):
+            plain_key = batched_key[:-len('_batch')]
+            np.savez_compressed(
+                f"{plain_key}_{suffix}_samples.npz",
+                **{plain_key: bundle[batched_key]},
+            )
+        log.info(f"Wrote split files for {suffix} ({bundle_path})")
+
+    _split("test_set.npz", "test")
+    _split("ood_set.npz",  "out_of_dist")
+
+    # -------------------------------------------------------------------------
+    # M_val and R_val computed from the training pool, mirroring __init__.
+    # Saved into metadata so a future training run pointed at this dir can skip
+    # the mr-estimation pool entirely.
+    # -------------------------------------------------------------------------
+    K_mat_train = np.asarray(train_pd['K_mat_batch'])
+    pool_op_norms = np.array([
+        np.linalg.norm(K_mat_train[i], ord=2) for i in range(training_sample_N)
+    ])
+    m_safety = float(cfg.get('m_safety_factor', 1.3))
+    M_val = float(pool_op_norms.max() * m_safety)
+    log.info(
+        f"M_val = {M_val:.6f}  (training-pool max ||K||_op = "
+        f"{pool_op_norms.max():.6f}, safety = {m_safety})"
+    )
+
+    x_opt_train = np.asarray(train_gt['x_opt_batch'])
+    y_opt_train = np.asarray(train_gt['y_opt_batch'])
+    x0_ref = 0.5 * np.ones(n_vars)
+    y0_ref = np.concatenate([0.1 * np.ones(m1), np.zeros(m2)])
+    pool_euc_sq = np.zeros(training_sample_N)
+    for i in range(training_sample_N):
+        dx_i = x0_ref - x_opt_train[i]
+        dy_i = y0_ref - y_opt_train[i]
+        pool_euc_sq[i] = dx_i @ dx_i + dy_i @ dy_i
+    r_safety = float(cfg.get('r_safety_factor', 1.2))
+    max_euc_sq = float(np.max(pool_euc_sq))
+    R_val = float(np.sqrt(max_euc_sq) * r_safety)
+    log.info(
+        f"R_val = {R_val:.6f}  (max training-pool Euclidean^2 = "
+        f"{max_euc_sq:.4f}, safety = {r_safety})"
+    )
+
+    np.savez_compressed(
+        "out_of_sample_metadata.npz",
+        # PEP / IC-radius parameters (loaded by __init__ to skip mr-estimation)
+        M_val=M_val,
+        R_val=R_val,
+        m_safety_factor=m_safety,
+        r_safety_factor=r_safety,
+        # Problem shape (consumed by future plot scripts; box bounds explicit)
+        n_facilities=n_facilities,
+        n_customers=n_customers,
+        n_vars=n_vars,
+        m1=m1,
+        m2=m2,
+        l=np.zeros(n_vars),
+        u=np.ones(n_vars),
+        # Sizes
+        training_sample_N=training_sample_N,
+        out_of_sample_val_N=out_of_sample_val_N,
+        out_of_sample_test_N=out_of_sample_test_N,
+        out_of_dist_N=out_of_dist_N,
+        # Seeds (also consumed by sample_*_batch on load)
+        training_seed=training_seed,
+        out_of_sample_val_seed=out_of_sample_val_seed,
+        out_of_sample_test_seed=out_of_sample_test_seed,
+        out_of_dist_seed=out_of_dist_seed,
+    )
+
+    log.info("=== PDLP sample-creation complete ===")

@@ -691,8 +691,8 @@ class QuadProblemModule(ProblemModule):
         z0_subkeys = jax.random.split(k2, N)
 
         # OOD Q sampler (Beta distribution eigenvalues + random rotation)
-        Q_batch = get_out_of_dist_Q_samples(Q_subkeys, self.d_val, self.mu_val, self.L_val)
-        z0_batch = get_z0_samples(z0_subkeys, self.d_val, self.R_val)
+        Q_batch = get_out_of_dist_Q_samples(Q_subkeys, self.M_val, self.mu_val, self.L_val)
+        z0_batch = get_z0_samples(z0_subkeys, self.M_val, self.R_val)
 
         zs_batch = jnp.zeros(z0_batch.shape)
         fs_batch = jnp.zeros(N)
@@ -785,7 +785,8 @@ def quad_sample_creation_run(cfg):
         validation_set.npz (in-distribution, size cfg.out_of_sample_val_N)
         test_set.npz       (in-distribution, size cfg.out_of_sample_test_N)
         ood_set.npz        (out-of-distribution, size cfg.out_of_dist_N;
-                            Beta-eigenvalue Q with random rotation)
+                            Beta-eigenvalue Q with random rotation, matrix
+                            width M_val to match in-dist)
 
     Plus split files for the plot pipeline:
         Q_test_samples.npz, z0_test_samples.npz
@@ -817,11 +818,10 @@ def quad_sample_creation_run(cfg):
     out_of_dist_N = cfg.out_of_dist_N
     out_of_dist_seed = cfg.out_of_dist_seed
 
-    # Matrix width for in-dist Marchenko-Pastur sampler. OOD Q uses dim instead
-    # of M_val (preserves existing behavior of get_out_of_dist_Q_samples).
+    # Matrix width for both in-dist (Marchenko-Pastur) and OOD samplers.
     r_val = (np.sqrt(L_val) - np.sqrt(mu_val)) ** 2 / (np.sqrt(L_val) + np.sqrt(mu_val)) ** 2
     M_val = int(np.round(r_val * d_val))
-    log.info(f"Precomputed matrix width M: {M_val} (in-dist), dim: {d_val} (OOD)")
+    log.info(f"Precomputed matrix width M: {M_val} (used for both in-dist and OOD)")
 
     def _build_set(name, N, seed, filename, ood=False):
         log.info(f"Generating {N} {name} problems (seed={seed})...")
@@ -831,8 +831,8 @@ def quad_sample_creation_run(cfg):
         z0_subkeys = jax.random.split(k2, N)
 
         if ood:
-            Q_batch = get_out_of_dist_Q_samples(Q_subkeys, d_val, mu_val, L_val)
-            z0_batch = get_z0_samples(z0_subkeys, d_val, R_val)
+            Q_batch = get_out_of_dist_Q_samples(Q_subkeys, M_val, mu_val, L_val)
+            z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
         else:
             Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)
             z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
