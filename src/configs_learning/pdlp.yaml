@@ -85,6 +85,7 @@ optimizer_type: "adamw"
 sgd_iters: 1000
 eta_t: 1e-3                             # learning rate for stepsizes
 weight_decay: 1e-3                      # weight decay for sgd_wd
+grad_clip_norm: 1.0                     # max L2 norm across full gradient tuple; norms above this are scaled down (direction preserved)
 
 # ----------------------------------------------------------------------------
 # Outputs

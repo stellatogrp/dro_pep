@@ -92,6 +92,9 @@ class UnifiedTrainer:
         # Optimizer parameters
         self.weight_decay = cfg.get('weight_decay', 1e-2)
         self.learn_beta = cfg.get('learn_beta', True)
+        # Max L2 norm across the full gradient tuple before the optimizer step.
+        # Norms above this are scaled to exactly this value (direction preserved).
+        self.grad_clip_norm = cfg.get('grad_clip_norm', 1.0)
 
         # State
         self.optimizer = None
@@ -794,6 +797,10 @@ class UnifiedTrainer:
         all_losses = [initial_loss]
         all_val_losses = [initial_val_loss]
         all_times = [initial_time]
+        # No grad is computed for the initial-loss probe; pad so this list
+        # aligns with stepsizes_history / losses / times. Stores the raw
+        # (pre-clip) norm so the CSV records the diagnostic signal.
+        all_raw_grad_norms = [float('nan')]
 
         # Determine update mask for manual optimizers
         update_mask = self._get_update_mask(sqrt_stepsizes)
@@ -804,6 +811,14 @@ class UnifiedTrainer:
         # Training iterations
         n_iters = self.sgd_iters
         for iter_num in range(n_iters):
+            # Shuffle training data at the start of each epoch (stochastic frameworks only).
+            # Without this, _get_minibatch cycles through the same fixed slices every epoch.
+            if self.learning_framework != 'lpep' and iter_num % self.n_minibatches == 0:
+                log.info(f'Epoch {iter_num // self.n_minibatches}: shuffling training data')
+                self.key, subkey = jax.random.split(self.key)
+                perm = jax.random.permutation(subkey, self.training_sample_N)
+                self.training_data = {k: v[perm] for k, v in self.training_data.items()}
+
             # Log progress (shows actual stepsize = sqrt_stepsize ** 2)
             self._log_iteration(iter_num, sqrt_stepsizes, K)
 
@@ -822,14 +837,26 @@ class UnifiedTrainer:
             jax.block_until_ready((loss, grads))
             iter_time = time.perf_counter() - iter_start_time
 
-            grad_norm = float(jnp.sqrt(sum(jnp.sum(g ** 2) for g in grads)))
-            log.info(f'  loss: {float(loss):.6f}, grad_norm: {grad_norm:.6f}, iter_time: {iter_time:.3f}s')
+            # Raw (pre-clip) gradient norm — single global L2 across the whole
+            # tuple, matching the per-element-squared-and-summed convention.
+            raw_grad_norm = float(jnp.sqrt(sum(jnp.sum(g ** 2) for g in grads)))
 
-            # Store loss and timing
+            # Global-norm gradient clipping. If the raw norm exceeds the
+            # threshold, scale every tuple element by the same factor so the
+            # gradient direction is preserved and only its magnitude shrinks.
+            if raw_grad_norm > self.grad_clip_norm:
+                scale = self.grad_clip_norm / raw_grad_norm
+                grads = tuple(g * scale for g in grads)
+
+            log.info(f'  loss: {float(loss):.6f}, raw_grad_norm: {raw_grad_norm:.6f}, '
+                     f'iter_time: {iter_time:.3f}s')
+
+            # Store loss, timing, raw grad norm (w.r.t. sqrt-reparameterized params)
             all_losses.append(float(loss))
             all_times.append(iter_time)
+            all_raw_grad_norms.append(raw_grad_norm)
 
-            # Optimizer step (on sqrt params)
+            # Optimizer step (on sqrt params, using clipped grads)
             sqrt_stepsizes = self._optimizer_step(sqrt_stepsizes, grads, update_mask)
 
             # Compute validation loss with updated stepsizes
@@ -841,7 +868,7 @@ class UnifiedTrainer:
             all_stepsizes_vals.append(to_actual(sqrt_stepsizes))
 
             # Save checkpoint
-            self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, csv_path)
+            self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, all_raw_grad_norms, csv_path)
 
         # Return result (actual stepsize form)
         return TrainingResult(
@@ -933,7 +960,8 @@ class UnifiedTrainer:
 
     def _save_checkpoint(
         self, stepsizes_history: List[Stepsizes], K_max: int,
-        losses: List[float], val_losses: List[float], times: List[float], csv_path: str
+        losses: List[float], val_losses: List[float], times: List[float],
+        raw_grad_norms: List[float], csv_path: str
     ):
         """Save progress to CSV via problem_module.build_stepsizes_dataframe().
 
@@ -943,6 +971,8 @@ class UnifiedTrainer:
             losses: List of training loss values.
             val_losses: List of validation loss values.
             times: List of iteration times in seconds.
+            raw_grad_norms: List of pre-clip gradient norms w.r.t.
+                sqrt-reparameterized params.
             csv_path: Path to save CSV.
         """
         df = self.problem_module.build_stepsizes_dataframe(
@@ -952,5 +982,6 @@ class UnifiedTrainer:
             training_losses=losses,
             validation_losses=val_losses,
             times=times,
+            raw_grad_norms=raw_grad_norms,
         )
         df.to_csv(csv_path, index=False)

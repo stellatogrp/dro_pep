@@ -191,6 +191,7 @@ class ProblemModule(ABC):
         training_losses: list[float] | None = None,
         validation_losses: list[float] | None = None,
         times: list[float] | None = None,
+        raw_grad_norms: list[float] | None = None,
     ) -> pd.DataFrame:
         """Build problem-specific DataFrame for CSV output.
 
@@ -206,10 +207,13 @@ class ProblemModule(ABC):
             validation_losses: Optional list of validation loss values per iteration
                 (computed using true PEP objective on held-out data).
             times: Optional list of iteration times in seconds.
+            raw_grad_norms: Optional list of pre-clip gradient norms (w.r.t.
+                sqrt-reparameterized params, i.e. the params we actually take
+                SGD steps on).
 
         Returns:
             DataFrame with columns for iteration, stepsizes, training_loss,
-            validation_loss, and times.
+            validation_loss, times, and raw_grad_norm.
         """
         pass
 

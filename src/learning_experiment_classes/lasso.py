@@ -702,6 +702,7 @@ class LassoProblemModule(ProblemModule):
         training_losses: list[float] | None = None,
         validation_losses: list[float] | None = None,
         times: list[float] | None = None,
+        raw_grad_norms: list[float] | None = None,
     ) -> pd.DataFrame:
         """Build DataFrame from stepsizes history for CSV saving.
 
@@ -712,9 +713,12 @@ class LassoProblemModule(ProblemModule):
             training_losses: Optional list of training loss values per iteration.
             validation_losses: Optional list of validation loss values per iteration.
             times: Optional list of iteration times in seconds.
+            raw_grad_norms: Optional list of pre-clip gradient norms w.r.t.
+                sqrt-reparameterized params (the params SGD actually steps on).
 
         Returns:
-            DataFrame with columns for iteration, stepsizes, losses, and times.
+            DataFrame with columns for iteration, stepsizes, losses, times,
+            and raw_grad_norm.
         """
         gamma_sample = stepsizes_history[0][0]
         is_vector_gamma = jnp.ndim(gamma_sample) > 0
@@ -730,6 +734,9 @@ class LassoProblemModule(ProblemModule):
 
         if times is not None:
             data['iter_time'] = [float(t) for t in times]
+
+        if raw_grad_norms is not None:
+            data['raw_grad_norm'] = [float(g) for g in raw_grad_norms]
 
         # Gamma columns
         if is_vector_gamma:
