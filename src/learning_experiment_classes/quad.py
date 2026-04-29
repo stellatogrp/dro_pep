@@ -448,10 +448,10 @@ class QuadProblemModule(ProblemModule):
                 if self.cfg.vector_init == "silver":
                     t = jnp.array(get_strongly_convex_silver_stepsizes(K, mu=mu, L=L))
                 else:  # "fixed"
-                    t_scalar = 2.0 / (mu + L) if mu > 0 else 1.5 / L
+                    t_scalar = 1.5 / (mu + L) if mu > 0 else 1.5 / L
                     t = jnp.full(K, t_scalar)
             else:
-                t_scalar = 2.0 / (mu + L) if mu > 0 else 1.5 / L
+                t_scalar = 1.5 / (mu + L) if mu > 0 else 1.5 / L
                 t = jnp.array(t_scalar)
             return (t,)
         else:

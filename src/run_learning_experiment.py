@@ -126,7 +126,7 @@ Quad_options = [
     # ['alpha=0.1'],
     ['stepsize_type=vector'],
     # ['vector_init=fixed', 'vector_init=silver'],
-    ['eps=0', 'eps=1e-3', 'eps=0.01', 'eps=0.1', 'eps=1.0'],
+    ['eps=1e-3', 'eps=0.01', 'eps=0.1', 'eps=1.0'],
     # ['mu=1'],
     ['N=20'],
     ['sgd_iters=500'],

@@ -181,6 +181,7 @@ Lasso_options = [
     ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
     ['weight_decay=1e-5', 'weight_decay=1e-4', 'weight_decay=1e-3'],
     # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
 ]
 
 Learn_Lasso_params = conditional_product(
