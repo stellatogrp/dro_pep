@@ -7,7 +7,7 @@
 #SBATCH --mem=12G
 # #SBATCH --constraint=intel
 #SBATCH --time=00-08:15:59
-#SBATCH --array=0-149
+#SBATCH --array=0-239
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu

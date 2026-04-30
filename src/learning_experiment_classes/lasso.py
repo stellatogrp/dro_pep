@@ -266,7 +266,8 @@ def compute_sample_radius(cfg, A_np, lasso_dpp=None):
     key = jax.random.PRNGKey(cfg.R_seed)
     b_batch = generate_batch_b_jax(
         key, jnp.array(A_np), cfg.R_sample_size,
-        cfg.p_xsamp_nonzero, cfg.b_noise_std
+        cfg.p_xsamp_nonzero, cfg.b_noise_std,
+        x_samp_std=cfg.x_samp_std_in_dist,
     )
     b_batch_np = np.array(b_batch)
 
@@ -530,7 +531,8 @@ class LassoProblemModule(ProblemModule):
 
         # Fresh-sampling path
         b_batch = generate_batch_b_jax(
-            key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std
+            key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
+            x_samp_std=self.cfg.x_samp_std_in_dist,
         )
 
         # Solve Lasso to get x_opt, f_opt for each sample
@@ -703,6 +705,7 @@ class LassoProblemModule(ProblemModule):
         validation_losses: list[float] | None = None,
         times: list[float] | None = None,
         raw_grad_norms: list[float] | None = None,
+        lrs: list[float] | None = None,
     ) -> pd.DataFrame:
         """Build DataFrame from stepsizes history for CSV saving.
 
@@ -715,10 +718,11 @@ class LassoProblemModule(ProblemModule):
             times: Optional list of iteration times in seconds.
             raw_grad_norms: Optional list of pre-clip gradient norms w.r.t.
                 sqrt-reparameterized params (the params SGD actually steps on).
+            lrs: Optional list of scheduled learning rates per iteration.
 
         Returns:
             DataFrame with columns for iteration, stepsizes, losses, times,
-            and raw_grad_norm.
+            raw_grad_norm, and lr.
         """
         gamma_sample = stepsizes_history[0][0]
         is_vector_gamma = jnp.ndim(gamma_sample) > 0
@@ -737,6 +741,9 @@ class LassoProblemModule(ProblemModule):
 
         if raw_grad_norms is not None:
             data['raw_grad_norm'] = [float(g) for g in raw_grad_norms]
+
+        if lrs is not None:
+            data['lr'] = [float(x) for x in lrs]
 
         # Gamma columns
         if is_vector_gamma:
@@ -925,9 +932,10 @@ class LassoProblemModule(ProblemModule):
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Sample out-of-distribution problems.
 
-        OOD shift: x_samp is drawn from a normal with 4x the in-distribution
-        standard deviation. A is intentionally reused from the in-distribution
-        set so the shift is purely in the b distribution.
+        OOD shift: x_samp is drawn from a normal with std
+        cfg.x_samp_std_out_of_dist (vs cfg.x_samp_std_in_dist for the in-dist
+        sets). A is intentionally reused from the in-distribution set so the
+        shift is purely in the b distribution.
 
         When `data_source_dir` is configured, prefer loading `ood_set.npz` and
         `A_out_of_dist.npz` from there.
@@ -959,7 +967,7 @@ class LassoProblemModule(ProblemModule):
         # Generate b vectors using OOD x_samp distribution
         b_batch = generate_batch_b_jax(
             key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
-            x_samp_std=4.0,
+            x_samp_std=self.cfg.x_samp_std_out_of_dist,
         )
 
         b_batch_np = np.array(b_batch)
@@ -1090,6 +1098,8 @@ def lasso_sample_creation_run(cfg):
     out_of_dist_seed = cfg.get('out_of_dist_seed', out_of_sample_val_seed + 1)
     p_xsamp_nonzero = cfg.p_xsamp_nonzero
     b_noise_std = cfg.b_noise_std
+    x_samp_std_in_dist = cfg.x_samp_std_in_dist
+    x_samp_std_out_of_dist = cfg.x_samp_std_out_of_dist
 
     # =========================================================================
     # In-distribution A matrix (shared by training, validation, test)
@@ -1108,13 +1118,15 @@ def lasso_sample_creation_run(cfg):
         key = jax.random.PRNGKey(seed)
         b_batch = generate_batch_b_jax(
             key, A_in_dist_jax, N, p_xsamp_nonzero, b_noise_std,
+            x_samp_std=x_samp_std_in_dist,
         )
         b_batch_np = np.array(b_batch)
 
         log.info(f"Solving {N} {name} Lasso problems...")
-        x_opt_np, f_opt_np, _ = solve_batch_lasso_cvxpy(
+        x_opt_np, f_opt_np, R_max = solve_batch_lasso_cvxpy(
             A_in_dist_np, b_batch_np, lambd, lasso_dpp=lasso_dpp
         )
+        log.info(f"sample maximum radius ({name}): {R_max:.6f}")
         np.savez_compressed(
             filename,
             b_batch=b_batch_np,
@@ -1150,7 +1162,7 @@ def lasso_sample_creation_run(cfg):
     b_ood_batch = generate_batch_b_jax(
         key_ood, A_ood_jax, out_of_dist_N,
         p_xsamp_nonzero, b_noise_std,
-        x_samp_std=4.0,
+        x_samp_std=x_samp_std_out_of_dist,
     )
     b_ood_np = np.array(b_ood_batch)
 
@@ -1190,6 +1202,8 @@ def lasso_sample_creation_run(cfg):
         'A_out_of_dist_seed': A_out_of_dist_seed,
         'p_xsamp_nonzero': p_xsamp_nonzero,
         'b_noise_std': b_noise_std,
+        'x_samp_std_in_dist': x_samp_std_in_dist,
+        'x_samp_std_out_of_dist': x_samp_std_out_of_dist,
     }
     np.savez_compressed("out_of_sample_metadata.npz", **metadata)
 

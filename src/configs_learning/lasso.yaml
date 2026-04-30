@@ -3,11 +3,12 @@ m: 250
 n: 500
 lambd: 0.4
 
-R_nonstrongcvx: 8.28634 # 1.2 * 6.905287
+# R_nonstrongcvx: 8.28634 # 1.2 * 6.905287  # with x std 1
+R_nonstrongcvx: 18.48 # 1.1 * 16.828221  # with x std 2
 
 # Sample sizes
 N: 10                # Batch size for SGD training
-training_sample_N: 100  # Number of training samples (pre-sampled for sliding window)
+training_sample_N: 1000  # Number of training samples (pre-sampled for sliding window)
 R_sample_size: 1000     # Number of samples for R computation (if R is null)
 
 # Random seeds
@@ -20,6 +21,12 @@ A_out_of_dist_seed: 4000
 
 p_xsamp_nonzero: 0.1   # Probability of non-zero entries in x samples
 b_noise_std: 1e-2
+
+# Standard deviation of x_samp entries (normal) before sparsity masking.
+# Used to define the in-distribution training/validation/test b distribution
+# and the out-of-distribution shift applied for OOD evaluation.
+x_samp_std_in_dist: 2.0
+x_samp_std_out_of_dist: 1.0
 
 z0_type: 'zero'
 
@@ -64,11 +71,14 @@ grad_clip_norm: 1.0  # max L2 norm across the full gradient tuple; norms above t
 
 # Outputs
 output_dir: "learn_dro_outputs"
-data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-22/14-55-30"
+# xsamp std 1
+# data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-22/14-55-30"
+# xsamp std 2
+data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-30/00-13-51"
 
 # Out-of-sample validation/test configuration
-out_of_sample_val_N: 10     # Number of validation samples (in-distribution)
-out_of_sample_test_N: 10   # Number of test samples (in-distribution)
+out_of_sample_val_N: 250     # Number of validation samples (in-distribution)
+out_of_sample_test_N: 250   # Number of test samples (in-distribution)
 out_of_sample_val_seed: 10000   # Seed for generating validation b vectors
 out_of_sample_test_seed: 20000  # Seed for generating test b vectors
 out_of_dist_N: 250         # Number of out-of-distribution test samples

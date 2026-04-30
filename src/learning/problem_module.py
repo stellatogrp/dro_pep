@@ -192,6 +192,7 @@ class ProblemModule(ABC):
         validation_losses: list[float] | None = None,
         times: list[float] | None = None,
         raw_grad_norms: list[float] | None = None,
+        lrs: list[float] | None = None,
     ) -> pd.DataFrame:
         """Build problem-specific DataFrame for CSV output.
 
@@ -210,10 +211,11 @@ class ProblemModule(ABC):
             raw_grad_norms: Optional list of pre-clip gradient norms (w.r.t.
                 sqrt-reparameterized params, i.e. the params we actually take
                 SGD steps on).
+            lrs: Optional list of scheduled learning rates per iteration.
 
         Returns:
             DataFrame with columns for iteration, stepsizes, training_loss,
-            validation_loss, times, and raw_grad_norm.
+            validation_loss, times, raw_grad_norm, and lr.
         """
         pass
 

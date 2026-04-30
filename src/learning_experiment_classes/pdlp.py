@@ -588,6 +588,7 @@ class PDLPProblemModule(ProblemModule):
         validation_losses: list[float] | None = None,
         times: list[float] | None = None,
         raw_grad_norms: list[float] | None = None,
+        lrs: list[float] | None = None,
     ) -> pd.DataFrame:
         """Build CSV rows with per-K tau/sigma/theta columns.
 
@@ -595,7 +596,8 @@ class PDLPProblemModule(ProblemModule):
         Vector stepsizes → tau_k, sigma_k, theta_k for k = 0 .. K_max-1.
 
         raw_grad_norms (w.r.t. sqrt-reparameterized params, pre-clip) is added
-        as an optional `raw_grad_norm` column.
+        as an optional `raw_grad_norm` column. lrs is added as an optional
+        `lr` column reporting the per-iteration scheduled learning rate.
         """
         tau_sample = stepsizes_history[0][0]
         is_vector = jnp.ndim(tau_sample) > 0
@@ -610,6 +612,8 @@ class PDLPProblemModule(ProblemModule):
             data['iter_time'] = [float(t) for t in times]
         if raw_grad_norms is not None:
             data['raw_grad_norm'] = [float(g) for g in raw_grad_norms]
+        if lrs is not None:
+            data['lr'] = [float(x) for x in lrs]
 
         if is_vector:
             for k in range(K_max):

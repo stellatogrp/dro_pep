@@ -125,8 +125,8 @@ Quad_options = [
     # ['mu=1'],
     # ['N=20'],
     ['sgd_iters=1000'],
-    ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
-    ['weight_decay=1e-5', 'weight_decay=1e-4', 'weight_decay=1e-3'],
+    ['eta_t=1e-4', 'eta_t=1e-3'],
+    ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
     ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]'],
 ]
 
@@ -164,7 +164,7 @@ Learn_LogReg_params = conditional_product(
 Lasso_options = [
     ['learning_framework=l2o'],
     ['alg=ista'],
-    # ['N=20'],
+    ['N=10'],
     ['training_sample_N=100',
      'training_sample_N=200',
      'training_sample_N=300',
@@ -179,9 +179,9 @@ Lasso_options = [
     ['sgd_iters=1000'],
     # ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
     ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
-    ['weight_decay=1e-5', 'weight_decay=1e-4', 'weight_decay=1e-3'],
+    ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
     # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]'],
 ]
 
 Learn_Lasso_params = conditional_product(

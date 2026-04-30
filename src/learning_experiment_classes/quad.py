@@ -466,6 +466,7 @@ class QuadProblemModule(ProblemModule):
         validation_losses: list[float] | None = None,
         times: list[float] | None = None,
         raw_grad_norms: list[float] | None = None,
+        lrs: list[float] | None = None,
     ) -> pd.DataFrame:
         """Build DataFrame from stepsizes history for CSV saving.
 
@@ -478,10 +479,11 @@ class QuadProblemModule(ProblemModule):
             times: Optional list of iteration times in seconds.
             raw_grad_norms: Optional list of pre-clip gradient norms w.r.t.
                 sqrt-reparameterized params (the params SGD actually steps on).
+            lrs: Optional list of scheduled learning rates per iteration.
 
         Returns:
             DataFrame with columns for iteration, stepsizes, losses, times,
-            and raw_grad_norm.
+            raw_grad_norm, and lr.
         """
         # Determine stepsize structure
         t_sample = stepsizes_history[0][0]
@@ -506,6 +508,10 @@ class QuadProblemModule(ProblemModule):
         # Add raw (pre-clip) grad-norm column (w.r.t. sqrt-reparameterized params)
         if raw_grad_norms is not None:
             data['raw_grad_norm'] = [float(g) for g in raw_grad_norms]
+
+        # Add scheduled-LR column adjacent to raw_grad_norm
+        if lrs is not None:
+            data['lr'] = [float(x) for x in lrs]
 
         # Extract t values (first element of each stepsizes tuple)
         if is_vector_t:

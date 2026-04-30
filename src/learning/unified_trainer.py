@@ -14,6 +14,7 @@ not in training loop structure:
 import jax
 import jax.numpy as jnp
 import logging
+import optax
 import os
 import time
 from typing import Callable, Dict, Tuple, List, Any
@@ -22,7 +23,6 @@ import numpy as np
 
 from learning.training_result import TrainingResult, Stepsizes
 from learning.problem_module import ProblemModule
-from learning.adam_optimizers import AdamWMin
 from learning.jax_scs_layer import wc_pep_scs_solve, dro_scs_solve, compute_preconditioner_from_samples
 
 log = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class UnifiedTrainer:
     Responsibilities:
     - Training loop management (minibatch iteration, checkpointing)
     - Loss function construction based on learning_framework
-    - Optimizer management (AdamWMin, vanilla_sgd, sgd_wd)
+    - Optimizer management (optax-based: vanilla_sgd, sgd_wd, adamw)
     - Stepsize initialization and projection
     - Progress tracking and CSV saving
 
@@ -98,6 +98,8 @@ class UnifiedTrainer:
 
         # State
         self.optimizer = None
+        self.opt_state = None
+        self.scheduler = None
         self.training_data = None
         self.validation_data = None
         self.n_minibatches = 0
@@ -702,33 +704,50 @@ class UnifiedTrainer:
         return jax.jit(val_loss_fn)
 
     def _initialize_optimizer(self, stepsizes: Stepsizes):
-        """Set up optimizer based on cfg.optimizer_type.
+        """Set up an optax optimizer with warmup-cosine LR schedule and global-norm clipping.
 
-        Supports:
-        - vanilla_sgd: Manual SGD with projection
-        - adamw: AdamWMin from learning.adam_optimizers
-        - sgd_wd: SGD with weight decay
+        Builds: optax.chain(clip_by_global_norm, <optimizer>(scheduler)).
+        The scheduler linearly warms up from LR_INIT to self.eta_t over the
+        first WARMUP_FRAC of training, then cosine-decays to LR_END by the
+        final iteration.
 
         Args:
-            stepsizes: Initial stepsizes for optimizer state initialization.
+            stepsizes: Initial stepsizes (sqrt-reparameterized) for optimizer state init.
         """
-        update_mask = self._get_update_mask(stepsizes)
+        LR_INIT, LR_END, WARMUP_FRAC = 1e-6, 1e-6, 0.1
+        warmup_steps = int(WARMUP_FRAC * self.sgd_iters)
 
-        if self.optimizer_type == 'adamw':
-            self.optimizer = AdamWMin(
-                x_params=[jnp.array(s) for s in stepsizes],
-                lr=self.eta_t,
-                betas=(0.9, 0.999),
-                eps=1e-8,
-                weight_decay=self.weight_decay,
-                update_mask=update_mask,
+        self.scheduler = optax.warmup_cosine_decay_schedule(
+            init_value=LR_INIT,
+            peak_value=self.eta_t,
+            warmup_steps=warmup_steps,
+            decay_steps=self.sgd_iters,
+            end_value=LR_END,
+        )
+        clip = optax.clip_by_global_norm(self.grad_clip_norm)
+
+        if self.optimizer_type == 'vanilla_sgd':
+            opt = optax.sgd(learning_rate=self.scheduler)
+        elif self.optimizer_type == 'sgd_wd':
+            opt = optax.chain(
+                optax.add_decayed_weights(self.weight_decay),
+                optax.sgd(learning_rate=self.scheduler),
             )
-            log.info(f'Initialized AdamWMin optimizer with lr={self.eta_t}, wd={self.weight_decay}')
-        elif self.optimizer_type in ['vanilla_sgd', 'sgd_wd']:
-            self.optimizer = None  # Manual update in _optimizer_step
-            log.info(f'Using {self.optimizer_type} with lr={self.eta_t}')
+        elif self.optimizer_type == 'adamw':
+            opt = optax.adamw(
+                learning_rate=self.scheduler,
+                weight_decay=self.weight_decay,
+            )
         else:
             raise ValueError(f"Unknown optimizer_type: {self.optimizer_type}")
+
+        self.optimizer = optax.chain(clip, opt)
+        self.opt_state = self.optimizer.init(stepsizes)
+        log.info(
+            f'Initialized {self.optimizer_type} with warmup_cosine schedule '
+            f'(peak={self.eta_t}, warmup={warmup_steps}/{self.sgd_iters}, '
+            f'wd={self.weight_decay}, clip={self.grad_clip_norm})'
+        )
 
     def _get_update_mask(self, stepsizes: Stepsizes) -> List[bool] | None:
         """Determine which parameters to update (for learn_beta=False).
@@ -801,6 +820,8 @@ class UnifiedTrainer:
         # aligns with stepsizes_history / losses / times. Stores the raw
         # (pre-clip) norm so the CSV records the diagnostic signal.
         all_raw_grad_norms = [float('nan')]
+        # Schedule LR pads with NaN for the initial-loss probe (no step taken).
+        all_lrs = [float('nan')]
 
         # Determine update mask for manual optimizers
         update_mask = self._get_update_mask(sqrt_stepsizes)
@@ -822,6 +843,11 @@ class UnifiedTrainer:
             # Log progress (shows actual stepsize = sqrt_stepsize ** 2)
             self._log_iteration(iter_num, sqrt_stepsizes, K)
 
+            # The scheduler is a pure function of step count; the optax chain's
+            # internal counter starts at 0 and is incremented inside .update(),
+            # so scheduler(iter_num) is the LR actually applied this step.
+            current_lr = float(self.scheduler(iter_num))
+
             # Compute loss and gradients
             iter_start_time = time.perf_counter()
 
@@ -839,24 +865,20 @@ class UnifiedTrainer:
 
             # Raw (pre-clip) gradient norm — single global L2 across the whole
             # tuple, matching the per-element-squared-and-summed convention.
+            # Clipping is now handled inside the optax chain via
+            # clip_by_global_norm, so this remains a pure diagnostic.
             raw_grad_norm = float(jnp.sqrt(sum(jnp.sum(g ** 2) for g in grads)))
 
-            # Global-norm gradient clipping. If the raw norm exceeds the
-            # threshold, scale every tuple element by the same factor so the
-            # gradient direction is preserved and only its magnitude shrinks.
-            if raw_grad_norm > self.grad_clip_norm:
-                scale = self.grad_clip_norm / raw_grad_norm
-                grads = tuple(g * scale for g in grads)
-
             log.info(f'  loss: {float(loss):.6f}, raw_grad_norm: {raw_grad_norm:.6f}, '
-                     f'iter_time: {iter_time:.3f}s')
+                     f'lr: {current_lr:.6e}, iter_time: {iter_time:.3f}s')
 
-            # Store loss, timing, raw grad norm (w.r.t. sqrt-reparameterized params)
+            # Store loss, timing, raw grad norm, LR (w.r.t. sqrt-reparameterized params)
             all_losses.append(float(loss))
             all_times.append(iter_time)
             all_raw_grad_norms.append(raw_grad_norm)
+            all_lrs.append(current_lr)
 
-            # Optimizer step (on sqrt params, using clipped grads)
+            # Optimizer step (optax chain applies clip + scheduled LR internally)
             sqrt_stepsizes = self._optimizer_step(sqrt_stepsizes, grads, update_mask)
 
             # Compute validation loss with updated stepsizes
@@ -868,7 +890,7 @@ class UnifiedTrainer:
             all_stepsizes_vals.append(to_actual(sqrt_stepsizes))
 
             # Save checkpoint
-            self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, all_raw_grad_norms, csv_path)
+            self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, all_raw_grad_norms, all_lrs, csv_path)
 
         # Return result (actual stepsize form)
         return TrainingResult(
@@ -906,11 +928,13 @@ class UnifiedTrainer:
     def _optimizer_step(
         self, sqrt_stepsizes: Stepsizes, grads: Stepsizes, update_mask: List[bool] | None
     ) -> Stepsizes:
-        """Execute one optimizer step on sqrt-reparameterized params.
+        """Execute one optax step on sqrt-reparameterized params.
 
-        No projection is needed: the loss functions square sqrt_stepsizes
-        before use, so nonnegativity of the algorithmic stepsize is guaranteed
-        regardless of the sign of sqrt_stepsize.
+        Selective masking is implemented by zeroing the gradients of frozen
+        entries before passing them through the optax chain. No projection is
+        needed: the loss functions square sqrt_stepsizes before use, so
+        nonnegativity of the algorithmic stepsize is guaranteed regardless of
+        the sign of sqrt_stepsize.
 
         Args:
             sqrt_stepsizes: Current sqrt-reparameterized params.
@@ -920,48 +944,21 @@ class UnifiedTrainer:
         Returns:
             Updated sqrt_stepsizes.
         """
-        if self.optimizer_type == 'vanilla_sgd':
-            if update_mask is None:
-                sqrt_stepsizes = tuple(
-                    s - self.eta_t * ds
-                    for s, ds in zip(sqrt_stepsizes, grads)
-                )
-            else:
-                sqrt_stepsizes = tuple(
-                    s - self.eta_t * ds if should_update else s
-                    for s, ds, should_update in zip(sqrt_stepsizes, grads, update_mask)
-                )
-
-        elif self.optimizer_type == 'adamw':
-            x_params = [jnp.array(s) for s in sqrt_stepsizes]
-            grads_x = list(grads)
-            x_new = self.optimizer.step(
-                x_params=x_params,
-                grads_x=grads_x,
+        if update_mask is not None:
+            grads = tuple(
+                g if should_update else jnp.zeros_like(g)
+                for g, should_update in zip(grads, update_mask)
             )
-            sqrt_stepsizes = tuple(x_new)
 
-        elif self.optimizer_type == 'sgd_wd':
-            if update_mask is None:
-                sqrt_stepsizes = tuple(
-                    s - self.eta_t * (ds + self.weight_decay * s)
-                    for s, ds in zip(sqrt_stepsizes, grads)
-                )
-            else:
-                sqrt_stepsizes = tuple(
-                    s - self.eta_t * (ds + self.weight_decay * s) if should_update else s
-                    for s, ds, should_update in zip(sqrt_stepsizes, grads, update_mask)
-                )
-
-        else:
-            raise ValueError(f"Unknown optimizer_type: {self.optimizer_type}")
-
-        return sqrt_stepsizes
+        updates, self.opt_state = self.optimizer.update(
+            grads, self.opt_state, sqrt_stepsizes,
+        )
+        return tuple(optax.apply_updates(sqrt_stepsizes, updates))
 
     def _save_checkpoint(
         self, stepsizes_history: List[Stepsizes], K_max: int,
         losses: List[float], val_losses: List[float], times: List[float],
-        raw_grad_norms: List[float], csv_path: str
+        raw_grad_norms: List[float], lrs: List[float], csv_path: str
     ):
         """Save progress to CSV via problem_module.build_stepsizes_dataframe().
 
@@ -973,6 +970,7 @@ class UnifiedTrainer:
             times: List of iteration times in seconds.
             raw_grad_norms: List of pre-clip gradient norms w.r.t.
                 sqrt-reparameterized params.
+            lrs: List of scheduled learning rates per iteration.
             csv_path: Path to save CSV.
         """
         df = self.problem_module.build_stepsizes_dataframe(
@@ -983,5 +981,6 @@ class UnifiedTrainer:
             validation_losses=val_losses,
             times=times,
             raw_grad_norms=raw_grad_norms,
+            lrs=lrs,
         )
         df.to_csv(csv_path, index=False)

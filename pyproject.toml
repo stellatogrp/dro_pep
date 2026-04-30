@@ -11,6 +11,7 @@ dependencies = [
     "clarabel",
     "diffcp @ git+https://github.com/cvxgrp/diffcp.git@master",
     "jax",
+    "optax",
     "scipy",
     "matplotlib>=3.10.8",
     "tqdm>=4.67.1",
