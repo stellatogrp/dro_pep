@@ -1,38 +1,52 @@
-n_facilities: 5
-n_customers: 20
+# ----------------------------------------------------------------------------
+# TV Inpainting on Olivetti Faces (PDLP)
+#
+# Replaces the previous facility-location LP. Sample creation uses the helpers
+# in src/learning/tv_inpainting_test.py.
+# ----------------------------------------------------------------------------
 
-fixed_costs:
-  l: 1.0
-  u: 2.0
+# --- Image / dataset ---
+image_M: 64                  # Olivetti images are 64x64
+image_N: 64
+n_subjects_total: 40         # full Olivetti dataset
+images_per_subject: 10       # consecutive blocks of 10 share a subject
+n_subjects_train: 28         # 70%
+n_subjects_val: 4            # 10%
+n_subjects_test: 8           # 20%
 
-demands:
-  l: 0.5
-  u: 1.5
+# --- Corruption ---
+missing_fraction_in_dist: 0.1     # used for train/val/test pools
+missing_fraction_out_of_dist: 0.2 # heavier corruption -> distribution shift for OOD
+scaled_lp_01: true               # mirrors SCALED_LP_01; lp_upper derived in code
+                                  # (true => lp_upper=1.0, false => lp_upper=255.0)
+# NOTE: the PEP construction requires (x0, y0) in the strict interior of
+# [l, u] x (R^{m1}_+ x R^{m2}). Sample creation and the trainer both use
+#   x0 = 0.5 * lp_upper * ones,   y0 = [0.1 * ones(m1); zeros(m2)]
+# (see build_strict_interior_init / _make_cp_tv_traj_fn). There is no
+# corrupted-image warm start in the production path; that variant exists only
+# in src/learning/tv_inpainting_test.py as a diagnostic.
 
-transportation_costs:
-  l: 0.1
-  u: 1.0
+# --- Seeds ---
+person_split_seed: 12345
+training_mask_seed_base: 40000
+val_mask_seed_base: 10000
+test_mask_seed_base: 20000
+ood_mask_seed_base: 30000
 
-base_capacity:
-  base: 2.0
-  scaling: 1.5
-
-# Safety factors applied to the empirical pool max in __init__ / sample creation
-m_safety_factor: 1.3
-r_safety_factor: 1.2
+# --- Operator-norm / IC-radius safety factors (Lasso-analog) ---
+m_safety_factor: 1.2
+r_safety_factor: 1.1
 
 # ----------------------------------------------------------------------------
-# Algorithm / framework
+# Algorithm / framework (carried forward; consumed once learning wiring lands)
 # ----------------------------------------------------------------------------
 alg: 'cp'                               # PDLP uses Chambolle-Pock
 pep_obj: 'obj_val'                      # duality gap is the only CP metric
 learning_framework: 'ldro-pep'          # 'ldro-pep', 'l2o', or 'lpep'
 
-# Step size configuration
 stepsize_type: "vector"                 # "scalar" or "vector"
 vector_init: "fixed"                    # only 'fixed' supported for CP today
 
-# Which step sizes to learn (PDHG has tau, sigma, theta)
 learn_tau: True
 learn_sigma: True
 learn_theta: True
@@ -45,27 +59,17 @@ validation_loss_type_composition: "final"
 decay_rate: 0.9
 
 # ----------------------------------------------------------------------------
-# Batch sampling
+# Batch sampling. The pool sizes are pinned by the person split (fixed at the
+# pool size, one mask per image — see plan); we still expose training_sample_N
+# etc. for downstream loaders that read them.
 # ----------------------------------------------------------------------------
-N: 10                                   # minibatch size
-training_sample_N: 250                   # total pre-sampled training instances
-mr_estimation_size: 100                 # pool size for estimating M_val and R_val
-mr_estimation_seed: 20260421
+N: 10                                   # SGD minibatch size
+training_sample_N: 280                  # = n_subjects_train * images_per_subject
+out_of_sample_val_N: 40                 # = n_subjects_val * images_per_subject
+out_of_sample_test_N: 80                # = n_subjects_test * images_per_subject
+out_of_dist_N: 400                      # full dataset
 
-out_of_sample_val_N: 100
-out_of_sample_test_N: 200
-out_of_dist_N: 20
-
-# Seeds for sample-creation generation (also used to deterministically
-# subsample N rows from the saved bundles when `data_source_dir` is set).
-training_seed: 40000
-out_of_sample_val_seed: 10000
-out_of_sample_test_seed: 20000
-out_of_dist_seed: 30000
-
-# K_max loop inside pdlp_run (per-K CSV logging)
-K_max: [5, 10, 15]
-
+K_max: [5, 10]
 sgd_seed: 500
 
 # ----------------------------------------------------------------------------
@@ -83,12 +87,12 @@ precond_type: 'average'
 # ----------------------------------------------------------------------------
 optimizer_type: "adamw"
 sgd_iters: 1000
-eta_t: 1e-3                             # learning rate for stepsizes
-weight_decay: 1e-3                      # weight decay for sgd_wd
-grad_clip_norm: 1.0                     # max L2 norm across full gradient tuple; norms above this are scaled down (direction preserved)
+eta_t: 1e-3
+weight_decay: 1e-3
+grad_clip_norm: 1.0
 
 # ----------------------------------------------------------------------------
 # Outputs
 # ----------------------------------------------------------------------------
 output_dir: "learn_dro_outputs"
-data_source_dir: null  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.
+data_source_dir: "/Users/vranjan/Research/2026/dro_pep/src/sample_creation_outputs/PDLP/2026-05-02/15-28-02"  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.

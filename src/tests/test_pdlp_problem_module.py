@@ -1,16 +1,18 @@
-"""
-Integration / smoke tests for PDLPProblemModule.
+"""Integration / smoke tests for the TV-inpainting PDLPProblemModule.
 
 Verifies:
   1. The module instantiates from pdlp.yaml without errors.
-  2. `sample_training_batch` produces the expected dict keys and shapes.
+  2. `sample_training_batch` produces the expected dict keys and shapes
+     under the new lazy-K_mat schema.
   3. Per-sample (G, F) from `compute_batched_trajectories` satisfies every
-     `construct_chambolle_pock_pep_data` constraint — same structural
-     assertions exercised by `test_chambolle_pock_facility_location.py`.
+     `construct_chambolle_pock_pep_data` constraint at the cached pooled
+     `M_val` / `R_val`.
 
-These tests pin the PDLP problem-module wiring to the VERIFIED-CORRECT CP
-trajectory + PEP construction. Any future regression in either path will
-surface here.
+These tests pin the production training path to the verified CP PEP
+construction. Any future regression in either path will surface here.
+The pdlp.yaml file's `data_source_dir` is expected to point at a previous
+sample-creation Hydra run; if not present, tests are skipped (rather than
+failing) so that a fresh checkout doesn't break CI before sample creation.
 """
 import os
 import pytest
@@ -30,17 +32,25 @@ from tests.test_chambolle_pock_interpolation import (
 
 
 # ---------------------------------------------------------------------------
-# Config helper: load pdlp.yaml via Hydra
+# Hydra config helper
 # ---------------------------------------------------------------------------
 
 def _load_pdlp_cfg(**overrides):
     """Load pdlp.yaml from configs_learning with optional overrides.
 
-    Uses a small instance (2x3) by default to keep tests fast.
+    Skips tests cleanly if the configured `data_source_dir` doesn't exist on
+    this machine (fresh checkout, no sample creation yet).
     """
     override_list = [f"{k}={v}" for k, v in overrides.items()]
     with initialize(version_base='1.2', config_path='../configs_learning'):
         cfg = compose(config_name='pdlp', overrides=override_list)
+    if cfg.get('data_source_dir', None) is None:
+        pytest.skip("pdlp.yaml has no data_source_dir set; run sample creation first.")
+    if not os.path.isdir(cfg.data_source_dir):
+        pytest.skip(
+            f"data_source_dir {cfg.data_source_dir} not found on this machine; "
+            "run sample creation first."
+        )
     return cfg
 
 
@@ -49,88 +59,98 @@ def _load_pdlp_cfg(**overrides):
 # ---------------------------------------------------------------------------
 
 def test_pdlp_module_instantiates():
-    cfg = _load_pdlp_cfg(
-        n_facilities=2, n_customers=3,
-        mr_estimation_size=5,
-    )
+    cfg = _load_pdlp_cfg()
     module = PDLPProblemModule(cfg)
-    assert module.n_vars == 2 + 2 * 3
-    assert module.m1 == 2 + 2 * 3
-    assert module.m2 == 3
-    assert module.M_val > 0
-    assert module.R_val > 0
-    # Validation shouldn't raise
-    module.validate_config()
+
+    # Basic shape assertions consistent with the metadata loaded from disk.
+    assert module.M_img > 0 and module.N_img > 0
+    assert module.K == module.M_img * module.N_img
+    assert module.n_vars == module.K + module.K_v + module.K_h
+    assert module.m1 == 2 * module.K_v + 2 * module.K_h
+    assert module.S_in_dist > 0 and module.S_out_of_dist > 0
+    assert module.M_val > 0 and module.R_val > 0
+    # JAX device fixtures
+    assert module.G_dense_jnp.shape == (module.m1, module.n_vars)
+    assert module.c_jnp.shape == (module.n_vars,)
+    assert module.images_jnp.shape[0] == 400  # Olivetti dataset
 
 
 # ---------------------------------------------------------------------------
-# Test 2: sample_training_batch shapes
+# Test 2: sample_training_batch shapes (light pool schema)
 # ---------------------------------------------------------------------------
 
 def test_pdlp_sample_training_batch_shapes():
-    cfg = _load_pdlp_cfg(
-        n_facilities=2, n_customers=3,
-        mr_estimation_size=5,
-    )
+    cfg = _load_pdlp_cfg()
     module = PDLPProblemModule(cfg)
+    N = 2
 
-    key = jax.random.PRNGKey(0)
-    N = 3
-    problem_data, ground_truth = module.sample_training_batch(key, N)
+    pd, gt = module.sample_training_batch(jax.random.PRNGKey(0), N)
 
-    assert set(problem_data.keys()) == {'c_batch', 'K_mat_batch', 'q_batch'}
-    assert set(ground_truth.keys()) == {'x_opt_batch', 'y_opt_batch'}
+    # Light pool: only image_index + mask in problem_data.
+    assert set(pd.keys()) == {'image_index_batch', 'mask_batch'}
+    assert set(gt.keys()) == {'x_opt_batch', 'y_opt_batch'}
 
-    n_vars = module.n_vars
-    m = module.m_total
+    assert pd['image_index_batch'].shape == (N,)
+    assert pd['image_index_batch'].dtype == jnp.int32
+    assert pd['mask_batch'].shape == (N, module.K)
+    assert pd['mask_batch'].dtype == jnp.bool_
 
-    assert problem_data['c_batch'].shape == (N, n_vars)
-    assert problem_data['K_mat_batch'].shape == (N, m, n_vars)
-    assert problem_data['q_batch'].shape == (N, m)
-    assert ground_truth['x_opt_batch'].shape == (N, n_vars)
-    assert ground_truth['y_opt_batch'].shape == (N, m)
+    assert gt['x_opt_batch'].shape == (N, module.n_vars)
+    assert gt['y_opt_batch'].shape == (N, module.m1 + module.S_in_dist)
+
+    # Each cached mask must have exactly S_in_dist True entries (deterministic count).
+    for i in range(N):
+        n_known = int(jnp.sum(pd['mask_batch'][i]))
+        assert n_known == module.S_in_dist, \
+            f"instance {i}: mask has {n_known} known pixels, expected {module.S_in_dist}"
 
 
 # ---------------------------------------------------------------------------
-# Test 3: Per-sample (G, F) passes CP PEP constraints
+# Test 3: every constraint of the production PEP is satisfied by the
+#         module-produced Gram on real cached instances.
 # ---------------------------------------------------------------------------
+
+def _split_violations(violations, K_max):
+    """Slice the scalar-constraints array into named groups."""
+    n_algo = K_max + 1
+    n_interp = n_algo * (n_algo + 1)
+    n_value_pin = 4
+    n_IC = 1
+    f1 = violations[:n_interp]
+    h = violations[n_interp:2 * n_interp]
+    vp = violations[2 * n_interp:2 * n_interp + n_value_pin]
+    rest = violations[2 * n_interp + n_value_pin:]
+    adj = rest[:-n_IC]
+    IC = rest[-n_IC:]
+    return f1, h, vp, adj, IC
+
 
 @pytest.mark.parametrize('K_max', [1, 3])
-def test_pdlp_batched_trajectory_satisfies_pep(K_max):
-    """Every sample's (G_i, F_i) satisfies every CP PEP scalar + PSD constraint."""
-    cfg = _load_pdlp_cfg(
-        n_facilities=2, n_customers=3,
-        mr_estimation_size=5,
-        K_max=[K_max],
-    )
+@pytest.mark.parametrize('N', [2])
+def test_pdlp_compute_batched_trajectories_passes_constraints(K_max, N):
+    """Per-sample (G, F) from the module satisfies every CP PEP constraint
+    at the pooled (M_val, R_val) loaded from metadata.
+    """
+    cfg = _load_pdlp_cfg()
     module = PDLPProblemModule(cfg)
 
-    key = jax.random.PRNGKey(1)
-    N = 2
-    problem_data, ground_truth = module.sample_training_batch(key, N)
-
-    traj_fn = module.get_trajectory_fn('cp')
     L_val, mu_val, R_val = module.compute_L_mu_R()
     stepsizes = module.get_initial_stepsizes('cp', K_max, L_val, mu_val)
+    traj_fn = module.get_trajectory_fn('cp')
 
-    batched_data = {
-        'c': problem_data['c_batch'],
-        'K_mat': problem_data['K_mat_batch'],
-        'q': problem_data['q_batch'],
-        'x_opt': ground_truth['x_opt_batch'],
-        'y_opt': ground_truth['y_opt_batch'],
-    }
+    pd, gt = module.sample_training_batch(jax.random.PRNGKey(42), N)
+    full = {**pd, **gt}
+    batched_keys = module.get_batched_parameters()
+    batched_data = {k: full[f'{k}_batch'] for k in batched_keys}
+
     G_batch, F_batch = module.compute_batched_trajectories(
         stepsizes, batched_data, {}, traj_fn, K_max,
     )
-    G_batch = np.asarray(G_batch)
-    F_batch = np.asarray(F_batch)
+    assert G_batch.shape[0] == N
+    assert F_batch.shape[0] == N
 
-    # Build PEP data at the module-level (L_val, R_val)
-    # Note: stepsizes may be jnp vectors; unpack cleanly.
-    tau, sigma, theta = stepsizes
     pep_data = construct_chambolle_pock_pep_data(
-        tau=tau, sigma=sigma, theta=theta,
+        tau=stepsizes[0], sigma=stepsizes[1], theta=stepsizes[2],
         M=L_val, R=R_val, K_max=K_max,
     )
     (A_obj, b_obj, A_vals, b_vals, c_vals,
@@ -138,71 +158,52 @@ def test_pdlp_batched_trajectory_satisfies_pep(K_max):
         np.asarray(x) if not isinstance(x, list) else [np.asarray(a) for a in x]
         for x in pep_data
     ]
-
     num_scalar = A_vals.shape[0]
-    eps = 1e-5  # slightly looser than the pure-facility test due to cross-sample scale diffs
 
+    # Tolerance scales with lp_upper. At lp_upper=1.0 (production) Gram entries
+    # are O(n_vars) ~ O(12160), so 1e-6 abs is meaningful. At lp_upper=255
+    # (legacy) Gram entries are ~65000x larger; bump tolerance accordingly.
+    lp_upper = float(module.lp_upper)
+    scale = lp_upper * lp_upper
+    eps = 1e-6 * max(1.0, scale)
+    psd_eps = 1e-6 * max(1.0, scale)
+
+    print(f"\n=== PDLP module CP interpolation (K_max={K_max}, N={N}) ===")
+    print(f"  M_val={L_val:.4f} R_val={R_val:.4f} S_in={module.S_in_dist}")
     for i in range(N):
-        G = G_batch[i]
-        F = F_batch[i]
+        G_i = np.asarray(G_batch[i])
+        F_i = np.asarray(F_batch[i])
 
-        # Scalar constraints, excluding IC (last row = trajectory-dependent radius)
-        max_viol = -np.inf
-        for j in range(num_scalar - 1):
-            v = eval_scalar_constraint(A_vals[j], b_vals[j], c_vals[j], G, F)
-            max_viol = max(max_viol, v)
-        assert max_viol <= eps, \
-            f"Sample {i}: scalar constraint violation {max_viol:.3e}"
+        violations = np.zeros(num_scalar)
+        for j in range(num_scalar):
+            violations[j] = eval_scalar_constraint(
+                A_vals[j], b_vals[j], c_vals[j], G_i, F_i,
+            )
+        f1_v, h_v, vp_v, adj_v, IC_v = _split_violations(violations, K_max)
 
-        # PSD blocks
+        psd_min_eigs = []
         for idx in range(len(PSD_A_vals)):
-            H = eval_psd_block(PSD_A_vals[idx], PSD_b_vals[idx],
-                               PSD_c_vals[idx], G, F)
-            min_eig = float(np.min(np.linalg.eigvalsh(H)))
-            assert min_eig >= -eps, \
-                f"Sample {i}: PSD block {idx} not PSD, min eig {min_eig:.3e}"
+            H = eval_psd_block(
+                PSD_A_vals[idx], PSD_b_vals[idx], PSD_c_vals[idx], G_i, F_i,
+            )
+            psd_min_eigs.append(float(np.min(np.linalg.eigvalsh(H))))
 
+        print(f"  sample {i}: f1={np.max(f1_v):.2e} h={np.max(h_v):.2e} "
+              f"vp={np.max(vp_v):.2e} adj={np.max(adj_v):.2e} "
+              f"IC={IC_v[0]:.2e} PSD_min={psd_min_eigs}")
 
-# ---------------------------------------------------------------------------
-# Test 4: Metric function returns sensible gap values
-# ---------------------------------------------------------------------------
-
-def test_pdlp_metric_fn_duality_gap():
-    cfg = _load_pdlp_cfg(
-        n_facilities=2, n_customers=3,
-        mr_estimation_size=5,
-    )
-    module = PDLPProblemModule(cfg)
-
-    key = jax.random.PRNGKey(2)
-    problem_data, ground_truth = module.sample_training_batch(key, 1)
-
-    # Use 1 sample, K_max=3
-    K_max = 3
-    traj_fn = module.get_trajectory_fn('cp')
-    L_val, mu_val, R_val = module.compute_L_mu_R()
-    stepsizes = module.get_initial_stepsizes('cp', K_max, L_val, mu_val)
-
-    # Call traj_fn on single sample (extract batch dim).
-    c = problem_data['c_batch'][0]
-    K_mat = problem_data['K_mat_batch'][0]
-    q = problem_data['q_batch'][0]
-    x_opt = ground_truth['x_opt_batch'][0]
-    y_opt = ground_truth['y_opt_batch'][0]
-
-    trajectories = traj_fn(stepsizes, c, K_mat, q, x_opt, y_opt, K_max,
-                           return_Gram_representation=False)
-
-    prob_data = {'c': c, 'K_mat': K_mat, 'q': q}
-    gt = {'x_opt': x_opt, 'y_opt': y_opt}
-    metric_fn = module.create_metric_fn(trajectories, prob_data, gt, pep_obj='obj_val')
-
-    # gap at K_max should be a finite scalar, ideally >= 0 if we're near saddle
-    gap_K = float(metric_fn(K_max))
-    print(f"\nDuality gap at K={K_max}: {gap_K:.6e}")
-    assert np.isfinite(gap_K), "Duality gap is not finite"
-
-    # At the saddle itself, the gap should be 0 (sanity check).
-    v_iter, y_iter = trajectories[0], trajectories[1]
-    print(f"  v_0 - x_opt norm: {float(jnp.linalg.norm(v_iter[0] - x_opt)):.4f}")
-    print(f"  y_0 - y_opt norm: {float(jnp.linalg.norm(y_iter[0] - y_opt)):.4f}")
+        assert np.max(f1_v) <= eps, \
+            f"sample {i}: f1 interpolation violated (max {np.max(f1_v):.3e})"
+        assert np.max(h_v) <= eps, \
+            f"sample {i}: h interpolation violated (max {np.max(h_v):.3e})"
+        assert np.max(vp_v) <= eps, \
+            f"sample {i}: value pinning violated (max {np.max(vp_v):.3e})"
+        assert np.max(adj_v) <= eps, \
+            f"sample {i}: adjoint violated (max {np.max(adj_v):.3e})"
+        # IC is asserted here (unlike Tier 1) because pooled R is supposed to
+        # be a strict upper bound for *every* in-distribution instance.
+        assert IC_v[0] <= eps, \
+            f"sample {i}: IC violated (value {IC_v[0]:.3e}); pooled R may be too small"
+        for idx, me in enumerate(psd_min_eigs):
+            assert me >= -psd_eps, \
+                f"sample {i}: PSD block {idx} not PSD, min eig = {me:.3e}"

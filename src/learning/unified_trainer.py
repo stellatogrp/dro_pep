@@ -906,24 +906,35 @@ class UnifiedTrainer:
 
         Logs the algorithmic stepsize (sqrt_stepsize ** 2), not the raw param.
 
+        Stepsize tuple length determines the algorithm convention:
+            1 -> (t,)              (e.g. ISTA)
+            2 -> (t, beta)         (e.g. GD/FGM with momentum, FISTA)
+            3 -> (tau, sigma, theta)  (Chambolle-Pock / PDHG)
+
         Args:
             iter_num: Current iteration number.
             sqrt_stepsizes: Current sqrt-reparameterized params.
             K: Number of algorithm iterations.
         """
         actual_stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
-        t = actual_stepsizes[0]
-        is_vector_t = jnp.ndim(t) > 0
-        has_beta = len(actual_stepsizes) > 1
 
-        t_log = f'{t:.5f}' if not is_vector_t else '[' + ', '.join(f'{x:.5f}' for x in t.tolist()) + ']'
+        def _fmt(s: jnp.ndarray) -> str:
+            if jnp.ndim(s) > 0:
+                return '[' + ', '.join(f'{x:.5f}' for x in s.tolist()) + ']'
+            return f'{float(s):.5f}'
 
-        if has_beta:
-            beta = actual_stepsizes[1]
-            beta_log = '[' + ', '.join(f'{x:.5f}' for x in beta.tolist()) + ']'
-            log.info(f'K={K}, iter={iter_num}, t={t_log}, beta={beta_log}')
+        n = len(actual_stepsizes)
+        if n == 3:
+            tau, sigma, theta = actual_stepsizes
+            log.info(
+                f'K={K}, iter={iter_num}, '
+                f'tau={_fmt(tau)}, sigma={_fmt(sigma)}, theta={_fmt(theta)}'
+            )
+        elif n == 2:
+            t, beta = actual_stepsizes
+            log.info(f'K={K}, iter={iter_num}, t={_fmt(t)}, beta={_fmt(beta)}')
         else:
-            log.info(f'K={K}, iter={iter_num}, t={t_log}')
+            log.info(f'K={K}, iter={iter_num}, t={_fmt(actual_stepsizes[0])}')
 
     def _optimizer_step(
         self, sqrt_stepsizes: Stepsizes, grads: Stepsizes, update_mask: List[bool] | None

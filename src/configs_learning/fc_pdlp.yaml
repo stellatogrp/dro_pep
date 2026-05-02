@@ -1,0 +1,94 @@
+n_facilities: 5
+n_customers: 20
+
+fixed_costs:
+  l: 1.0
+  u: 2.0
+
+demands:
+  l: 0.5
+  u: 1.5
+
+transportation_costs:
+  l: 0.1
+  u: 1.0
+
+base_capacity:
+  base: 2.0
+  scaling: 1.5
+
+# Safety factors applied to the empirical pool max in __init__ / sample creation
+m_safety_factor: 1.3
+r_safety_factor: 1.2
+
+# ----------------------------------------------------------------------------
+# Algorithm / framework
+# ----------------------------------------------------------------------------
+alg: 'cp'                               # PDLP uses Chambolle-Pock
+pep_obj: 'obj_val'                      # duality gap is the only CP metric
+learning_framework: 'ldro-pep'          # 'ldro-pep', 'l2o', or 'lpep'
+
+# Step size configuration
+stepsize_type: "vector"                 # "scalar" or "vector"
+vector_init: "fixed"                    # only 'fixed' supported for CP today
+
+# Which step sizes to learn (PDHG has tau, sigma, theta)
+learn_tau: True
+learn_sigma: True
+learn_theta: True
+
+# ----------------------------------------------------------------------------
+# Loss composition
+# ----------------------------------------------------------------------------
+training_loss_type_composition: "weighted"
+validation_loss_type_composition: "final"
+decay_rate: 0.9
+
+# ----------------------------------------------------------------------------
+# Batch sampling
+# ----------------------------------------------------------------------------
+N: 10                                   # minibatch size
+training_sample_N: 250                   # total pre-sampled training instances
+mr_estimation_size: 100                 # pool size for estimating M_val and R_val
+mr_estimation_seed: 20260421
+
+out_of_sample_val_N: 100
+out_of_sample_test_N: 200
+out_of_dist_N: 20
+
+# Seeds for sample-creation generation (also used to deterministically
+# subsample N rows from the saved bundles when `data_source_dir` is set).
+training_seed: 40000
+out_of_sample_val_seed: 10000
+out_of_sample_test_seed: 20000
+out_of_dist_seed: 30000
+
+# K_max loop inside pdlp_run (per-K CSV logging)
+K_max: [5, 10, 15]
+
+sgd_seed: 500
+
+# ----------------------------------------------------------------------------
+# DRO / SDP
+# ----------------------------------------------------------------------------
+dro_obj: "expectation"                  # "expectation" or "cvar"
+sdp_backend: "diffcp"
+dro_canon_backend: "manual_jax"         # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'average'
+
+# ----------------------------------------------------------------------------
+# SGD training parameters
+# ----------------------------------------------------------------------------
+optimizer_type: "adamw"
+sgd_iters: 1000
+eta_t: 1e-3                             # learning rate for stepsizes
+weight_decay: 1e-3                      # weight decay for sgd_wd
+grad_clip_norm: 1.0                     # max L2 norm across full gradient tuple; norms above this are scaled down (direction preserved)
+
+# ----------------------------------------------------------------------------
+# Outputs
+# ----------------------------------------------------------------------------
+output_dir: "learn_dro_outputs"
+data_source_dir: null  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.
