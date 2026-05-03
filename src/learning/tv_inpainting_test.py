@@ -37,19 +37,15 @@ from tqdm import trange
 np.set_printoptions(suppress=True, precision=5)
 
 # Fraction of pixels marked as unknown in the random mask. Tune to taste.
-MISSING_FRACTION = 0.1
+MISSING_FRACTION = 0.2
 
 # Number of PDHG iterations to run in the __main__ demo. Tune to taste.
-K_MAX = 20
-
-# If True, warm-start PDHG from the corrupted image (pixels = image*mask, with
-# v, w = |D_v p|, |D_h p|). If False, start from all zeros.
-WARM_START_FROM_CORRUPTED = False
+K_MAX = 5
 
 # If True, the LP operates in [0, 1] (image left at the dataset's native scale,
 # u = 1). If False, the LP operates in [0, 255] (image upscaled by 255, u = 255).
 # Plotting always rescales to [0, 255] for imshow.
-SCALED_LP_01 = False
+SCALED_LP_01 = True
 LP_UPPER = 1.0 if SCALED_LP_01 else 255.0
 
 
@@ -130,37 +126,6 @@ def _horizontal_diff_matrix(M: int, N: int) -> sp.csr_matrix:
     data[0::2] = -1.0
     data[1::2] = +1.0
     return sp.coo_matrix((data, (rows, cols)), shape=(K_h, K)).tocsr()
-
-
-def compute_dual_warm_start(
-    p_ws: np.ndarray,
-    known_indices: np.ndarray,
-    M: int,
-    N: int,
-) -> np.ndarray:
-    """Build a PDHG dual warm start from a primal pixel warm start p_ws.
-
-    Uses L1-TV complementary slackness on the LP:
-      * z (inequality dual) is set from sgn(D p_ws): for a pixel-pair where
-        the gradient is positive the active G-block gets weight 1 and the
-        inactive block gets 0; ties split as 0.5 / 0.5.
-      * y (equality dual at known pixels) absorbs the L1-subgradient of TV
-        via the discrete divergence Δ = D_v^T sgn(D_v p) + D_h^T sgn(D_h p).
-    Box-bound slacks (s_l, s_u) are not tracked by PDHG and are dropped.
-    Returns a vector of length 2*K_v + 2*K_h + S in PDHG ordering
-    [z1; z2; z3; z4; y_eq].
-    """
-    D_v = _vertical_diff_matrix(M, N)
-    D_h = _horizontal_diff_matrix(M, N)
-    sgn_v = np.sign(D_v @ p_ws)
-    sgn_h = np.sign(D_h @ p_ws)
-    z1 = 0.5 * (1.0 + sgn_v)
-    z2 = 0.5 * (1.0 - sgn_v)
-    z3 = 0.5 * (1.0 + sgn_h)
-    z4 = 0.5 * (1.0 - sgn_h)
-    delta = D_v.T @ sgn_v + D_h.T @ sgn_h
-    y_eq = delta[np.asarray(known_indices)]
-    return np.concatenate([z1, z2, z3, z4, y_eq])
 
 
 def extract_constraint_matrices(
@@ -359,6 +324,72 @@ def run_PDHG(
     return xk, yk
 
 
+def run_PDHG_with_stepsizes(
+    c: np.ndarray,
+    G: sp.csr_matrix,
+    h: np.ndarray,
+    A: sp.csr_matrix,
+    b: np.ndarray,
+    l: np.ndarray,
+    u: np.ndarray,
+    raw_xs: np.ndarray,
+    raw_ys: np.ndarray,
+    x0: np.ndarray,
+    y0: np.ndarray,
+    tau_arr: np.ndarray,
+    sigma_arr: np.ndarray,
+    theta_arr: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Chambolle-Pock PDHG with per-iteration stepsizes (K_max = len(tau_arr)).
+
+    Same iteration body as `run_PDHG` (sat-lin primal step, partial-relu dual
+    step) but reads (tau_k, sigma_k, theta_k) from the supplied arrays each
+    step. Skips the M = ||K||_2 computation (stepsizes are pre-determined) and
+    prints the Lagrangian gap each step for direct comparison with the
+    fixed-stepsize run.
+    """
+    K_mat = sp.vstack([G, A], format="csr")
+    K_T = K_mat.T.tocsr()
+    q = np.concatenate([h, b])
+    m1 = G.shape[0]
+
+    def satlin(v: np.ndarray) -> np.ndarray:
+        return np.minimum(u, np.maximum(v, l))
+
+    def partial_relu(v: np.ndarray) -> np.ndarray:
+        out = v.copy()
+        out[:m1] = np.maximum(out[:m1], 0.0)
+        return out
+
+    def lagrangian(x: np.ndarray, y: np.ndarray) -> float:
+        return float(c @ x - y @ (K_mat @ x) + q @ y)
+
+    def lagrangian_gap(xk: np.ndarray, yk: np.ndarray) -> float:
+        return lagrangian(xk, raw_ys) - lagrangian(raw_xs, yk)
+
+    xk = np.asarray(x0, dtype=np.float64).copy()
+    yk = np.asarray(y0, dtype=np.float64).copy()
+    K_max = len(tau_arr)
+    assert len(sigma_arr) == K_max and len(theta_arr) == K_max, (
+        f"stepsize array length mismatch: tau={len(tau_arr)}, "
+        f"sigma={len(sigma_arr)}, theta={len(theta_arr)}"
+    )
+
+    for k in trange(K_max):
+        print("lagrangian gap loss:", lagrangian_gap(xk, yk))
+        tau_k = float(tau_arr[k])
+        sigma_k = float(sigma_arr[k])
+        theta_k = float(theta_arr[k])
+        xkplus1 = satlin(xk - tau_k * (c - K_T @ yk))
+        xbar = xkplus1 + theta_k * (xkplus1 - xk)
+        ykplus1 = partial_relu(yk + sigma_k * (q - K_mat @ xbar))
+        xk = xkplus1
+        yk = ykplus1
+
+    print("learned-stepsize final c@x:", c @ xk)
+    return xk, yk
+
+
 def get_benchmark_solution(
     missing_fraction: float,
     random_seed: int,
@@ -438,29 +469,23 @@ if __name__ == "__main__":
     solution = solve_lp(matrices)
     print(f"Optimal objective: {solution['objective_value']:.4f}")
 
-    warm_label = "corrupted image" if WARM_START_FROM_CORRUPTED else "all zeros"
     print("\n" + "=" * 60)
-    print(f"Testing PDHG (warm-started at {warm_label})")
+    print("Testing PDHG (warm-started at strict-interior init)")
     print("=" * 60)
 
-    if WARM_START_FROM_CORRUPTED:
-        # pixels = corrupted image (missing -> 0), aux v/w set so the
-        # inequality block holds with equality at the start.
-        p0 = (problem["image"] * problem["mask"]).reshape(-1)
-        D_v_warm = _vertical_diff_matrix(M, N)
-        D_h_warm = _horizontal_diff_matrix(M, N)
-        v0 = np.abs(D_v_warm @ p0)
-        w0 = np.abs(D_h_warm @ p0)
-        x0 = np.concatenate([p0, v0, w0])
-        y0 = compute_dual_warm_start(p0, problem["known_indices"], M, N)
-        rel_y_err = float(
-            np.linalg.norm(y0 - solution["raw_y"])
-            / max(np.linalg.norm(solution["raw_y"]), 1e-12)
-        )
-        print(f"dual warm start relative distance to LP optimum: {rel_y_err:.4f}")
-    else:
-        x0 = np.zeros(matrices.c.shape[0])
-        y0 = np.zeros(matrices.G.shape[0] + matrices.A.shape[0])
+    # Local import avoids a circular dependency: pdlp.py imports helpers from
+    # this module at top level, so build_strict_interior_init can only be
+    # pulled in once the diagnostic actually runs. Also prepend src/ to
+    # sys.path so direct invocation (`python learning/tv_inpainting_test.py`
+    # from src/) resolves the sibling package, not just `python -m ...`.
+    import os, sys
+    _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _SRC_DIR not in sys.path:
+        sys.path.insert(0, _SRC_DIR)
+    from learning_experiment_classes.pdlp import build_strict_interior_init
+
+    m1 = matrices.G.shape[0]
+    x0, y0 = build_strict_interior_init(n_vars, m1, S, LP_UPPER)
 
     xk_final, _ = run_PDHG(
         matrices.c,
@@ -477,7 +502,45 @@ if __name__ == "__main__":
     )
 
     print("\n" + "=" * 60)
-    print("Plotting original / corrupted / LP reconstruction / PDHG iterate")
+    print("Testing PDHG with learned per-iteration stepsizes")
+    print("=" * 60)
+
+    stepsize_path = os.path.join(
+        _SRC_DIR, "learning_experiment_classes", "pdhg_stepsizes",
+        f"learned_pdhg_stepsizes_K{K_MAX}.csv",
+    )
+    if os.path.exists(stepsize_path):
+        learned_stepsizes = np.loadtxt(stepsize_path, delimiter=",", skiprows=1)
+        tau_arr = learned_stepsizes[:, 0]
+        sigma_arr = learned_stepsizes[:, 1]
+        theta_arr = learned_stepsizes[:, 2]
+        print(f"Loaded {len(tau_arr)} per-iteration (tau, sigma, theta) triples "
+              f"from {stepsize_path}.")
+
+        xk_learned, _ = run_PDHG_with_stepsizes(
+            matrices.c,
+            matrices.G,
+            matrices.h,
+            matrices.A,
+            matrices.b,
+            matrices.l,
+            matrices.u,
+            solution["raw_x"],
+            solution["raw_y"],
+            x0,
+            y0,
+            tau_arr,
+            sigma_arr,
+            theta_arr,
+        )
+        learned_pdhg_iterate = xk_learned[:K].reshape(M, N)
+    else:
+        print(f"No learned stepsizes for K_MAX={K_MAX} at {stepsize_path}; "
+              "skipping learned PDHG panel.")
+        learned_pdhg_iterate = None
+
+    print("\n" + "=" * 60)
+    print("Plotting original / corrupted / LP reconstruction / PDHG / learned PDHG")
     print("=" * 60)
 
     import matplotlib.pyplot as plt
@@ -487,7 +550,6 @@ if __name__ == "__main__":
     reconstructed = solution["raw_x"][:K].reshape(M, N)
     pdhg_iterate = xk_final[:K].reshape(M, N)
 
-    fig, axes = plt.subplots(1, 4, figsize=(12, 3.2))
     titles = [
         "Original",
         f"Corrupted ({int(round(MISSING_FRACTION * 100))}% missing)",
@@ -495,6 +557,12 @@ if __name__ == "__main__":
         f"PDHG iterate ({K_MAX} steps)",
     ]
     panels = [original, corrupted, reconstructed, pdhg_iterate]
+    if learned_pdhg_iterate is not None:
+        titles.append(f"learned PDHG, K={K_MAX}")
+        panels.append(learned_pdhg_iterate)
+
+    n_panels = len(panels)
+    fig, axes = plt.subplots(1, n_panels, figsize=(3.0 * n_panels, 3.2))
     plot_scale = 255.0 / LP_UPPER
     for ax, img, title in zip(axes, panels, titles):
         ax.imshow(plot_scale * img, cmap="gray", vmin=0, vmax=255, interpolation="nearest")
