@@ -420,7 +420,7 @@ if __name__ == "__main__":
     problem = generate_tv_inpainting_problem(
         missing_fraction=MISSING_FRACTION,
         random_seed=42,
-        face_index=19,
+        face_index=29,
     )
 
     M, N = problem["M"], problem["N"]
@@ -505,17 +505,23 @@ if __name__ == "__main__":
     print("Testing PDHG with learned per-iteration stepsizes")
     print("=" * 60)
 
-    stepsize_path = os.path.join(
+    stepsize_root = os.path.join(
         _SRC_DIR, "learning_experiment_classes", "pdhg_stepsizes",
-        f"learned_pdhg_stepsizes_K{K_MAX}.csv",
     )
-    if os.path.exists(stepsize_path):
-        learned_stepsizes = np.loadtxt(stepsize_path, delimiter=",", skiprows=1)
-        tau_arr = learned_stepsizes[:, 0]
-        sigma_arr = learned_stepsizes[:, 1]
-        theta_arr = learned_stepsizes[:, 2]
-        print(f"Loaded {len(tau_arr)} per-iteration (tau, sigma, theta) triples "
-              f"from {stepsize_path}.")
+    # (label, subfolder) — order determines plot order when multiple exist.
+    schedule_specs = [("l2o", "l2o"), ("ldro-pep", "ldro-pep")]
+    learned_iterates: list[tuple[str, np.ndarray]] = []
+    for label, subfolder in schedule_specs:
+        s_path = os.path.join(
+            stepsize_root, subfolder, f"learned_pdhg_stepsizes_K{K_MAX}.csv",
+        )
+        if not os.path.exists(s_path):
+            print(f"[{label}] No K={K_MAX} CSV at {s_path}; skipping panel.")
+            continue
+        arr = np.loadtxt(s_path, delimiter=",", skiprows=1)
+        tau_arr, sigma_arr, theta_arr = arr[:, 0], arr[:, 1], arr[:, 2]
+        print(f"[{label}] Loaded {len(tau_arr)} (tau, sigma, theta) triples "
+              f"from {s_path}.")
 
         xk_learned, _ = run_PDHG_with_stepsizes(
             matrices.c,
@@ -533,14 +539,10 @@ if __name__ == "__main__":
             sigma_arr,
             theta_arr,
         )
-        learned_pdhg_iterate = xk_learned[:K].reshape(M, N)
-    else:
-        print(f"No learned stepsizes for K_MAX={K_MAX} at {stepsize_path}; "
-              "skipping learned PDHG panel.")
-        learned_pdhg_iterate = None
+        learned_iterates.append((label, xk_learned[:K].reshape(M, N)))
 
     print("\n" + "=" * 60)
-    print("Plotting original / corrupted / LP reconstruction / PDHG / learned PDHG")
+    print("Plotting original / corrupted / LP reconstruction / learned PDHG")
     print("=" * 60)
 
     import matplotlib.pyplot as plt
@@ -548,18 +550,16 @@ if __name__ == "__main__":
     original = problem["image"]
     corrupted = np.where(problem["mask"], original, 0.0)
     reconstructed = solution["raw_x"][:K].reshape(M, N)
-    pdhg_iterate = xk_final[:K].reshape(M, N)
 
     titles = [
         "Original",
         f"Corrupted ({int(round(MISSING_FRACTION * 100))}% missing)",
         "L1-TV Reconstruction (LP)",
-        f"PDHG iterate ({K_MAX} steps)",
     ]
-    panels = [original, corrupted, reconstructed, pdhg_iterate]
-    if learned_pdhg_iterate is not None:
-        titles.append(f"learned PDHG, K={K_MAX}")
-        panels.append(learned_pdhg_iterate)
+    panels = [original, corrupted, reconstructed]
+    for label, img in learned_iterates:
+        titles.append(f"learned PDHG ({label}), K={K_MAX}")
+        panels.append(img)
 
     n_panels = len(panels)
     fig, axes = plt.subplots(1, n_panels, figsize=(3.0 * n_panels, 3.2))
