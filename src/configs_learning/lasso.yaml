@@ -23,10 +23,13 @@ p_xsamp_nonzero: 0.1   # Probability of non-zero entries in x samples
 b_noise_std: 1e-2
 
 # Standard deviation of x_samp entries (normal) before sparsity masking.
-# Used to define the in-distribution training/validation/test b distribution
-# and the out-of-distribution shift applied for OOD evaluation.
+# Used to define the in-distribution training/validation/test b distribution.
 x_samp_std_in_dist: 2.0
-x_samp_std_out_of_dist: 1.0
+
+# OOD reuses the in-distribution scale but switches the shape from normal to
+# uniform: x_samp ~ Uniform(-mult * x_samp_std_in_dist, mult * x_samp_std_in_dist).
+# Default 3 covers ~99.7% of the matched-std normal's mass.
+x_samp_ood_range_mult: 3.0
 
 z0_type: 'zero'
 

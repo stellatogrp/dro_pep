@@ -66,7 +66,8 @@ def generate_A(seed, m, n, scaling=1.0):
     return A
 
 
-def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
+def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0,
+                          x_samp_dist="normal", x_samp_uniform_range_mult=3.0):
     """Generate a single b vector: b = A @ x_samp + noise.
 
     Args:
@@ -74,8 +75,15 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
         A: (m, n) matrix
         p_xsamp_nonzero: Probability of non-zero entries in x_samp
         b_noise_std: Noise standard deviation
-        x_samp_std: Standard deviation of x_samp entries (normal) before masking.
-                    1.0 for in-distribution, 4.0 for out-of-distribution.
+        x_samp_std: In-distribution standard deviation of x_samp entries. For
+                    "uniform" this also sets the scale, with support
+                    [-x_samp_uniform_range_mult * x_samp_std,
+                      x_samp_uniform_range_mult * x_samp_std].
+        x_samp_dist: "normal" (in-distribution) or "uniform" (out-of-distribution
+                     shape shift with bounded support, reusing x_samp_std).
+        x_samp_uniform_range_mult: Half-width multiplier on x_samp_std for the
+                                   uniform support; ignored when
+                                   x_samp_dist != "uniform".
 
     Returns:
         b: (m,) vector
@@ -83,7 +91,13 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
     m, n = A.shape
     key1, key2, key3 = jax.random.split(key, 3)
 
-    x_samp = x_samp_std * jax.random.normal(key1, (n,))
+    if x_samp_dist == "normal":
+        x_samp = x_samp_std * jax.random.normal(key1, (n,))
+    elif x_samp_dist == "uniform":
+        bound = x_samp_uniform_range_mult * x_samp_std
+        x_samp = jax.random.uniform(key1, (n,), minval=-bound, maxval=bound)
+    else:
+        raise ValueError(f"Unknown x_samp_dist: {x_samp_dist!r}")
 
     x_mask = jax.random.bernoulli(key2, p=p_xsamp_nonzero, shape=(n,)).astype(jnp.float64)
 
@@ -94,7 +108,8 @@ def generate_single_b_jax(key, A, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
     return b
 
 
-def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0):
+def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0,
+                         x_samp_dist="normal", x_samp_uniform_range_mult=3.0):
     """Generate a batch of b vectors.
 
     Args:
@@ -104,6 +119,8 @@ def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0
         p_xsamp_nonzero: Probability of non-zero entries in x_samp
         b_noise_std: Noise standard deviation
         x_samp_std: See `generate_single_b_jax`.
+        x_samp_dist: See `generate_single_b_jax`.
+        x_samp_uniform_range_mult: See `generate_single_b_jax`.
 
     Returns:
         b_batch: (N, m) array of b vectors
@@ -112,7 +129,9 @@ def generate_batch_b_jax(key, A, N, p_xsamp_nonzero, b_noise_std, x_samp_std=1.0
     generate_one = partial(generate_single_b_jax, A=A,
                            p_xsamp_nonzero=p_xsamp_nonzero,
                            b_noise_std=b_noise_std,
-                           x_samp_std=x_samp_std)
+                           x_samp_std=x_samp_std,
+                           x_samp_dist=x_samp_dist,
+                           x_samp_uniform_range_mult=x_samp_uniform_range_mult)
     b_batch = jax.vmap(generate_one)(keys)
     return b_batch
 
@@ -932,10 +951,12 @@ class LassoProblemModule(ProblemModule):
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Sample out-of-distribution problems.
 
-        OOD shift: x_samp is drawn from a normal with std
-        cfg.x_samp_std_out_of_dist (vs cfg.x_samp_std_in_dist for the in-dist
-        sets). A is intentionally reused from the in-distribution set so the
-        shift is purely in the b distribution.
+        OOD shift: x_samp is drawn from
+        Uniform(-r * cfg.x_samp_std_in_dist, r * cfg.x_samp_std_in_dist) with
+        r = cfg.x_samp_ood_range_mult (vs Normal(0, cfg.x_samp_std_in_dist^2)
+        for the in-dist sets) -- same scale, different shape. A is intentionally
+        reused from the in-distribution set so the shift is purely in the b
+        distribution.
 
         When `data_source_dir` is configured, prefer loading `ood_set.npz` and
         `A_out_of_dist.npz` from there.
@@ -964,10 +985,13 @@ class LassoProblemModule(ProblemModule):
             A_ood_np = generate_A(A_ood_seed, self.cfg.m, self.cfg.n)
         A_ood_jax = jnp.array(A_ood_np)
 
-        # Generate b vectors using OOD x_samp distribution
+        # Generate b vectors using OOD x_samp distribution (uniform support,
+        # same scale as in-distribution).
         b_batch = generate_batch_b_jax(
             key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
-            x_samp_std=self.cfg.x_samp_std_out_of_dist,
+            x_samp_std=self.cfg.x_samp_std_in_dist,
+            x_samp_dist="uniform",
+            x_samp_uniform_range_mult=self.cfg.x_samp_ood_range_mult,
         )
 
         b_batch_np = np.array(b_batch)
@@ -1099,7 +1123,7 @@ def lasso_sample_creation_run(cfg):
     p_xsamp_nonzero = cfg.p_xsamp_nonzero
     b_noise_std = cfg.b_noise_std
     x_samp_std_in_dist = cfg.x_samp_std_in_dist
-    x_samp_std_out_of_dist = cfg.x_samp_std_out_of_dist
+    x_samp_ood_range_mult = cfg.x_samp_ood_range_mult
 
     # =========================================================================
     # In-distribution A matrix (shared by training, validation, test)
@@ -1147,8 +1171,9 @@ def lasso_sample_creation_run(cfg):
 
     # =========================================================================
     # Out-of-Distribution Test Set
-    # (A reused from the in-distribution set; x_samp normal with 4x the
-    # in-distribution std, so the OOD shift lives entirely in b.)
+    # (A reused from the in-distribution set; x_samp drawn uniformly on
+    # [-r * x_samp_std_in_dist, r * x_samp_std_in_dist] with
+    # r = x_samp_ood_range_mult, so the OOD shift is purely a shape change in b.)
     # =========================================================================
     log.info(f"Generating {out_of_dist_N} out-of-distribution problems...")
 
@@ -1162,7 +1187,9 @@ def lasso_sample_creation_run(cfg):
     b_ood_batch = generate_batch_b_jax(
         key_ood, A_ood_jax, out_of_dist_N,
         p_xsamp_nonzero, b_noise_std,
-        x_samp_std=x_samp_std_out_of_dist,
+        x_samp_std=x_samp_std_in_dist,
+        x_samp_dist="uniform",
+        x_samp_uniform_range_mult=x_samp_ood_range_mult,
     )
     b_ood_np = np.array(b_ood_batch)
 
@@ -1203,7 +1230,7 @@ def lasso_sample_creation_run(cfg):
         'p_xsamp_nonzero': p_xsamp_nonzero,
         'b_noise_std': b_noise_std,
         'x_samp_std_in_dist': x_samp_std_in_dist,
-        'x_samp_std_out_of_dist': x_samp_std_out_of_dist,
+        'x_samp_ood_range_mult': x_samp_ood_range_mult,
     }
     np.savez_compressed("out_of_sample_metadata.npz", **metadata)
 

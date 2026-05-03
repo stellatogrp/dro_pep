@@ -37,10 +37,15 @@ from tqdm import trange
 np.set_printoptions(suppress=True, precision=5)
 
 # Fraction of pixels marked as unknown in the random mask. Tune to taste.
-MISSING_FRACTION = 0.2
+MISSING_FRACTION = 0.1
 
 # Number of PDHG iterations to run in the __main__ demo. Tune to taste.
 K_MAX = 5
+
+# Number of times to repeat the loaded learned stepsize schedule end-to-end.
+# Effective horizon for learned PDHG is K_MAX * NUM_REPS. NUM_REPS=1 keeps the
+# original behavior (run the schedule once).
+NUM_REPS = 1
 
 # If True, the LP operates in [0, 1] (image left at the dataset's native scale,
 # u = 1). If False, the LP operates in [0, 255] (image upscaled by 255, u = 255).
@@ -519,9 +524,12 @@ if __name__ == "__main__":
             print(f"[{label}] No K={K_MAX} CSV at {s_path}; skipping panel.")
             continue
         arr = np.loadtxt(s_path, delimiter=",", skiprows=1)
-        tau_arr, sigma_arr, theta_arr = arr[:, 0], arr[:, 1], arr[:, 2]
-        print(f"[{label}] Loaded {len(tau_arr)} (tau, sigma, theta) triples "
-              f"from {s_path}.")
+        tau_arr = np.tile(arr[:, 0], NUM_REPS)
+        sigma_arr = np.tile(arr[:, 1], NUM_REPS)
+        theta_arr = np.tile(arr[:, 2], NUM_REPS)
+        print(f"[{label}] Loaded {arr.shape[0]} (tau, sigma, theta) triples "
+              f"from {s_path}; repeating x{NUM_REPS} -> "
+              f"{len(tau_arr)} total iterations.")
 
         xk_learned, _ = run_PDHG_with_stepsizes(
             matrices.c,
@@ -557,8 +565,11 @@ if __name__ == "__main__":
         "L1-TV Reconstruction (LP)",
     ]
     panels = [original, corrupted, reconstructed]
+    horizon_label = (
+        f"K={K_MAX}" if NUM_REPS == 1 else f"K={K_MAX}x{NUM_REPS}"
+    )
     for label, img in learned_iterates:
-        titles.append(f"learned PDHG ({label}), K={K_MAX}")
+        titles.append(f"learned PDHG ({label}), {horizon_label}")
         panels.append(img)
 
     n_panels = len(panels)
