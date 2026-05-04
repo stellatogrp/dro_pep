@@ -35,6 +35,7 @@ from sklearn.datasets import fetch_olivetti_faces
 
 import jax
 import jax.numpy as jnp
+from jax.experimental import sparse as jsparse
 
 from learning.problem_module import (
     GroundTruth,
@@ -386,14 +387,14 @@ def pdlp_sample_creation_run(cfg):
 # Training-time wiring
 # =============================================================================
 
-def _build_G_dense(M: int, N: int) -> np.ndarray:
-    """Build the mask-independent inequality block G as a dense (m1, n_vars) array.
+def _build_G_sparse(M: int, N: int) -> sp.csr_matrix:
+    """Build the mask-independent inequality block G as a scipy sparse matrix.
 
     G enforces the four blocks  v >= +/- D_v p,  w >= +/- D_h p  via
     ``G x >= 0`` with x = [p; v; w]. Reused across every instance — only the
-    A_mask block changes per mask.
+    A_mask block changes per mask. Sparsity is ~2 nnz per row (one ±1 in
+    pixel, one +1 in slack); densifying at 64×64 wastes ~1.5 GB.
     """
-    K = M * N
     K_v = (M - 1) * N
     K_h = M * (N - 1)
     D_v = _vertical_diff_matrix(M, N)
@@ -402,7 +403,7 @@ def _build_G_dense(M: int, N: int) -> np.ndarray:
     I_h = sp.eye(K_h, format="csr")
     Z_vh = sp.csr_matrix((K_v, K_h))
     Z_hv = sp.csr_matrix((K_h, K_v))
-    G_sp = sp.bmat(
+    return sp.bmat(
         [
             [-D_v, I_v, Z_vh],
             [D_v, I_v, Z_vh],
@@ -410,8 +411,7 @@ def _build_G_dense(M: int, N: int) -> np.ndarray:
             [D_h, Z_hv, I_h],
         ],
         format="csr",
-    )
-    return G_sp.toarray().astype(np.float64)
+    ).astype(np.float64)
 
 
 def _make_cp_tv_traj_fn(
@@ -534,13 +534,15 @@ class PDLPProblemModule(ProblemModule):
         )
 
         # JAX-resident fixtures used by the lazy K_mat reconstruction inside
-        # the trajectory function. G_dense_jnp is mask-independent (~1.57 GB at
-        # 64x64); c_jnp is tiny; images_jnp is ~78 MB. All allocated once.
-        log.info("Building mask-independent G inequality block on JAX device…")
-        self.G_dense_jnp = jnp.asarray(_build_G_dense(self.M_img, self.N_img))
+        # the trajectory function. G is mask-independent and sparse (~2 nnz
+        # per row); BCOO storage is ~1 MB instead of 1.57 GB dense at 64×64.
+        # c_jnp is tiny; images_jnp is ~78 MB. All allocated once.
+        log.info("Building mask-independent G inequality block (sparse) on JAX device…")
+        G_sp = _build_G_sparse(self.M_img, self.N_img)
+        self.G_bcoo = jsparse.BCOO.from_scipy_sparse(G_sp).astype(jnp.float64)
         log.info(
-            f"G_dense_jnp shape={self.G_dense_jnp.shape} "
-            f"~{self.G_dense_jnp.nbytes / 1e9:.2f} GB"
+            f"G_bcoo shape={self.G_bcoo.shape} nnz={int(self.G_bcoo.nse)} "
+            f"~{(self.G_bcoo.data.nbytes + self.G_bcoo.indices.nbytes) / 1e6:.2f} MB"
         )
         self.c_jnp = jnp.asarray(self._c_np)
         self.images_jnp = jnp.asarray(self.images_np)
@@ -584,22 +586,35 @@ class PDLPProblemModule(ProblemModule):
     def _reconstruct_single(self, image_index, mask, S: int):
         """Build (K_mat, c, q) for a single instance — all jnp ops, jit/vmap traceable.
 
+        K_mat is returned as a BCOO sparse matrix to avoid materializing the
+        full (m1+S, n_vars) dense block under vmap; the trajectory function
+        uses it only for matvecs (K @ x and K.T @ y) which BCOO handles
+        natively.
+
         Args:
             image_index: scalar int32.
             mask: (K,) bool with exactly S True entries.
             S: static Python int (closed over per split).
 
-        Returns: (K_mat (m1+S, n_vars), c (n_vars,), q (m1+S,)).
+        Returns: (K_mat (m1+S, n_vars) as BCOO, c (n_vars,), q (m1+S,)).
         """
         # jnp.where with size= gives a fixed-shape output. Under deterministic-
         # count masks every instance has exactly S True entries so no dummy
         # fill values are populated.
         known_indices = jnp.where(mask, size=S)[0]
         known_values = self.images_jnp[image_index].reshape(-1)[known_indices]
-        A_mask_padded = jnp.zeros((S, self.n_vars)).at[
-            jnp.arange(S), known_indices
-        ].set(1.0)
-        K_mat = jnp.concatenate([self.G_dense_jnp, A_mask_padded], axis=0)
+
+        # A_mask as BCOO: row i has a single 1.0 at column known_indices[i].
+        idx_dtype = self.G_bcoo.indices.dtype
+        A_mask_idx = jnp.stack(
+            [jnp.arange(S, dtype=idx_dtype), known_indices.astype(idx_dtype)],
+            axis=-1,
+        )
+        A_mask_data = jnp.ones(S, dtype=self.G_bcoo.data.dtype)
+        A_mask_bcoo = jsparse.BCOO(
+            (A_mask_data, A_mask_idx), shape=(S, self.n_vars)
+        )
+        K_mat = jsparse.bcoo_concatenate([self.G_bcoo, A_mask_bcoo], dimension=0)
         q = jnp.concatenate([jnp.zeros(self.m1), known_values])
         return K_mat, self.c_jnp, q
 
