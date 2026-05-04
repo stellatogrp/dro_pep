@@ -31,6 +31,8 @@ from learning.jax_scs_layer import (
     dro_expectation_setup_static,
     dro_expectation_canon_to_bcoo,
     scs_solve_wrapper_sparse,
+    get_solver_stats,
+    reset_solver_stats,
 )
 
 log = logging.getLogger(__name__)
@@ -843,6 +845,10 @@ class UnifiedTrainer:
         # Track history (in actual stepsize form for external consumers)
         all_stepsizes_vals = [to_actual(sqrt_stepsizes)]
 
+        # Reset SDP solver health counters so the per-K summary at the end of
+        # this loop counts only this K's solves.
+        reset_solver_stats()
+
         # Compute initial losses for the starting stepsizes (before any updates)
         log.info("Computing initial losses for starting stepsizes...")
         initial_start_time = time.perf_counter()
@@ -940,6 +946,17 @@ class UnifiedTrainer:
 
             # Save checkpoint
             self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, all_raw_grad_norms, all_lrs, csv_path)
+
+        # SDP solver health summary — counts non-Solved Clarabel statuses and
+        # silent zero-gradient fallbacks. Useful when raw_grad_norm=0 to
+        # distinguish a true stationary point from a masked solver failure.
+        stats = get_solver_stats()
+        if stats['fwd_total'] > 0:
+            log.info(
+                f"SDP solver health: forward={stats['fwd_total']} "
+                f"(failures={stats['fwd_failures']}, exceptions={stats['fwd_exceptions']}), "
+                f"bwd_zero_grad_fallbacks={stats['bwd_zero_grads']}"
+            )
 
         # Return result (actual stepsize form)
         return TrainingResult(

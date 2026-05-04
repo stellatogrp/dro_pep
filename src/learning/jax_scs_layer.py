@@ -239,6 +239,79 @@ import diffcp
 from jax.experimental import sparse as jsparse
 
 
+# =============================================================================
+# SDP solver failure tracking
+# =============================================================================
+# diffcp/Clarabel can return non-optimal status (Failure, MaxIterations, ...) on
+# numerically tough problems; the existing fallback in `_solve_bwd` returns
+# zero gradients silently, which surfaces in the trainer as raw_grad_norm=0
+# — indistinguishable from a real stationary point. Track counts here so a
+# stuck SGD run is easy to diagnose post-hoc, and log loudly each time the
+# fallback fires.
+
+_SOLVE_STATS = {
+    'fwd_total': 0,
+    'fwd_failures': 0,
+    'fwd_exceptions': 0,
+    'bwd_zero_grads': 0,
+}
+
+# Cone names a healthy Clarabel solve might report.
+_HEALTHY_STATUSES = ("Solved", "AlmostSolved", "Solved/Inaccurate")
+
+
+def _log_solve_status(prefix, status, info):
+    """Log Clarabel forward status + track failures.
+
+    Skips the per-call ``||x||, ||y||, ||s||`` norm computation that earlier
+    versions emitted at INFO; those three np.linalg.norm calls run on every
+    solve (~few thousand iters per training run). Norms are still computed
+    if the logger is at DEBUG.
+    """
+    _SOLVE_STATS['fwd_total'] += 1
+    log.info(f"[{prefix}] Solver status: {status}")
+    if "iter" in info:
+        log.info(f"[{prefix}] Iterations: {info['iter']}")
+    if status not in _HEALTHY_STATUSES:
+        _SOLVE_STATS['fwd_failures'] += 1
+        log.warning(
+            f"[{prefix}] SDP not solved optimally — status={status!r}. "
+            f"Cumulative forward failures: {_SOLVE_STATS['fwd_failures']}/"
+            f"{_SOLVE_STATS['fwd_total']} solves."
+        )
+
+
+def _record_bwd_zero_grad(prefix):
+    """Note that the backward path is returning zeros (forward solve failed)."""
+    _SOLVE_STATS['bwd_zero_grads'] += 1
+    log.warning(
+        f"[{prefix}] adjoint cache invalid — returning zero SDP gradient. "
+        f"This iteration's raw_grad_norm reflects only the non-SDP part of the "
+        f"loss (will appear ≈0 if the SDP is the only contributor). "
+        f"Cumulative bwd zero-grad fallbacks: {_SOLVE_STATS['bwd_zero_grads']}."
+    )
+
+
+def get_solver_stats():
+    """Return a snapshot of cumulative SDP solver health counters."""
+    return dict(_SOLVE_STATS)
+
+
+def reset_solver_stats():
+    """Zero the SDP solver health counters (call between K's, etc.)."""
+    for k in _SOLVE_STATS:
+        _SOLVE_STATS[k] = 0
+
+
+def _maybe_log_norms(prefix, x, y, s):
+    """Log ||x||, ||y||, ||s|| only if the logger is at DEBUG."""
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug(
+            f"[{prefix}] ||x||={np.linalg.norm(x):.6e} "
+            f"||y||={np.linalg.norm(y):.6e} ||s||={np.linalg.norm(s):.6e}"
+        )
+
+
 class SCSSolveData:
     """Container for static data needed by the SCS solver."""
     
@@ -326,22 +399,14 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 adjoint_deriv = result["DT"]
                 status = result["info"]["status"]
 
-                # Log solver diagnostics
                 obj = c_arr @ x
-                log.info(f"[Forward] Solver status: {status}")
-                log.info(f"[Forward] Primal objective: {obj:.6e}")
-                log.info(f"[Forward] ||x||: {np.linalg.norm(x):.6e}, ||y||: {np.linalg.norm(y):.6e}, ||s||: {np.linalg.norm(s):.6e}")
-                if "iter" in result["info"]:
-                    log.info(f"[Forward] Iterations: {result['info']['iter']}")
+                _log_solve_status("Forward", status, result["info"])
+                _maybe_log_norms("Forward", x, y, s)
 
-                # Warn if not solved optimally
-                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
-                    log.warning(f"[Forward] Problem not solved optimally! Status: {status}")
-
-                # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
                 _adjoint_cache['valid'] = True
             except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
                 log.warning(f"diffcp solve failed: {e}")
                 x = np.zeros(c_arr.shape[0])
                 obj = np.nan
@@ -383,26 +448,17 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 adjoint_deriv = result["DT"]
                 status = result["info"]["status"]
 
-                # Log solver diagnostics
                 obj = c_arr @ x
-                log.info(f"[VJP Forward] Solver status: {status}")
-                log.info(f"[VJP Forward] Primal objective: {obj:.6e}")
-                log.info(f"[VJP Forward] ||x||: {np.linalg.norm(x):.6e}, ||y||: {np.linalg.norm(y):.6e}, ||s||: {np.linalg.norm(s):.6e}")
-                if "iter" in result["info"]:
-                    log.info(f"[VJP Forward] Iterations: {result['info']['iter']}")
+                _log_solve_status("VJP Forward", status, result["info"])
+                _maybe_log_norms("VJP Forward", x, y, s)
 
-                # Warn if not solved optimally
-                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
-                    log.warning(f"[VJP Forward] Problem not solved optimally! Status: {status}")
-
-                # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
                 _adjoint_cache['x'] = x
                 _adjoint_cache['y'] = y
                 _adjoint_cache['s'] = s
                 _adjoint_cache['valid'] = True
-                log.info(f'diffcp solve succeeded, obj={obj:.6f}')
             except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
                 log.warning(f"diffcp solve failed in fwd: {e}")
                 x = np.zeros(c_arr.shape[0])
                 y = np.zeros(b_arr.shape[0])
@@ -442,7 +498,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             d_obj_arr = np.asarray(d_obj_np)
             
             if not _adjoint_cache.get('valid', False):
-                # If forward solve failed, return zero gradients
+                _record_bwd_zero_grad("VJP Backward")
                 return np.zeros_like(A_arr), np.zeros_like(b_arr), np.zeros_like(c_arr)
             
             adjoint_deriv = _adjoint_cache['adjoint']
@@ -555,15 +611,13 @@ def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
                 )
                 x = result["x"]
                 obj = c_arr @ x
-                status = result["info"]["status"]
-                log.info(f"[SparseFwd] Solver status: {status}")
-                if "iter" in result["info"]:
-                    log.info(f"[SparseFwd] Iterations: {result['info']['iter']}")
-                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
-                    log.warning(f"[SparseFwd] Problem not solved optimally! Status: {status}")
+                _log_solve_status("SparseFwd", result["info"]["status"], result["info"])
+                if log.isEnabledFor(logging.DEBUG):
+                    _maybe_log_norms("SparseFwd", x, result["y"], result["s"])
                 _adjoint_cache['adjoint'] = result["DT"]
                 _adjoint_cache['valid'] = True
             except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
                 log.warning(f"diffcp solve failed: {e}")
                 obj = np.nan
                 _adjoint_cache['valid'] = False
@@ -597,18 +651,15 @@ def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
                 )
                 x = result["x"]; y = result["y"]; s = result["s"]
                 obj = c_arr @ x
-                status = result["info"]["status"]
-                log.info(f"[SparseVJPFwd] Solver status: {status}")
-                if "iter" in result["info"]:
-                    log.info(f"[SparseVJPFwd] Iterations: {result['info']['iter']}")
-                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
-                    log.warning(f"[SparseVJPFwd] Problem not solved optimally! Status: {status}")
+                _log_solve_status("SparseVJPFwd", result["info"]["status"], result["info"])
+                _maybe_log_norms("SparseVJPFwd", x, y, s)
                 _adjoint_cache['adjoint'] = result["DT"]
                 _adjoint_cache['x'] = x
                 _adjoint_cache['y'] = y
                 _adjoint_cache['s'] = s
                 _adjoint_cache['valid'] = True
             except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
                 log.warning(f"diffcp solve failed in fwd: {e}")
                 x = np.zeros(c_arr.shape[0])
                 y = np.zeros(b_arr.shape[0])
@@ -642,6 +693,7 @@ def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
             d_obj_arr = np.asarray(d_obj_np)
 
             if not _adjoint_cache.get('valid', False):
+                _record_bwd_zero_grad("SparseVJPBwd")
                 return (
                     np.zeros_like(A_data_arr),
                     np.zeros(b_dim, dtype=np.float64),
