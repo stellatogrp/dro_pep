@@ -102,14 +102,18 @@ def conditional_product(common_options, conditional_groups):
 
 # Define options for each parameter (each list contains all values for that parameter)
 Quad_options = [
-    ['learning_framework=l2o'],
+    ['learning_framework=lpep'],
+    ['optimizer_type=vanilla_sgd'],
     ['alg=vanilla_gd'],
     ['pep_obj=obj_val'],
     ['dro_obj=expectation'],
-    ['mu=1'],
-    ['N=20'],
-    ['sgd_iters=500'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    # ['mu=1'],
+    # ['N=20'],
+    ['eta_t=1e-5', 'eta_t=1e-4'],
+    ['weight_decay=0'],
+    ['sgd_iters=1000'],
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]'],
+    # ['K_max=[11, 12, 13, 14, 15]'],
 ]
 
 # Parameter combinations for Slurm array jobs
@@ -148,11 +152,10 @@ Lasso_options = [
     ['alg=ista'],
     ['dro_obj=expectation'],
     ['sgd_iters=1000'],
-    ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
-    ['weight_decay=1e-5', 'weight_decay=1e-4', 'weight_decay=1e-3'],
-    # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-    # ['K_max=[11, 12, 13, 14, 15]'],
-    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
+    ['eta_t=1e-5', 'eta_t=1e-4'],
+    ['weight_decay=0'],
+    ['sgd_iters=1000'],
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]'],
 ]
 
 Learn_Lasso_params = conditional_product(

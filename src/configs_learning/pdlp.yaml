@@ -63,13 +63,13 @@ decay_rate: 0.9
 # pool size, one mask per image — see plan); we still expose training_sample_N
 # etc. for downstream loaders that read them.
 # ----------------------------------------------------------------------------
-N: 10                                   # SGD minibatch size
+N: 5                                   # SGD minibatch size
 training_sample_N: 280                  # = n_subjects_train * images_per_subject
 out_of_sample_val_N: 40                 # = n_subjects_val * images_per_subject
 out_of_sample_test_N: 80                # = n_subjects_test * images_per_subject
 out_of_dist_N: 400                      # full dataset
 
-K_max: [5, 10]
+K_max: [5]
 sgd_seed: 500
 
 # ----------------------------------------------------------------------------
@@ -80,7 +80,7 @@ sdp_backend: "diffcp"
 dro_canon_backend: "manual_jax"         # "manual_jax" or "cvxpylayers"
 eps: 0.1
 alpha: 0.1
-precond_type: 'average'
+precond_type: 'identity'
 
 # ----------------------------------------------------------------------------
 # SGD training parameters
@@ -88,11 +88,11 @@ precond_type: 'average'
 optimizer_type: "adamw"
 sgd_iters: 1000
 eta_t: 1e-3
-weight_decay: 1e-3
+weight_decay: 1e-5
 grad_clip_norm: 1.0
 
 # ----------------------------------------------------------------------------
 # Outputs
 # ----------------------------------------------------------------------------
 output_dir: "learn_dro_outputs"
-data_source_dir: "/Users/vranjan/Research/2026/dro_pep/src/sample_creation_outputs/PDLP/2026-05-02/15-28-02"  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.
+data_source_dir: "/home/vranjan/dro_pep/src/sample_creation_outputs/PDLP/2026-05-02/15-49-18/"  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.

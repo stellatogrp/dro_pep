@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=Lasso
+#SBATCH --job-name=Quad
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 # # SBATCH --mem-per-cpu=4G
-#SBATCH --mem=4G
+#SBATCH --mem=3G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-07:59:59
+#SBATCH --time=00-06:59:59
 #SBATCH --array=0-1
-#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Lasso/runs/%A.txt
+#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1
@@ -26,4 +26,4 @@ module load anaconda3/2025.12
 conda activate algover
 
 # cd "$(dirname "$0")/.."
-python run_learning_lpep_experiment.py Lasso cluster
+python run_learning_lpep_experiment.py Quad cluster

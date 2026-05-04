@@ -133,7 +133,8 @@ Quad_options = [
     ['eta_t=1e-4', 'eta_t=1e-3'],
     ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
     # ['weight_decay=0'],
-    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
+    # ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
+    ['K_max=[11, 12, 13, 14, 15]'],
     # ['K_max=[15]'],
 ]
 
@@ -173,25 +174,26 @@ Lasso_options = [
     ['learning_framework=ldro-pep'],
     ['alg=ista'],
     ['N=10'],
-    ['training_sample_N=100',
-     'training_sample_N=200',
-     'training_sample_N=300',
-     'training_sample_N=400',
-     'training_sample_N=500',
-     'training_sample_N=600',
-     'training_sample_N=700',
-     'training_sample_N=800',
-     'training_sample_N=900',
-     'training_sample_N=1000'],
+    # ['training_sample_N=100',
+    #  'training_sample_N=200',
+    #  'training_sample_N=300',
+    #  'training_sample_N=400',
+    #  'training_sample_N=500',
+    #  'training_sample_N=600',
+    #  'training_sample_N=700',
+    #  'training_sample_N=800',
+    #  'training_sample_N=900',
+    #  'training_sample_N=1000'],
+    ['training_sample_N=1000'],
     ['dro_obj=expectation'],
     ['sgd_iters=1000'],
-    ['eps=1e-3', 'eps=0.01', 'eps=0.1', 'eps=1.0'],
+    ['eps=1e-3', 'eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=10.0'],
     # ['eta_t=1e-5', 'eta_t=1e-4', 'eta_t=1e-3'],
     ['eta_t=1e-4', 'eta_t=1e-3'],
     ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
     # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
-    # ['K_max=[11, 12]'],
+    # ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
+    ['K_max=[14, 15]'],
 ]
 
 Learn_Lasso_params = conditional_product(
@@ -209,12 +211,13 @@ Learn_Lasso_params = conditional_product(
 )
 
 PDLP_options = [
-    ['N=20'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
-    ['sgd_iters=200'],
-    ['eps=0.1', 'eps=1.0', 'eps=10.0'],
-    ['K_max=[5]', 'K_max=[10]'],
+    ['N=4', 'N=5'],
+    # ['dro_obj=expectation', 'dro_obj=cvar'],
+    # ['alpha=0.1'],
+    ['sgd_iters=500'],
+    ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
+    ['eps=1.0'],
+    ['K_max=[8]'],
 ]
 
 Learn_PDLP_params = conditional_product(
