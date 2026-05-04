@@ -236,6 +236,7 @@ def jax_scs_scaled_off_triangles(A, scale_factor):
 
 import numpy as np
 import diffcp
+from jax.experimental import sparse as jsparse
 
 
 class SCSSolveData:
@@ -485,6 +486,205 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
     _solve.defvjp(_solve_fwd, _solve_bwd)
     
     return _solve(A_dense, b, c)
+
+
+def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
+    """Differentiable SDP solve with sparse A passed as (data, indices) triplets.
+
+    Mirrors ``scs_solve_wrapper`` semantics but the constraint matrix arrives
+    pre-sparsified — no host-side ``scipy.sparse.csc_matrix(dense)`` scan,
+    and the dense (m, n) cotangent for ``A`` is replaced by a flat data
+    cotangent of length ``A_data.shape[0]``. Indices are integer-valued and
+    not differentiable; we pass them through as-is.
+
+    Args:
+        static_data: SCSSolveData with cone info (Python).
+        A_data:    (nse,) JAX float64 array.
+        A_indices: (nse, 2) JAX int array — (row, col) per nonzero.
+        A_shape:   (m, n) Python tuple — static.
+        b, c:      JAX float64 arrays.
+
+    Returns:
+        Optimal objective value (scalar, differentiable).
+    """
+    _adjoint_cache = {}
+
+    tol_gap_abs = 1e-5
+    tol_gap_rel = 1e-5
+    tol_feas = 1e-5
+    reduced_tol_gap_abs = 5e-5
+    reduced_tol_gap_rel = 5e-5
+    reduced_tol_feas = 1e-4
+
+    m_rows, n_cols = A_shape
+
+    def _build_csc_from_triplets(A_data_np, A_indices_np):
+        # JAX BCOO.fromdense pads to static nse with out-of-bound (m, 0)
+        # markers; filter those out before scipy.csc_matrix construction.
+        idx = np.asarray(A_indices_np)
+        rows = idx[:, 0]
+        cols = idx[:, 1]
+        valid = (rows < m_rows) & (cols < n_cols)
+        return spa.csc_matrix(
+            (
+                np.asarray(A_data_np)[valid],
+                (rows[valid].astype(np.int32), cols[valid].astype(np.int32)),
+            ),
+            shape=A_shape,
+        )
+
+    @jax.custom_vjp
+    def _solve(A_data, A_indices, b, c):
+        def solve_impl(A_data_np, A_idx_np, b_np, c_np):
+            b_arr = np.asarray(b_np)
+            c_arr = np.asarray(c_np)
+            A_csc = _build_csc_from_triplets(A_data_np, np.asarray(A_idx_np))
+            try:
+                result = diffcp.solve_and_derivative_internal(
+                    A_csc, b_arr, c_arr,
+                    static_data.diffcp_cone_dict,
+                    solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
+                    verbose=False,
+                    tol_gap_abs=tol_gap_abs,
+                    tol_gap_rel=tol_gap_rel,
+                    tol_feas=tol_feas,
+                    reduced_tol_gap_abs=reduced_tol_gap_abs,
+                    reduced_tol_gap_rel=reduced_tol_gap_rel,
+                    reduced_tol_feas=reduced_tol_feas,
+                )
+                x = result["x"]
+                obj = c_arr @ x
+                status = result["info"]["status"]
+                log.info(f"[SparseFwd] Solver status: {status}")
+                if "iter" in result["info"]:
+                    log.info(f"[SparseFwd] Iterations: {result['info']['iter']}")
+                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
+                    log.warning(f"[SparseFwd] Problem not solved optimally! Status: {status}")
+                _adjoint_cache['adjoint'] = result["DT"]
+                _adjoint_cache['valid'] = True
+            except Exception as e:
+                log.warning(f"diffcp solve failed: {e}")
+                obj = np.nan
+                _adjoint_cache['valid'] = False
+            return np.array([obj])
+
+        obj = jax.pure_callback(
+            solve_impl,
+            jax.ShapeDtypeStruct((1,), jnp.float64),
+            A_data, A_indices, b, c,
+        )
+        return obj[0]
+
+    def _solve_fwd(A_data, A_indices, b, c):
+        def solve_impl(A_data_np, A_idx_np, b_np, c_np):
+            b_arr = np.asarray(b_np)
+            c_arr = np.asarray(c_np)
+            A_csc = _build_csc_from_triplets(A_data_np, np.asarray(A_idx_np))
+            try:
+                result = diffcp.solve_and_derivative_internal(
+                    A_csc, b_arr, c_arr,
+                    static_data.diffcp_cone_dict,
+                    solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
+                    verbose=False,
+                    tol_gap_abs=tol_gap_abs,
+                    tol_gap_rel=tol_gap_rel,
+                    tol_feas=tol_feas,
+                    reduced_tol_gap_abs=reduced_tol_gap_abs,
+                    reduced_tol_gap_rel=reduced_tol_gap_rel,
+                    reduced_tol_feas=reduced_tol_feas,
+                )
+                x = result["x"]; y = result["y"]; s = result["s"]
+                obj = c_arr @ x
+                status = result["info"]["status"]
+                log.info(f"[SparseVJPFwd] Solver status: {status}")
+                if "iter" in result["info"]:
+                    log.info(f"[SparseVJPFwd] Iterations: {result['info']['iter']}")
+                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
+                    log.warning(f"[SparseVJPFwd] Problem not solved optimally! Status: {status}")
+                _adjoint_cache['adjoint'] = result["DT"]
+                _adjoint_cache['x'] = x
+                _adjoint_cache['y'] = y
+                _adjoint_cache['s'] = s
+                _adjoint_cache['valid'] = True
+            except Exception as e:
+                log.warning(f"diffcp solve failed in fwd: {e}")
+                x = np.zeros(c_arr.shape[0])
+                y = np.zeros(b_arr.shape[0])
+                s = np.zeros(b_arr.shape[0])
+                obj = np.nan
+                _adjoint_cache['valid'] = False
+            return (np.array([obj]), x, y, s)
+
+        result_shapes = (
+            jax.ShapeDtypeStruct((1,), jnp.float64),
+            jax.ShapeDtypeStruct((c.shape[0],), jnp.float64),
+            jax.ShapeDtypeStruct((b.shape[0],), jnp.float64),
+            jax.ShapeDtypeStruct((b.shape[0],), jnp.float64),
+        )
+        obj, x, y, s = jax.pure_callback(
+            solve_impl, result_shapes, A_data, A_indices, b, c
+        )
+        # residuals: keep A_data + A_indices for backward dA extraction
+        return obj[0], (A_data, A_indices, b, c, x)
+
+    def _solve_bwd(res, g):
+        A_data, A_indices, b, c, x = res
+        d_obj = g
+        b_dim = b.shape[0]
+
+        def compute_grads(A_data_np, A_idx_np, c_np, x_np, d_obj_np):
+            A_data_arr = np.asarray(A_data_np)
+            A_idx_arr = np.asarray(A_idx_np)
+            c_arr = np.asarray(c_np)
+            x_arr = np.asarray(x_np)
+            d_obj_arr = np.asarray(d_obj_np)
+
+            if not _adjoint_cache.get('valid', False):
+                return (
+                    np.zeros_like(A_data_arr),
+                    np.zeros(b_dim, dtype=np.float64),
+                    np.zeros_like(c_arr),
+                )
+
+            adjoint_deriv = _adjoint_cache['adjoint']
+            y_cached = _adjoint_cache['y']
+            s_cached = _adjoint_cache['s']
+
+            dx = d_obj_arr * c_arr
+            dy = np.zeros_like(y_cached)
+            ds = np.zeros_like(s_cached)
+            dA_sol, db_sol, dc_sol = adjoint_deriv(dx, dy, ds)
+
+            dA_csr = dA_sol.tocsr()
+            rows = A_idx_arr[:, 0]
+            cols = A_idx_arr[:, 1]
+            valid = (rows < m_rows) & (cols < n_cols)
+            dA_data_aligned = np.zeros_like(A_data_arr)
+            if valid.any():
+                dA_data_aligned[valid] = np.asarray(
+                    dA_csr[rows[valid].astype(np.int64), cols[valid].astype(np.int64)]
+                ).reshape(-1)
+
+            dc_direct = d_obj_arr * x_arr
+            return dA_data_aligned, db_sol, dc_sol + dc_direct
+
+        result_shapes = (
+            jax.ShapeDtypeStruct(A_data.shape, jnp.float64),
+            jax.ShapeDtypeStruct(b.shape, jnp.float64),
+            jax.ShapeDtypeStruct(c.shape, jnp.float64),
+        )
+        dA_data, db, dc = jax.pure_callback(
+            compute_grads, result_shapes,
+            A_data, A_indices, c, x, jnp.array(d_obj),
+        )
+        _adjoint_cache.clear()
+        return dA_data, jnp.zeros_like(A_indices), db, dc
+
+    _solve.defvjp(_solve_fwd, _solve_bwd)
+
+    return _solve(A_data, A_indices, b, c)
 
 
 # =============================================================================
@@ -1271,10 +1471,26 @@ def dro_expectation_scs_solve(
     )
 
     log.info('canon done')
-    
-    # Solve with custom VJP
-    obj_val = scs_solve_wrapper(static_data, A_dense, b, c)
-    
+
+    # Sparsify A at the JAX↔host boundary so the callback can build CSC
+    # directly from triplets (skipping the O(m·n) scipy.csc_matrix scan)
+    # and the backward returns a flat data cotangent of length nse rather
+    # than a dense (m, n) matrix.
+    sum_H = H_vec_sum
+    nse_upper_bound = (
+        N * V * (M + 1 + sum_H)        # eq_rows: -Bm_T + I_V + d_vecs
+        + N * (1 + M + V + S_vec)      # epi_rows
+        + N * M                        # y_nonneg
+        + N * (1 + V + S_vec)          # socp_rows: -1 + diag(F_pre^2) + diag(scaledG)
+        + N * S_vec * (M + 1 + sum_H)  # psd_rows: -Am_T + diag(scaledI) + C_symvecs
+        + N * sum_H                    # H_psd_rows: diag(scaledI_H)
+    )
+    A_bcoo = jsparse.BCOO.fromdense(A_dense, nse=int(nse_upper_bound))
+
+    obj_val = scs_solve_wrapper_sparse(
+        static_data, A_bcoo.data, A_bcoo.indices, A_shape, b, c
+    )
+
     return obj_val
 
 
