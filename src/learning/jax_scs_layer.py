@@ -281,15 +281,25 @@ def _log_solve_status(prefix, status, info):
         )
 
 
+_BWD_WARN_FIRST_N = 5
+_BWD_WARN_EVERY_N = 100
+
+
 def _record_bwd_zero_grad(prefix):
-    """Note that the backward path is returning zeros (forward solve failed)."""
+    """Note that the backward path is returning zeros (forward solve failed).
+
+    Warns on the first ``_BWD_WARN_FIRST_N`` occurrences then every
+    ``_BWD_WARN_EVERY_N`` after that — a stuck SGD run can hit this every
+    step and the cumulative count is always available via get_solver_stats().
+    """
     _SOLVE_STATS['bwd_zero_grads'] += 1
-    log.warning(
-        f"[{prefix}] adjoint cache invalid — returning zero SDP gradient. "
-        f"This iteration's raw_grad_norm reflects only the non-SDP part of the "
-        f"loss (will appear ≈0 if the SDP is the only contributor). "
-        f"Cumulative bwd zero-grad fallbacks: {_SOLVE_STATS['bwd_zero_grads']}."
-    )
+    n = _SOLVE_STATS['bwd_zero_grads']
+    if n <= _BWD_WARN_FIRST_N or n % _BWD_WARN_EVERY_N == 0:
+        log.warning(
+            f"[{prefix}] adjoint cache invalid — returning zero SDP gradient. "
+            f"raw_grad_norm reflects only the non-SDP part of the loss. "
+            f"Cumulative bwd zero-grad fallbacks: {n}."
+        )
 
 
 def get_solver_stats():
@@ -419,10 +429,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
         return obj[0]
     
     def _solve_fwd(A_dense, b, c):
-        # Solve using diffcp and cache solution + adjoint
         def solve_impl(A_np, b_np, c_np):
-            log.info('solve_impl starting (inside pure_callback)...')
-            # Explicitly convert to numpy arrays
             A_arr = np.asarray(A_np)
             b_arr = np.asarray(b_np)
             c_arr = np.asarray(c_np)
@@ -577,14 +584,14 @@ def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
     def _build_csc_from_triplets(A_data_np, A_indices_np):
         # JAX BCOO.fromdense pads to static nse with out-of-bound (m, 0)
         # markers; filter those out before scipy.csc_matrix construction.
-        idx = np.asarray(A_indices_np)
-        rows = idx[:, 0]
-        cols = idx[:, 1]
+        rows = A_indices_np[:, 0]
+        cols = A_indices_np[:, 1]
         valid = (rows < m_rows) & (cols < n_cols)
         return spa.csc_matrix(
             (
                 np.asarray(A_data_np)[valid],
-                (rows[valid].astype(np.int32), cols[valid].astype(np.int32)),
+                (rows[valid].astype(np.int32, copy=False),
+                 cols[valid].astype(np.int32, copy=False)),
             ),
             shape=A_shape,
         )
@@ -1463,19 +1470,17 @@ def dro_expectation_setup_static(
     """
     S_vec = S_mat * (S_mat + 1) // 2
     socp_dim = 1 + V + S_vec
-    M_psd = len(psd_mat_dims_static)
     sum_H = int(sum(h_vec_dims_static))
+
+    psd_cones = [S_mat] * N
+    for d in psd_mat_dims_static:
+        psd_cones += [d] * N
 
     cone_info = {
         'z': N * V,
         'l': N + N * M,
         'q': [socp_dim] * N,
-        's': (
-            [S_mat] * N
-            if M_psd == 0
-            else [S_mat] * N
-            + sum([[psd_mat_dims_static[m]] * N for m in range(M_psd)], [])
-        ),
+        's': psd_cones,
     }
 
     m_total = (
@@ -1626,8 +1631,6 @@ def dro_expectation_scs_solve(
         C_symvecs, d_vecs, None,  # H_vec_dims computed from C_symvecs inside
     )
 
-    log.info('canon done')
-
     # Sparsify A at the JAX↔host boundary so the callback can build CSC
     # directly from triplets (skipping the O(m·n) scipy.csc_matrix scan)
     # and the backward returns a flat data cotangent of length nse rather
@@ -1736,9 +1739,6 @@ def dro_cvar_scs_solve(
         C_symvecs, d_vecs, None,  # H_vec_dims computed from C_symvecs inside
     )
 
-    # log.info('canon done')
-    
-    # Solve with custom VJP
     obj_val = scs_solve_wrapper(static_data, A_dense, b, c)
     
     return obj_val
