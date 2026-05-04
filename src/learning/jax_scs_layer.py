@@ -1382,6 +1382,110 @@ def jax_scs_canonicalize_wc_pep(
 
 
 # =============================================================================
+# Hoisted DRO expectation: splits the pipeline into a Python-static setup, a
+# fully JIT-compatible "build SDP inputs" step, and the un-cached SDP solve.
+# Lets callers (e.g. ``unified_trainer._build_ldro_pep_loss``) keep the SDP
+# pure_callback OUTSIDE any all-encompassing jit so the JIT-cacheable parts
+# (canonicalization, vmap'd trajectory, BCOO sparsification) hit the JAX
+# persistent compilation cache across processes.
+# =============================================================================
+
+def dro_expectation_setup_static(
+    N, M, V, S_mat, psd_mat_dims_static, h_vec_dims_static,
+):
+    """Compute SCSSolveData, A_shape, nse upper bound from STATIC ints.
+
+    All inputs are Python ints (no JAX arrays). Call once at training-build
+    time; the returned SCSSolveData is closed over by the SDP-solve wrapper.
+
+    Args:
+        N: minibatch size.
+        M, V, S_mat: PEP dimensions (from probing pep_data_fn at build).
+        psd_mat_dims_static: tuple of Python ints — H matrix dims per PSD block.
+        h_vec_dims_static: list of Python ints — H_vec = dim*(dim+1)/2 per block.
+
+    Returns:
+        (static_data: SCSSolveData,
+         A_shape: (m, n) tuple,
+         nse_upper_bound: int  — generous structural-nnz bound for BCOO.fromdense)
+    """
+    S_vec = S_mat * (S_mat + 1) // 2
+    socp_dim = 1 + V + S_vec
+    M_psd = len(psd_mat_dims_static)
+    sum_H = int(sum(h_vec_dims_static))
+
+    cone_info = {
+        'z': N * V,
+        'l': N + N * M,
+        'q': [socp_dim] * N,
+        's': (
+            [S_mat] * N
+            if M_psd == 0
+            else [S_mat] * N
+            + sum([[psd_mat_dims_static[m]] * N for m in range(M_psd)], [])
+        ),
+    }
+
+    m_total = (
+        cone_info['z']
+        + cone_info['l']
+        + sum(cone_info['q'])
+        + sum([s * (s + 1) // 2 for s in cone_info['s']])
+    )
+    x_dim = 1 + N * (1 + M + V + S_vec + sum_H)
+    A_shape = (m_total, x_dim)
+
+    static_data = SCSSolveData(cone_info, A_shape)
+
+    nse_upper_bound = (
+        N * V * (M + 1 + sum_H)
+        + N * (1 + M + V + S_vec)
+        + N * M
+        + N * (1 + V + S_vec)
+        + N * S_vec * (M + 1 + sum_H)
+        + N * sum_H
+    )
+    return static_data, A_shape, int(nse_upper_bound)
+
+
+def dro_expectation_canon_to_bcoo(
+    A_obj, b_obj, A_vals, b_vals, c_vals,
+    G_batch, F_batch,
+    eps, precond_inv,
+    PSD_A_vals, PSD_b_vals,
+    psd_mat_dims_static,         # static Python tuple
+    nse_upper_bound,             # static Python int
+):
+    """JIT-compatible: canonicalize then sparsify to BCOO triplets.
+
+    No SDP solve here — ends at the JAX↔host boundary so the caller can
+    invoke ``scs_solve_wrapper_sparse`` *outside* any enclosing jit.
+
+    Returns:
+        (A_data, A_indices, b, c) — all JAX arrays, ready for the SDP wrapper.
+    """
+    if PSD_A_vals is not None and len(PSD_A_vals) > 0:
+        C_symvecs, d_vecs, _, _ = compute_C_d_matrices(
+            PSD_A_vals, PSD_b_vals, psd_mat_dims_static
+        )
+    else:
+        C_symvecs = None
+        d_vecs = None
+    PSD_mat_dims_to_pass = (
+        list(psd_mat_dims_static) if PSD_A_vals is not None and len(PSD_A_vals) > 0 else None
+    )
+    A_dense, b, c, _, _ = jax_scs_canonicalize_dro_expectation(
+        A_obj, b_obj, A_vals, b_vals, c_vals,
+        G_batch, F_batch,
+        eps, precond_inv,
+        PSD_A_vals, PSD_b_vals, PSD_mat_dims_to_pass,
+        C_symvecs, d_vecs, None,
+    )
+    A_bcoo = jsparse.BCOO.fromdense(A_dense, nse=int(nse_upper_bound))
+    return A_bcoo.data, A_bcoo.indices, b, c
+
+
+# =============================================================================
 # Full Differentiable DRO Pipeline
 # =============================================================================
 

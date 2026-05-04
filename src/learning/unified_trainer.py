@@ -23,7 +23,15 @@ import numpy as np
 
 from learning.training_result import TrainingResult, Stepsizes
 from learning.problem_module import ProblemModule
-from learning.jax_scs_layer import wc_pep_scs_solve, dro_scs_solve, compute_preconditioner_from_samples
+from learning.jax_scs_layer import (
+    wc_pep_scs_solve,
+    dro_scs_solve,
+    compute_preconditioner_from_samples,
+    compute_C_d_matrices,
+    dro_expectation_setup_static,
+    dro_expectation_canon_to_bcoo,
+    scs_solve_wrapper_sparse,
+)
 
 log = logging.getLogger(__name__)
 
@@ -294,47 +302,88 @@ class UnifiedTrainer:
         psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
 
         if self.dro_canon_backend == 'manual_jax':
-            def ldro_pep_loss(sqrt_stepsizes, minibatch):
-                """LDRO-PEP pipeline with per-step preconditioner."""
-                stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
-                # minibatch is already extracted outside JIT boundary
+            # === Hoist plumbing ===
+            # The DRO SDP solve uses jax.pure_callback (Clarabel via diffcp),
+            # which JAX marks as cacheable=False. Wrapping the entire loss in
+            # @jax.jit therefore *embeds* the callback in the cache key and
+            # forces a full recompile every process (~50 s on PDLP). To make
+            # the bulk of the loss cacheable, we split:
+            #
+            #   (a) build_inputs:  trajectory + preconditioner + canon + BCOO
+            #                       sparsify -> A_data, A_indices, b, c
+            #                       This is JIT-compiled and contains NO callback;
+            #                       cache hits across processes.
+            #   (b) sdp_solve:     scs_solve_wrapper_sparse(...) -> obj_val.
+            #                       Custom_vjp around the pure_callback. Runs
+            #                       outside any compile artifact.
+            #   (c) ldro_pep_loss: thin Python orchestrator combining (a)+(b).
+            #                       NOT jit-wrapped, but the work it dispatches
+            #                       is dominated by the cached jit in (a) plus
+            #                       the un-cached but fast SDP solve.
+            #
+            # Static SCS dimensions (cone shapes, A_shape, nse upper bound) are
+            # derivable from the probe pep_data and the static minibatch size
+            # — compute them once here and close over them.
+            (_A_obj0, _b_obj0, _A_vals0, _b_vals0, _c_vals0,
+             _PSD_A_vals0, _PSD_b_vals0, _PSD_c_vals0, _) = _init_pep_data
 
-                # Compute trajectories for all samples (Gram representations)
-                # G_batch, F_batch depend on current stepsizes
+            _N = int(self.N_batch)
+            _M = int(_A_vals0.shape[0])
+            _V = int(_b_obj0.shape[0])
+            _S_mat = int(_A_obj0.shape[0])
+
+            if _PSD_A_vals0 is not None and len(_PSD_A_vals0) > 0:
+                _, _, _h_vec_dims_static, _ = compute_C_d_matrices(
+                    _PSD_A_vals0, _PSD_b_vals0, psd_mat_dims_static
+                )
+                _h_vec_dims_static = list(_h_vec_dims_static)
+            else:
+                _h_vec_dims_static = []
+
+            _static_data, _A_shape, _nse_upper = dro_expectation_setup_static(
+                _N, _M, _V, _S_mat, psd_mat_dims_static, _h_vec_dims_static,
+            )
+
+            log.info(
+                f"[ldro-pep hoist] static: N={_N} M={_M} V={_V} S_mat={_S_mat} "
+                f"A_shape={_A_shape} nse_upper={_nse_upper}"
+            )
+
+            eps_local = self.eps  # bind for closure
+            pep_obj_local = self.pep_obj
+            train_comp = self.training_loss_type_composition
+            decay = self.decay_rate
+
+            @jax.jit
+            def _build_inputs(sqrt_stepsizes, minibatch):
+                stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
                 G_batch, F_batch = self._compute_batched_gram_matrices(
                     stepsizes, minibatch, traj_fn, K
                 )
-
-                # Compute preconditioner from minibatch (per-step)
-                # This enables gradient flow: stepsizes → G_batch, F_batch → precond_inv
-                precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type)
-
-                # Compute PEP constraint matrices (depend on stepsizes)
-                pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
-                                       composition_type=self.training_loss_type_composition,
-                                       decay_rate=self.decay_rate)
-                # Full tuple:
-                # (A_obj, b_obj, A_vals, b_vals, c_vals,
-                #  PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
+                precond_inv = compute_preconditioner_from_samples(
+                    G_batch, F_batch, precond_type
+                )
+                pep_data = pep_data_fn(
+                    stepsizes, mu, L, R, K, pep_obj_local,
+                    composition_type=train_comp, decay_rate=decay,
+                )
                 (A_obj, b_obj, A_vals, b_vals, c_vals,
                  PSD_A_vals, PSD_b_vals, PSD_c_vals, _) = pep_data
-
-                # Solve DRO SDP. PSD blocks are critical for CP/PDLP (operator-
-                # norm constraints); empty for single-function PEPs like Quad /
-                # ISTA / FISTA (passing empty lists is a no-op there).
-                return dro_scs_solve(
+                return dro_expectation_canon_to_bcoo(
                     A_obj, b_obj, A_vals, b_vals, c_vals,
                     G_batch, F_batch,
-                    self.eps, precond_inv,  # Per-step preconditioner
-                    risk_type=self.risk_type,
-                    alpha=self.alpha,
-                    PSD_A_vals=PSD_A_vals,
-                    PSD_b_vals=PSD_b_vals,
-                    PSD_c_vals=PSD_c_vals,
-                    PSD_mat_dims=psd_mat_dims_static,  # static Python tuple
+                    eps_local, precond_inv,
+                    PSD_A_vals, PSD_b_vals,
+                    psd_mat_dims_static, _nse_upper,
                 )
 
-            return jax.jit(ldro_pep_loss)
+            def ldro_pep_loss(sqrt_stepsizes, minibatch):
+                A_data, A_indices, b, c = _build_inputs(sqrt_stepsizes, minibatch)
+                return scs_solve_wrapper_sparse(
+                    _static_data, A_data, A_indices, _A_shape, b, c,
+                )
+
+            return ldro_pep_loss
 
         elif self.dro_canon_backend == 'cvxpylayers':
             raise NotImplementedError(
