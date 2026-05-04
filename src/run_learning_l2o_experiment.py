@@ -10,6 +10,7 @@ Usage:
     Cluster: python run_learning_experiment.py Quad cluster
 """
 # from site import execsitecustomize
+import _jax_setup  # noqa: F401  -- enables JAX persistent compilation cache
 import hydra
 import logging
 import os

@@ -274,6 +274,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.jax_compilation_cache/
 nosetests.xml
 coverage.xml
 *.cover
