@@ -110,7 +110,7 @@ Quad_options = [
     ['dro_obj=expectation'],
     # ['mu=1'],
     # ['N=20'],
-    ['eta_t=1e-5', 'eta_t=1e-4'],
+    ['eta_t=1e-3', 'eta_t=1e-2'],
     ['weight_decay=0'],
     ['sgd_iters=1000'],
     ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]'],

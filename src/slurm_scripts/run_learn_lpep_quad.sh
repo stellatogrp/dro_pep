@@ -6,7 +6,7 @@
 # # SBATCH --mem-per-cpu=4G
 #SBATCH --mem=3G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-06:59:59
+#SBATCH --time=00-02:59:59
 #SBATCH --array=0-1
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT

@@ -3,9 +3,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=112G
+#SBATCH --mem=20G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-11:59:59
+#SBATCH --time=00-5:59:59
 #SBATCH --array=0-5
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/PDLP/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
