@@ -12,6 +12,10 @@ from .ista_fista import (
     problem_data_to_ista_trajectories,
     problem_data_to_fista_trajectories,
 )
+from .alista import (
+    problem_data_to_alista_trajectories,
+    _make_alista_traj_fn,
+)
 from .logreg_gd_fgm import (
     logreg_f_shifted,
     logreg_grad_shifted,

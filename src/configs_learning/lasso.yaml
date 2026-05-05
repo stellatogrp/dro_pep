@@ -41,7 +41,7 @@ x_samp_ood_normal_std: 3.0
 z0_type: 'zero'
 
 # Type of learning framework
-learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
+learning_framework: 'ldro-pep'  # 'ldro-pep' | 'l2o' | 'lpep' | 'l2o-alista' (lasso+ista only)
 
 # Algorithm and optimizer type (selected by Slurm job index)
 alg: "ista"            # ista or fista

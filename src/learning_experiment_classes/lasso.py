@@ -32,7 +32,9 @@ from learning.pep_constructions import construct_ista_pep_data, construct_fista_
 from learning.trajectories import (
     problem_data_to_ista_trajectories,
     problem_data_to_fista_trajectories,
+    _make_alista_traj_fn,
 )
+from learning_experiment_classes.alista_w import compute_alista_W, load_or_compute_W
 
 jax.config.update("jax_enable_x64", True)
 
@@ -520,6 +522,14 @@ class LassoProblemModule(ProblemModule):
         else:
             self.R_val = compute_sample_radius(cfg, self.A_np, self.lasso_dpp)
 
+        # ALISTA W matrix: only needed for the l2o-alista learning framework.
+        # Load from data_source_dir/W_alista.npz when present; otherwise compute
+        # via the convex per-column problem (paper eq. 16) on the spot.
+        self.W_jax = None
+        if cfg.get('learning_framework', None) == 'l2o-alista':
+            W_np, _src = load_or_compute_W(data_source_dir, self.A_np)
+            self.W_jax = jnp.array(W_np)
+
     def sample_training_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Generate N training Lasso problem instances.
 
@@ -629,6 +639,12 @@ class LassoProblemModule(ProblemModule):
             Trajectory function with signature:
                 (stepsizes, b, x_opt, f_opt, K_max, return_Gram_representation) -> (G, F) or trajectories
         """
+        if self.cfg.get('learning_framework', None) == 'l2o-alista':
+            if alg != 'ista':
+                raise ValueError(
+                    f"learning_framework='l2o-alista' requires alg='ista', got {alg!r}"
+                )
+            return _make_alista_traj_fn(self.A_jax, self.W_jax, self.lambd)
         if alg == 'ista':
             return _make_ista_traj_fn(self.A_jax, self.lambd)
         elif alg == 'fista':
@@ -1033,6 +1049,12 @@ class LassoProblemModule(ProblemModule):
             raise ValueError(
                 f"Unknown algorithm: {self.cfg.alg}. Must be 'ista' or 'fista'."
             )
+        if self.cfg.get('learning_framework', None) == 'l2o-alista' and self.cfg.alg != 'ista':
+            raise ValueError(
+                "learning_framework='l2o-alista' requires alg='ista' "
+                f"(got alg={self.cfg.alg!r}). The ALISTA paper is ISTA-style; "
+                "FISTA-with-W~ is intentionally not supported."
+            )
 
 
 # =============================================================================
@@ -1146,6 +1168,13 @@ def lasso_sample_creation_run(cfg):
 
     np.savez_compressed("A_in_dist.npz", A=A_in_dist_np)
     log.info(f"Saved in-distribution A, shape: {A_in_dist_np.shape}")
+
+    # Precompute the ALISTA W matrix from A (paper eq. 16). Persisting it here
+    # alongside A means the l2o-alista training framework can load it directly
+    # from data_source_dir without re-solving n CVXPY QPs at every launch.
+    W_alista_np = compute_alista_W(A_in_dist_np)
+    np.savez_compressed("W_alista.npz", W=W_alista_np)
+    log.info(f"Saved ALISTA W, shape: {W_alista_np.shape}")
 
     lasso_dpp = LassoProblemDPP(A_in_dist_np, lambd)
 

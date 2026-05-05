@@ -176,6 +176,11 @@ class UnifiedTrainer:
             return self._build_lpep_loss(K, L, mu, R, initial_stepsizes)
         elif self.learning_framework == 'l2o':
             return self._build_l2o_loss(K)
+        elif self.learning_framework == 'l2o-alista':
+            # ALISTA literature benchmark: identical L2O loss path; the
+            # ALISTA-specific W^T direction is folded into the trajectory
+            # function returned by problem_module.get_trajectory_fn.
+            return self._build_l2o_loss(K)
         elif self.learning_framework == 'ldro-pep':
             return self._build_ldro_pep_loss(K, L, mu, R, initial_stepsizes)
         else:
@@ -433,7 +438,7 @@ class UnifiedTrainer:
             save_dir: Optional directory to save training data to
                 (as `training_set.npz`). Pass the top-level `output_dir`.
         """
-        if self.learning_framework in ['l2o', 'ldro-pep'] and self.training_data is None:
+        if self.learning_framework in ['l2o', 'l2o-alista', 'ldro-pep'] and self.training_data is None:
             self._presample_training_data(save_dir=save_dir)
         if self.validation_data is None:
             self._presample_validation_data()
