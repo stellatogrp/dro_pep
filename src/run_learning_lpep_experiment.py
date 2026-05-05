@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 
 from learning_experiment_classes.lasso import lasso_run
 from learning_experiment_classes.logreg import logreg_run
+from learning_experiment_classes.pdlp import pdlp_run
 from learning_experiment_classes.quad import quad_run
 from itertools import product
 
@@ -32,6 +33,11 @@ def lasso_driver(cfg):
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='logreg.yaml')
 def logreg_driver(cfg):
     logreg_run(cfg)
+
+
+@hydra.main(version_base='1.2', config_path='configs_learning', config_name='pdlp.yaml')
+def pdlp_driver(cfg):
+    pdlp_run(cfg)
 
 
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='quad.yaml')
@@ -173,16 +179,31 @@ Learn_Lasso_params = conditional_product(
     ]
 )
 
+PDLP_options = [
+    ['learning_framework=lpep'],
+    ['N=5'],
+    ['sgd_iters=1000'],
+    ['eta_t=1e-5', 'eta_t=1e-4', 'eta_t=1e-3'],
+    ['K_max=[8]'],
+]
+
+Learn_PDLP_params = conditional_product(
+    common_options=PDLP_options,
+    conditional_groups=[],
+)
+
 func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
     'LogReg': logreg_driver,
+    'PDLP': pdlp_driver,
 }
 
 base_dir_map = {
     'Quad': 'learn_lpep_outputs/Quad',
     'Lasso': 'learn_lpep_outputs/Lasso',
     'LogReg': 'learn_lpep_outputs/LogReg',
+    'PDLP': 'learn_lpep_outputs/PDLP',
 }
 
 
@@ -245,6 +266,11 @@ def main():
                 log.error(f'job_idx {job_idx} >= len(Learn_LogReg_params) {len(Learn_LogReg_params)}')
                 exit(1)
             hydra_tags += Learn_LogReg_params[job_idx]
+        if experiment == 'PDLP':
+            if job_idx > len(Learn_PDLP_params):
+                log.error(f'job_idx {job_idx} >= len(Learn_PDLP_params) {len(Learn_PDLP_params)}')
+                exit(1)
+            hydra_tags += Learn_PDLP_params[job_idx]
 
     sys.argv = [sys.argv[0]] + hydra_tags
     driver()

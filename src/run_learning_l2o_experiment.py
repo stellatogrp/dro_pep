@@ -170,7 +170,7 @@ Learn_LogReg_params = conditional_product(
 )
 
 Lasso_options = [
-    ['learning_framework=l2o'],
+    ['learning_framework=l2o-alista'],
     ['alg=ista'],
     ['N=10'],
     # ['training_sample_N=100',
