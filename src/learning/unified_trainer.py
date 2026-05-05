@@ -198,6 +198,13 @@ class UnifiedTrainer:
         pattern used in LDRO-PEP) so `compute_C_d_matrices` sees concrete
         Python ints under nested jit.
 
+        The PEP problem is homogeneous of degree 2 in R: with the IC
+        ||z0 - z*||^2 <= R^2 (the only place R enters the construction),
+        WC-PEP(R) = R^2 * WC-PEP(1). For PDLP-scale problems R^2 can be
+        ~10^4, which scales the IC's c_vals entry into Clarabel's
+        ill-conditioned regime and yields 'Failure' status. So we always
+        solve at R=1 and rescale at the end.
+
         Args:
             K: Number of algorithm iterations.
             L, mu, R: Problem parameters.
@@ -210,30 +217,32 @@ class UnifiedTrainer:
         pep_data_fn = self.problem_module.get_pep_data_fn(self.alg)
 
         _init_pep_data = pep_data_fn(
-            initial_stepsizes, mu, L, R, K, self.pep_obj,
+            initial_stepsizes, mu, L, 1.0, K, self.pep_obj,
             composition_type=self.training_loss_type_composition,
             decay_rate=self.decay_rate,
         )
         psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
+        R_sq = R ** 2
 
         def lpep_loss(sqrt_stepsizes):
-            """Compute worst-case PEP objective."""
+            """Compute worst-case PEP objective at R=1, then scale by R^2."""
             stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
             pep_data = pep_data_fn(
-                stepsizes, mu, L, R, K, self.pep_obj,
+                stepsizes, mu, L, 1.0, K, self.pep_obj,
                 composition_type=self.training_loss_type_composition,
                 decay_rate=self.decay_rate,
             )
             (A_obj, b_obj, A_vals, b_vals, c_vals,
              PSD_A_vals, PSD_b_vals, PSD_c_vals, _) = pep_data
 
-            return wc_pep_scs_solve(
+            obj_unit = wc_pep_scs_solve(
                 A_obj, b_obj, A_vals, b_vals, c_vals,
                 PSD_A_vals=PSD_A_vals,
                 PSD_b_vals=PSD_b_vals,
                 PSD_c_vals=PSD_c_vals,
                 PSD_mat_dims=psd_mat_dims_static,
             )
+            return R_sq * obj_unit
 
         return jax.jit(lpep_loss)
 
