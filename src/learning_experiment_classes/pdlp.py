@@ -703,8 +703,8 @@ class PDLPProblemModule(ProblemModule):
         if alg != 'cp':
             raise ValueError(f"PDLP supports only alg='cp'; got {alg!r}")
         M = L
-        tau_scalar = 0.9 / M
-        sigma_scalar = 0.9 / M
+        tau_scalar = 0.5 / M
+        sigma_scalar = 0.5 / M
         theta_scalar = 1.0
         if self.cfg.stepsize_type == "vector":
             tau = jnp.full(K, tau_scalar)
