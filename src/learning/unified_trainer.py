@@ -23,7 +23,16 @@ import numpy as np
 
 from learning.training_result import TrainingResult, Stepsizes
 from learning.problem_module import ProblemModule
-from learning.jax_scs_layer import wc_pep_scs_solve, dro_scs_solve, compute_preconditioner_from_samples
+from learning.jax_scs_layer import (
+    wc_pep_scs_solve,
+    dro_scs_solve,
+    compute_preconditioner_from_samples,
+    dro_expectation_setup_static,
+    dro_expectation_canon_to_bcoo,
+    scs_solve_wrapper_sparse,
+    get_solver_stats,
+    reset_solver_stats,
+)
 
 log = logging.getLogger(__name__)
 
@@ -294,47 +303,111 @@ class UnifiedTrainer:
         psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
 
         if self.dro_canon_backend == 'manual_jax':
-            def ldro_pep_loss(sqrt_stepsizes, minibatch):
-                """LDRO-PEP pipeline with per-step preconditioner."""
-                stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
-                # minibatch is already extracted outside JIT boundary
+            if self.risk_type != 'expectation':
+                # The hoisted path below only implements the expectation risk
+                # measure. For cvar fall back to the legacy single-jit path
+                # (which goes through dro_scs_solve's risk_type dispatch). The
+                # callback inside that jit means cache hits won't survive
+                # across processes — same behavior as before this PR.
+                log.info(
+                    f"[ldro-pep] risk_type={self.risk_type!r}: using legacy "
+                    "@jax.jit ldro_pep_loss (no hoist; callback inside jit)."
+                )
 
-                # Compute trajectories for all samples (Gram representations)
-                # G_batch, F_batch depend on current stepsizes
+                def ldro_pep_loss_legacy(sqrt_stepsizes, minibatch):
+                    stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+                    G_batch, F_batch = self._compute_batched_gram_matrices(
+                        stepsizes, minibatch, traj_fn, K
+                    )
+                    precond_inv = compute_preconditioner_from_samples(
+                        G_batch, F_batch, precond_type
+                    )
+                    pep_data = pep_data_fn(
+                        stepsizes, mu, L, R, K, self.pep_obj,
+                        composition_type=self.training_loss_type_composition,
+                        decay_rate=self.decay_rate,
+                    )
+                    (A_obj, b_obj, A_vals, b_vals, c_vals,
+                     PSD_A_vals, PSD_b_vals, PSD_c_vals, _) = pep_data
+                    return dro_scs_solve(
+                        A_obj, b_obj, A_vals, b_vals, c_vals,
+                        G_batch, F_batch,
+                        self.eps, precond_inv,
+                        risk_type=self.risk_type,
+                        alpha=self.alpha,
+                        PSD_A_vals=PSD_A_vals,
+                        PSD_b_vals=PSD_b_vals,
+                        PSD_c_vals=PSD_c_vals,
+                        PSD_mat_dims=psd_mat_dims_static,
+                    )
+
+                return jax.jit(ldro_pep_loss_legacy)
+
+            # Hoist: pure_callback (Clarabel via diffcp) is cacheable=False, so
+            # any @jax.jit wrapping the SDP solve recompiles every process.
+            # Split the loss into a JIT'd build (trajectory + canon + BCOO
+            # sparsify, no callback — caches across processes) and an un-jit'd
+            # SDP solve (custom_vjp + pure_callback).
+            (A_obj0, b_obj0, A_vals0, _, _,
+             PSD_A_vals0, _, _, _) = _init_pep_data
+
+            N = int(self.N_batch)
+            M = int(A_vals0.shape[0])
+            V = int(b_obj0.shape[0])
+            S_mat = int(A_obj0.shape[0])
+
+            # H_vec = dim*(dim+1)/2 per PSD block — closed-form, no probe.
+            if PSD_A_vals0 is not None and len(PSD_A_vals0) > 0:
+                h_vec_dims_static = [d * (d + 1) // 2 for d in psd_mat_dims_static]
+            else:
+                h_vec_dims_static = []
+
+            static_data, A_shape, nse_upper = dro_expectation_setup_static(
+                N, M, V, S_mat, psd_mat_dims_static, h_vec_dims_static,
+            )
+
+            log.info(
+                f"[ldro-pep hoist] static: N={N} M={M} V={V} S_mat={S_mat} "
+                f"A_shape={A_shape} nse_upper={nse_upper}"
+            )
+
+            # Bind config values explicitly so the JIT closure does not capture
+            # `self` (which would key the JIT cache on a Python object id).
+            eps_local = self.eps
+            pep_obj_local = self.pep_obj
+            train_comp = self.training_loss_type_composition
+            decay = self.decay_rate
+
+            @jax.jit
+            def _build_inputs(sqrt_stepsizes, minibatch):
+                stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
                 G_batch, F_batch = self._compute_batched_gram_matrices(
                     stepsizes, minibatch, traj_fn, K
                 )
-
-                # Compute preconditioner from minibatch (per-step)
-                # This enables gradient flow: stepsizes → G_batch, F_batch → precond_inv
-                precond_inv = compute_preconditioner_from_samples(G_batch, F_batch, precond_type)
-
-                # Compute PEP constraint matrices (depend on stepsizes)
-                pep_data = pep_data_fn(stepsizes, mu, L, R, K, self.pep_obj,
-                                       composition_type=self.training_loss_type_composition,
-                                       decay_rate=self.decay_rate)
-                # Full tuple:
-                # (A_obj, b_obj, A_vals, b_vals, c_vals,
-                #  PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
+                precond_inv = compute_preconditioner_from_samples(
+                    G_batch, F_batch, precond_type
+                )
+                pep_data = pep_data_fn(
+                    stepsizes, mu, L, R, K, pep_obj_local,
+                    composition_type=train_comp, decay_rate=decay,
+                )
                 (A_obj, b_obj, A_vals, b_vals, c_vals,
-                 PSD_A_vals, PSD_b_vals, PSD_c_vals, _) = pep_data
-
-                # Solve DRO SDP. PSD blocks are critical for CP/PDLP (operator-
-                # norm constraints); empty for single-function PEPs like Quad /
-                # ISTA / FISTA (passing empty lists is a no-op there).
-                return dro_scs_solve(
+                 PSD_A_vals, PSD_b_vals, _, _) = pep_data
+                return dro_expectation_canon_to_bcoo(
                     A_obj, b_obj, A_vals, b_vals, c_vals,
                     G_batch, F_batch,
-                    self.eps, precond_inv,  # Per-step preconditioner
-                    risk_type=self.risk_type,
-                    alpha=self.alpha,
-                    PSD_A_vals=PSD_A_vals,
-                    PSD_b_vals=PSD_b_vals,
-                    PSD_c_vals=PSD_c_vals,
-                    PSD_mat_dims=psd_mat_dims_static,  # static Python tuple
+                    eps_local, precond_inv,
+                    PSD_A_vals, PSD_b_vals,
+                    psd_mat_dims_static, nse_upper,
                 )
 
-            return jax.jit(ldro_pep_loss)
+            def ldro_pep_loss(sqrt_stepsizes, minibatch):
+                A_data, A_indices, b, c = _build_inputs(sqrt_stepsizes, minibatch)
+                return scs_solve_wrapper_sparse(
+                    static_data, A_data, A_indices, A_shape, b, c,
+                )
+
+            return ldro_pep_loss
 
         elif self.dro_canon_backend == 'cvxpylayers':
             raise NotImplementedError(
@@ -794,6 +867,10 @@ class UnifiedTrainer:
         # Track history (in actual stepsize form for external consumers)
         all_stepsizes_vals = [to_actual(sqrt_stepsizes)]
 
+        # Reset SDP solver health counters so the per-K summary at the end of
+        # this loop counts only this K's solves.
+        reset_solver_stats()
+
         # Compute initial losses for the starting stepsizes (before any updates)
         log.info("Computing initial losses for starting stepsizes...")
         initial_start_time = time.perf_counter()
@@ -891,6 +968,17 @@ class UnifiedTrainer:
 
             # Save checkpoint
             self._save_checkpoint(all_stepsizes_vals, K, all_losses, all_val_losses, all_times, all_raw_grad_norms, all_lrs, csv_path)
+
+        # SDP solver health summary — counts non-Solved Clarabel statuses and
+        # silent zero-gradient fallbacks. Useful when raw_grad_norm=0 to
+        # distinguish a true stationary point from a masked solver failure.
+        stats = get_solver_stats()
+        if stats['fwd_total'] > 0:
+            log.info(
+                f"SDP solver health: forward={stats['fwd_total']} "
+                f"(failures={stats['fwd_failures']}, exceptions={stats['fwd_exceptions']}), "
+                f"bwd_zero_grad_fallbacks={stats['bwd_zero_grads']}"
+            )
 
         # Return result (actual stepsize form)
         return TrainingResult(

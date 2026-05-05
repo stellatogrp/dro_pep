@@ -70,7 +70,7 @@ def test_pdlp_module_instantiates():
     assert module.S_in_dist > 0 and module.S_out_of_dist > 0
     assert module.M_val > 0 and module.R_val > 0
     # JAX device fixtures
-    assert module.G_dense_jnp.shape == (module.m1, module.n_vars)
+    assert module.G_bcoo.shape == (module.m1, module.n_vars)
     assert module.c_jnp.shape == (module.n_vars,)
     assert module.images_jnp.shape[0] == 400  # Olivetti dataset
 

@@ -236,6 +236,90 @@ def jax_scs_scaled_off_triangles(A, scale_factor):
 
 import numpy as np
 import diffcp
+from jax.experimental import sparse as jsparse
+
+
+# =============================================================================
+# SDP solver failure tracking
+# =============================================================================
+# diffcp/Clarabel can return non-optimal status (Failure, MaxIterations, ...) on
+# numerically tough problems; the existing fallback in `_solve_bwd` returns
+# zero gradients silently, which surfaces in the trainer as raw_grad_norm=0
+# — indistinguishable from a real stationary point. Track counts here so a
+# stuck SGD run is easy to diagnose post-hoc, and log loudly each time the
+# fallback fires.
+
+_SOLVE_STATS = {
+    'fwd_total': 0,
+    'fwd_failures': 0,
+    'fwd_exceptions': 0,
+    'bwd_zero_grads': 0,
+}
+
+# Cone names a healthy Clarabel solve might report.
+_HEALTHY_STATUSES = ("Solved", "AlmostSolved", "Solved/Inaccurate")
+
+
+def _log_solve_status(prefix, status, info):
+    """Log Clarabel forward status + track failures.
+
+    Skips the per-call ``||x||, ||y||, ||s||`` norm computation that earlier
+    versions emitted at INFO; those three np.linalg.norm calls run on every
+    solve (~few thousand iters per training run). Norms are still computed
+    if the logger is at DEBUG.
+    """
+    _SOLVE_STATS['fwd_total'] += 1
+    log.info(f"[{prefix}] Solver status: {status}")
+    if "iter" in info:
+        log.info(f"[{prefix}] Iterations: {info['iter']}")
+    if status not in _HEALTHY_STATUSES:
+        _SOLVE_STATS['fwd_failures'] += 1
+        log.warning(
+            f"[{prefix}] SDP not solved optimally — status={status!r}. "
+            f"Cumulative forward failures: {_SOLVE_STATS['fwd_failures']}/"
+            f"{_SOLVE_STATS['fwd_total']} solves."
+        )
+
+
+_BWD_WARN_FIRST_N = 5
+_BWD_WARN_EVERY_N = 100
+
+
+def _record_bwd_zero_grad(prefix):
+    """Note that the backward path is returning zeros (forward solve failed).
+
+    Warns on the first ``_BWD_WARN_FIRST_N`` occurrences then every
+    ``_BWD_WARN_EVERY_N`` after that — a stuck SGD run can hit this every
+    step and the cumulative count is always available via get_solver_stats().
+    """
+    _SOLVE_STATS['bwd_zero_grads'] += 1
+    n = _SOLVE_STATS['bwd_zero_grads']
+    if n <= _BWD_WARN_FIRST_N or n % _BWD_WARN_EVERY_N == 0:
+        log.warning(
+            f"[{prefix}] adjoint cache invalid — returning zero SDP gradient. "
+            f"raw_grad_norm reflects only the non-SDP part of the loss. "
+            f"Cumulative bwd zero-grad fallbacks: {n}."
+        )
+
+
+def get_solver_stats():
+    """Return a snapshot of cumulative SDP solver health counters."""
+    return dict(_SOLVE_STATS)
+
+
+def reset_solver_stats():
+    """Zero the SDP solver health counters (call between K's, etc.)."""
+    for k in _SOLVE_STATS:
+        _SOLVE_STATS[k] = 0
+
+
+def _maybe_log_norms(prefix, x, y, s):
+    """Log ||x||, ||y||, ||s|| only if the logger is at DEBUG."""
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug(
+            f"[{prefix}] ||x||={np.linalg.norm(x):.6e} "
+            f"||y||={np.linalg.norm(y):.6e} ||s||={np.linalg.norm(s):.6e}"
+        )
 
 
 class SCSSolveData:
@@ -325,22 +409,14 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 adjoint_deriv = result["DT"]
                 status = result["info"]["status"]
 
-                # Log solver diagnostics
                 obj = c_arr @ x
-                log.info(f"[Forward] Solver status: {status}")
-                log.info(f"[Forward] Primal objective: {obj:.6e}")
-                log.info(f"[Forward] ||x||: {np.linalg.norm(x):.6e}, ||y||: {np.linalg.norm(y):.6e}, ||s||: {np.linalg.norm(s):.6e}")
-                if "iter" in result["info"]:
-                    log.info(f"[Forward] Iterations: {result['info']['iter']}")
+                _log_solve_status("Forward", status, result["info"])
+                _maybe_log_norms("Forward", x, y, s)
 
-                # Warn if not solved optimally
-                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
-                    log.warning(f"[Forward] Problem not solved optimally! Status: {status}")
-
-                # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
                 _adjoint_cache['valid'] = True
             except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
                 log.warning(f"diffcp solve failed: {e}")
                 x = np.zeros(c_arr.shape[0])
                 obj = np.nan
@@ -353,10 +429,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
         return obj[0]
     
     def _solve_fwd(A_dense, b, c):
-        # Solve using diffcp and cache solution + adjoint
         def solve_impl(A_np, b_np, c_np):
-            log.info('solve_impl starting (inside pure_callback)...')
-            # Explicitly convert to numpy arrays
             A_arr = np.asarray(A_np)
             b_arr = np.asarray(b_np)
             c_arr = np.asarray(c_np)
@@ -382,26 +455,17 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
                 adjoint_deriv = result["DT"]
                 status = result["info"]["status"]
 
-                # Log solver diagnostics
                 obj = c_arr @ x
-                log.info(f"[VJP Forward] Solver status: {status}")
-                log.info(f"[VJP Forward] Primal objective: {obj:.6e}")
-                log.info(f"[VJP Forward] ||x||: {np.linalg.norm(x):.6e}, ||y||: {np.linalg.norm(y):.6e}, ||s||: {np.linalg.norm(s):.6e}")
-                if "iter" in result["info"]:
-                    log.info(f"[VJP Forward] Iterations: {result['info']['iter']}")
+                _log_solve_status("VJP Forward", status, result["info"])
+                _maybe_log_norms("VJP Forward", x, y, s)
 
-                # Warn if not solved optimally
-                if status not in ["Solved", "AlmostSolved", "Solved/Inaccurate"]:
-                    log.warning(f"[VJP Forward] Problem not solved optimally! Status: {status}")
-
-                # Store adjoint for backward pass
                 _adjoint_cache['adjoint'] = adjoint_deriv
                 _adjoint_cache['x'] = x
                 _adjoint_cache['y'] = y
                 _adjoint_cache['s'] = s
                 _adjoint_cache['valid'] = True
-                log.info(f'diffcp solve succeeded, obj={obj:.6f}')
             except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
                 log.warning(f"diffcp solve failed in fwd: {e}")
                 x = np.zeros(c_arr.shape[0])
                 y = np.zeros(b_arr.shape[0])
@@ -441,7 +505,7 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             d_obj_arr = np.asarray(d_obj_np)
             
             if not _adjoint_cache.get('valid', False):
-                # If forward solve failed, return zero gradients
+                _record_bwd_zero_grad("VJP Backward")
                 return np.zeros_like(A_arr), np.zeros_like(b_arr), np.zeros_like(c_arr)
             
             adjoint_deriv = _adjoint_cache['adjoint']
@@ -485,6 +549,201 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
     _solve.defvjp(_solve_fwd, _solve_bwd)
     
     return _solve(A_dense, b, c)
+
+
+def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
+    """Differentiable SDP solve with sparse A passed as (data, indices) triplets.
+
+    Mirrors ``scs_solve_wrapper`` semantics but the constraint matrix arrives
+    pre-sparsified — no host-side ``scipy.sparse.csc_matrix(dense)`` scan,
+    and the dense (m, n) cotangent for ``A`` is replaced by a flat data
+    cotangent of length ``A_data.shape[0]``. Indices are integer-valued and
+    not differentiable; we pass them through as-is.
+
+    Args:
+        static_data: SCSSolveData with cone info (Python).
+        A_data:    (nse,) JAX float64 array.
+        A_indices: (nse, 2) JAX int array — (row, col) per nonzero.
+        A_shape:   (m, n) Python tuple — static.
+        b, c:      JAX float64 arrays.
+
+    Returns:
+        Optimal objective value (scalar, differentiable).
+    """
+    _adjoint_cache = {}
+
+    tol_gap_abs = 1e-5
+    tol_gap_rel = 1e-5
+    tol_feas = 1e-5
+    reduced_tol_gap_abs = 5e-5
+    reduced_tol_gap_rel = 5e-5
+    reduced_tol_feas = 1e-4
+
+    m_rows, n_cols = A_shape
+
+    def _build_csc_from_triplets(A_data_np, A_indices_np):
+        # JAX BCOO.fromdense pads to static nse with out-of-bound (m, 0)
+        # markers; filter those out before scipy.csc_matrix construction.
+        rows = A_indices_np[:, 0]
+        cols = A_indices_np[:, 1]
+        valid = (rows < m_rows) & (cols < n_cols)
+        return spa.csc_matrix(
+            (
+                np.asarray(A_data_np)[valid],
+                (rows[valid].astype(np.int32, copy=False),
+                 cols[valid].astype(np.int32, copy=False)),
+            ),
+            shape=A_shape,
+        )
+
+    @jax.custom_vjp
+    def _solve(A_data, A_indices, b, c):
+        def solve_impl(A_data_np, A_idx_np, b_np, c_np):
+            b_arr = np.asarray(b_np)
+            c_arr = np.asarray(c_np)
+            A_csc = _build_csc_from_triplets(A_data_np, np.asarray(A_idx_np))
+            try:
+                result = diffcp.solve_and_derivative_internal(
+                    A_csc, b_arr, c_arr,
+                    static_data.diffcp_cone_dict,
+                    solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
+                    verbose=False,
+                    tol_gap_abs=tol_gap_abs,
+                    tol_gap_rel=tol_gap_rel,
+                    tol_feas=tol_feas,
+                    reduced_tol_gap_abs=reduced_tol_gap_abs,
+                    reduced_tol_gap_rel=reduced_tol_gap_rel,
+                    reduced_tol_feas=reduced_tol_feas,
+                )
+                x = result["x"]
+                obj = c_arr @ x
+                _log_solve_status("SparseFwd", result["info"]["status"], result["info"])
+                if log.isEnabledFor(logging.DEBUG):
+                    _maybe_log_norms("SparseFwd", x, result["y"], result["s"])
+                _adjoint_cache['adjoint'] = result["DT"]
+                _adjoint_cache['valid'] = True
+            except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
+                log.warning(f"diffcp solve failed: {e}")
+                obj = np.nan
+                _adjoint_cache['valid'] = False
+            return np.array([obj])
+
+        obj = jax.pure_callback(
+            solve_impl,
+            jax.ShapeDtypeStruct((1,), jnp.float64),
+            A_data, A_indices, b, c,
+        )
+        return obj[0]
+
+    def _solve_fwd(A_data, A_indices, b, c):
+        def solve_impl(A_data_np, A_idx_np, b_np, c_np):
+            b_arr = np.asarray(b_np)
+            c_arr = np.asarray(c_np)
+            A_csc = _build_csc_from_triplets(A_data_np, np.asarray(A_idx_np))
+            try:
+                result = diffcp.solve_and_derivative_internal(
+                    A_csc, b_arr, c_arr,
+                    static_data.diffcp_cone_dict,
+                    solve_method='CLARABEL',
+                    direct_solve_method=get_direct_solve_method(),
+                    verbose=False,
+                    tol_gap_abs=tol_gap_abs,
+                    tol_gap_rel=tol_gap_rel,
+                    tol_feas=tol_feas,
+                    reduced_tol_gap_abs=reduced_tol_gap_abs,
+                    reduced_tol_gap_rel=reduced_tol_gap_rel,
+                    reduced_tol_feas=reduced_tol_feas,
+                )
+                x = result["x"]; y = result["y"]; s = result["s"]
+                obj = c_arr @ x
+                _log_solve_status("SparseVJPFwd", result["info"]["status"], result["info"])
+                _maybe_log_norms("SparseVJPFwd", x, y, s)
+                _adjoint_cache['adjoint'] = result["DT"]
+                _adjoint_cache['x'] = x
+                _adjoint_cache['y'] = y
+                _adjoint_cache['s'] = s
+                _adjoint_cache['valid'] = True
+            except Exception as e:
+                _SOLVE_STATS['fwd_exceptions'] += 1
+                log.warning(f"diffcp solve failed in fwd: {e}")
+                x = np.zeros(c_arr.shape[0])
+                y = np.zeros(b_arr.shape[0])
+                s = np.zeros(b_arr.shape[0])
+                obj = np.nan
+                _adjoint_cache['valid'] = False
+            return (np.array([obj]), x, y, s)
+
+        result_shapes = (
+            jax.ShapeDtypeStruct((1,), jnp.float64),
+            jax.ShapeDtypeStruct((c.shape[0],), jnp.float64),
+            jax.ShapeDtypeStruct((b.shape[0],), jnp.float64),
+            jax.ShapeDtypeStruct((b.shape[0],), jnp.float64),
+        )
+        obj, x, y, s = jax.pure_callback(
+            solve_impl, result_shapes, A_data, A_indices, b, c
+        )
+        # residuals: keep A_data + A_indices for backward dA extraction
+        return obj[0], (A_data, A_indices, b, c, x)
+
+    def _solve_bwd(res, g):
+        A_data, A_indices, b, c, x = res
+        d_obj = g
+        b_dim = b.shape[0]
+
+        def compute_grads(A_data_np, A_idx_np, c_np, x_np, d_obj_np):
+            A_data_arr = np.asarray(A_data_np)
+            A_idx_arr = np.asarray(A_idx_np)
+            c_arr = np.asarray(c_np)
+            x_arr = np.asarray(x_np)
+            d_obj_arr = np.asarray(d_obj_np)
+
+            if not _adjoint_cache.get('valid', False):
+                _record_bwd_zero_grad("SparseVJPBwd")
+                return (
+                    np.zeros_like(A_data_arr),
+                    np.zeros(b_dim, dtype=np.float64),
+                    np.zeros_like(c_arr),
+                )
+
+            adjoint_deriv = _adjoint_cache['adjoint']
+            y_cached = _adjoint_cache['y']
+            s_cached = _adjoint_cache['s']
+
+            dx = d_obj_arr * c_arr
+            dy = np.zeros_like(y_cached)
+            ds = np.zeros_like(s_cached)
+            dA_sol, db_sol, dc_sol = adjoint_deriv(dx, dy, ds)
+
+            dA_csr = dA_sol.tocsr()
+            rows = A_idx_arr[:, 0]
+            cols = A_idx_arr[:, 1]
+            valid = (rows < m_rows) & (cols < n_cols)
+            dA_data_aligned = np.zeros_like(A_data_arr)
+            if valid.any():
+                dA_data_aligned[valid] = np.asarray(
+                    dA_csr[rows[valid].astype(np.int64), cols[valid].astype(np.int64)]
+                ).reshape(-1)
+
+            dc_direct = d_obj_arr * x_arr
+            return dA_data_aligned, db_sol, dc_sol + dc_direct
+
+        result_shapes = (
+            jax.ShapeDtypeStruct(A_data.shape, jnp.float64),
+            jax.ShapeDtypeStruct(b.shape, jnp.float64),
+            jax.ShapeDtypeStruct(c.shape, jnp.float64),
+        )
+        dA_data, db, dc = jax.pure_callback(
+            compute_grads, result_shapes,
+            A_data, A_indices, c, x, jnp.array(d_obj),
+        )
+        _adjoint_cache.clear()
+        return dA_data, jnp.zeros_like(A_indices), db, dc
+
+    _solve.defvjp(_solve_fwd, _solve_bwd)
+
+    return _solve(A_data, A_indices, b, c)
 
 
 # =============================================================================
@@ -1182,6 +1441,108 @@ def jax_scs_canonicalize_wc_pep(
 
 
 # =============================================================================
+# Hoisted DRO expectation: splits the pipeline into a Python-static setup, a
+# fully JIT-compatible "build SDP inputs" step, and the un-cached SDP solve.
+# Lets callers (e.g. ``unified_trainer._build_ldro_pep_loss``) keep the SDP
+# pure_callback OUTSIDE any all-encompassing jit so the JIT-cacheable parts
+# (canonicalization, vmap'd trajectory, BCOO sparsification) hit the JAX
+# persistent compilation cache across processes.
+# =============================================================================
+
+def dro_expectation_setup_static(
+    N, M, V, S_mat, psd_mat_dims_static, h_vec_dims_static,
+):
+    """Compute SCSSolveData, A_shape, nse upper bound from STATIC ints.
+
+    All inputs are Python ints (no JAX arrays). Call once at training-build
+    time; the returned SCSSolveData is closed over by the SDP-solve wrapper.
+
+    Args:
+        N: minibatch size.
+        M, V, S_mat: PEP dimensions (from probing pep_data_fn at build).
+        psd_mat_dims_static: tuple of Python ints — H matrix dims per PSD block.
+        h_vec_dims_static: list of Python ints — H_vec = dim*(dim+1)/2 per block.
+
+    Returns:
+        (static_data: SCSSolveData,
+         A_shape: (m, n) tuple,
+         nse_upper_bound: int  — generous structural-nnz bound for BCOO.fromdense)
+    """
+    S_vec = S_mat * (S_mat + 1) // 2
+    socp_dim = 1 + V + S_vec
+    sum_H = int(sum(h_vec_dims_static))
+
+    psd_cones = [S_mat] * N
+    for d in psd_mat_dims_static:
+        psd_cones += [d] * N
+
+    cone_info = {
+        'z': N * V,
+        'l': N + N * M,
+        'q': [socp_dim] * N,
+        's': psd_cones,
+    }
+
+    m_total = (
+        cone_info['z']
+        + cone_info['l']
+        + sum(cone_info['q'])
+        + sum([s * (s + 1) // 2 for s in cone_info['s']])
+    )
+    x_dim = 1 + N * (1 + M + V + S_vec + sum_H)
+    A_shape = (m_total, x_dim)
+
+    static_data = SCSSolveData(cone_info, A_shape)
+
+    nse_upper_bound = (
+        N * V * (M + 1 + sum_H)
+        + N * (1 + M + V + S_vec)
+        + N * M
+        + N * (1 + V + S_vec)
+        + N * S_vec * (M + 1 + sum_H)
+        + N * sum_H
+    )
+    return static_data, A_shape, int(nse_upper_bound)
+
+
+def dro_expectation_canon_to_bcoo(
+    A_obj, b_obj, A_vals, b_vals, c_vals,
+    G_batch, F_batch,
+    eps, precond_inv,
+    PSD_A_vals, PSD_b_vals,
+    psd_mat_dims_static,         # static Python tuple
+    nse_upper_bound,             # static Python int
+):
+    """JIT-compatible: canonicalize then sparsify to BCOO triplets.
+
+    No SDP solve here — ends at the JAX↔host boundary so the caller can
+    invoke ``scs_solve_wrapper_sparse`` *outside* any enclosing jit.
+
+    Returns:
+        (A_data, A_indices, b, c) — all JAX arrays, ready for the SDP wrapper.
+    """
+    if PSD_A_vals is not None and len(PSD_A_vals) > 0:
+        C_symvecs, d_vecs, _, _ = compute_C_d_matrices(
+            PSD_A_vals, PSD_b_vals, psd_mat_dims_static
+        )
+    else:
+        C_symvecs = None
+        d_vecs = None
+    PSD_mat_dims_to_pass = (
+        list(psd_mat_dims_static) if PSD_A_vals is not None and len(PSD_A_vals) > 0 else None
+    )
+    A_dense, b, c, _, _ = jax_scs_canonicalize_dro_expectation(
+        A_obj, b_obj, A_vals, b_vals, c_vals,
+        G_batch, F_batch,
+        eps, precond_inv,
+        PSD_A_vals, PSD_b_vals, PSD_mat_dims_to_pass,
+        C_symvecs, d_vecs, None,
+    )
+    A_bcoo = jsparse.BCOO.fromdense(A_dense, nse=int(nse_upper_bound))
+    return A_bcoo.data, A_bcoo.indices, b, c
+
+
+# =============================================================================
 # Full Differentiable DRO Pipeline
 # =============================================================================
 
@@ -1270,11 +1631,25 @@ def dro_expectation_scs_solve(
         C_symvecs, d_vecs, None,  # H_vec_dims computed from C_symvecs inside
     )
 
-    log.info('canon done')
-    
-    # Solve with custom VJP
-    obj_val = scs_solve_wrapper(static_data, A_dense, b, c)
-    
+    # Sparsify A at the JAX↔host boundary so the callback can build CSC
+    # directly from triplets (skipping the O(m·n) scipy.csc_matrix scan)
+    # and the backward returns a flat data cotangent of length nse rather
+    # than a dense (m, n) matrix.
+    sum_H = H_vec_sum
+    nse_upper_bound = (
+        N * V * (M + 1 + sum_H)        # eq_rows: -Bm_T + I_V + d_vecs
+        + N * (1 + M + V + S_vec)      # epi_rows
+        + N * M                        # y_nonneg
+        + N * (1 + V + S_vec)          # socp_rows: -1 + diag(F_pre^2) + diag(scaledG)
+        + N * S_vec * (M + 1 + sum_H)  # psd_rows: -Am_T + diag(scaledI) + C_symvecs
+        + N * sum_H                    # H_psd_rows: diag(scaledI_H)
+    )
+    A_bcoo = jsparse.BCOO.fromdense(A_dense, nse=int(nse_upper_bound))
+
+    obj_val = scs_solve_wrapper_sparse(
+        static_data, A_bcoo.data, A_bcoo.indices, A_shape, b, c
+    )
+
     return obj_val
 
 
@@ -1364,9 +1739,6 @@ def dro_cvar_scs_solve(
         C_symvecs, d_vecs, None,  # H_vec_dims computed from C_symvecs inside
     )
 
-    # log.info('canon done')
-    
-    # Solve with custom VJP
     obj_val = scs_solve_wrapper(static_data, A_dense, b, c)
     
     return obj_val

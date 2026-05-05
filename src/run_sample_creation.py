@@ -15,6 +15,7 @@ instances in a unified on-disk format. Lasso writes:
 Usage:
     Local:   python run_sample_creation.py Lasso local
 """
+import _jax_setup  # noqa: F401  -- enables JAX persistent compilation cache
 import hydra
 import logging
 import os
