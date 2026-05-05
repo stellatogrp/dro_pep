@@ -26,10 +26,17 @@ b_noise_std: 1e-2
 # Used to define the in-distribution training/validation/test b distribution.
 x_samp_std_in_dist: 2.0
 
-# OOD reuses the in-distribution scale but switches the shape from normal to
-# uniform: x_samp ~ Uniform(-mult * x_samp_std_in_dist, mult * x_samp_std_in_dist).
-# Default 3 covers ~99.7% of the matched-std normal's mass.
+# OOD x_samp distribution selector:
+#   'unif'   - x_samp ~ Uniform(-mult * x_samp_std_in_dist, mult * x_samp_std_in_dist)
+#              with mult = x_samp_ood_range_mult (shape shift, matched in-dist scale).
+#   'normal' - x_samp ~ Normal(0, x_samp_ood_normal_std^2) (scale shift, same shape).
+x_ood_dist: 'normal'
+
+# Used when x_ood_dist == 'unif'. Default 3 covers ~99.7% of the matched-std normal's mass.
 x_samp_ood_range_mult: 3.0
+
+# Used when x_ood_dist == 'normal'.
+x_samp_ood_normal_std: 3.0
 
 z0_type: 'zero'
 
@@ -77,7 +84,8 @@ output_dir: "learn_dro_outputs"
 # xsamp std 1
 # data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-22/14-55-30"
 # xsamp std 2
-data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-30/00-13-51"
+# data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-30/00-13-51"
+data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-05-03/19-48-28"
 
 # Out-of-sample validation/test configuration
 out_of_sample_val_N: 250     # Number of validation samples (in-distribution)

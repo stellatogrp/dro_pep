@@ -146,41 +146,6 @@ def get_Q_samples(subkeys, dim, mu, L, M):
     return jax.vmap(sampler)(subkeys)
 
 
-@partial(jax.jit, static_argnames=['dim'])
-def get_out_of_dist_Q_samples(subkeys, dim, mu, L):
-    """Generate out-of-distribution Q samples with random eigenvalues and rotation.
-
-    Each sample is generated as Q = U @ diag(eigvals) @ U.T where:
-    - eigvals are drawn from Beta(0.5, 0.5) scaled to [mu, L]
-    - U is a random orthogonal matrix
-
-    Args:
-        subkeys: JAX random keys for each sample (N,)
-        dim: Matrix dimension
-        mu: Lower bound for eigenvalues
-        L: Upper bound for eigenvalues
-
-    Returns:
-        Q_batch: (N, dim, dim) batch of symmetric PSD matrices
-    """
-    def sample_single(key):
-        k1, k2 = jax.random.split(key)
-
-        # Generate random eigenvalues using Beta distribution
-        random_eigvals = jax.random.beta(k1, 0.5, 0.5, shape=(dim,))
-        random_eigvals = random_eigvals * (L - mu) + mu
-
-        # Generate random orthogonal matrix
-        U = jax.random.orthogonal(k2, dim)
-
-        # Q = U @ diag(eigvals) @ U.T
-        Q = U @ jnp.diag(random_eigvals) @ U.T
-
-        return Q
-
-    return jax.vmap(sample_single)(subkeys)
-
-
 def sample_z0_single(key, d, R):
     """Sample a single initial point uniformly from a ball of radius R.
 
@@ -673,11 +638,15 @@ class QuadProblemModule(ProblemModule):
         }
 
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        """Sample out-of-distribution problems with different eigenvalue distribution.
+        """Sample out-of-distribution problems with L scaled up by 10%.
+
+        Same MP-distributed Q sampler as in-distribution and same init
+        radius `R_val`, but the eigenvalue upper bound is `1.1 * L_val`
+        instead of `L_val` (matrix width `M_val` is unchanged).
 
         When `data_source_dir` is configured and `ood_set.npz` is present under
         it, load N rows from there (seeded by `out_of_dist_seed`). Otherwise
-        sample fresh via the Beta-eigenvalue OOD sampler.
+        sample fresh.
 
         Args:
             key: JAX random key (unused on load path).
@@ -704,8 +673,8 @@ class QuadProblemModule(ProblemModule):
         Q_subkeys = jax.random.split(k1, N)
         z0_subkeys = jax.random.split(k2, N)
 
-        # OOD Q sampler (Beta distribution eigenvalues + random rotation)
-        Q_batch = get_out_of_dist_Q_samples(Q_subkeys, self.M_val, self.mu_val, self.L_val)
+        # OOD: same MP sampler as in-dist, but with L scaled up by 10%.
+        Q_batch = get_Q_samples(Q_subkeys, self.d_val, self.mu_val, 1.1 * self.L_val, self.M_val)
         z0_batch = get_z0_samples(z0_subkeys, self.M_val, self.R_val)
 
         zs_batch = jnp.zeros(z0_batch.shape)
@@ -799,8 +768,9 @@ def quad_sample_creation_run(cfg):
         validation_set.npz (in-distribution, size cfg.out_of_sample_val_N)
         test_set.npz       (in-distribution, size cfg.out_of_sample_test_N)
         ood_set.npz        (out-of-distribution, size cfg.out_of_dist_N;
-                            Beta-eigenvalue Q with random rotation, matrix
-                            width M_val to match in-dist)
+                            same Marchenko-Pastur Q sampler as in-dist, but
+                            with the eigenvalue upper bound scaled to
+                            1.1 * L_val)
 
     Plus split files for the plot pipeline:
         Q_test_samples.npz, z0_test_samples.npz
@@ -845,7 +815,8 @@ def quad_sample_creation_run(cfg):
         z0_subkeys = jax.random.split(k2, N)
 
         if ood:
-            Q_batch = get_out_of_dist_Q_samples(Q_subkeys, M_val, mu_val, L_val)
+            # Same MP sampler as in-dist, but with L scaled up by 10%.
+            Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, 1.1 * L_val, M_val)
             z0_batch = get_z0_samples(z0_subkeys, M_val, R_val)
         else:
             Q_batch = get_Q_samples(Q_subkeys, d_val, mu_val, L_val, M_val)

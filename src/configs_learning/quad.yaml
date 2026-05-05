@@ -59,8 +59,8 @@ data_source_dir: /scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creati
 # Sample sizes
 training_sample_N: 1000
 out_of_sample_val_N: 250    # Number of validation samples (in-distribution)
-out_of_sample_test_N: 250   # Number of test samples (in-distribution)
-out_of_dist_N: 250         # Number of out-of-distribution test samples
+out_of_sample_test_N: 500   # Number of test samples (in-distribution)
+out_of_dist_N: 500         # Number of out-of-distribution test samples
 
 # Random seeds
 training_seed: 40000            # Seed for training set generation (sample creation)

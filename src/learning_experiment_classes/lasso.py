@@ -951,12 +951,13 @@ class LassoProblemModule(ProblemModule):
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
         """Sample out-of-distribution problems.
 
-        OOD shift: x_samp is drawn from
-        Uniform(-r * cfg.x_samp_std_in_dist, r * cfg.x_samp_std_in_dist) with
-        r = cfg.x_samp_ood_range_mult (vs Normal(0, cfg.x_samp_std_in_dist^2)
-        for the in-dist sets) -- same scale, different shape. A is intentionally
-        reused from the in-distribution set so the shift is purely in the b
-        distribution.
+        OOD shift in x_samp, controlled by cfg.x_ood_dist:
+          - 'unif'   : Uniform(-r * cfg.x_samp_std_in_dist, r * cfg.x_samp_std_in_dist)
+                       with r = cfg.x_samp_ood_range_mult (matched in-dist scale,
+                       different shape).
+          - 'normal' : Normal(0, cfg.x_samp_ood_normal_std^2) (different scale,
+                       same shape as in-dist).
+        A is reused from the in-distribution set so the shift is purely in b.
 
         When `data_source_dir` is configured, prefer loading `ood_set.npz` and
         `A_out_of_dist.npz` from there.
@@ -985,14 +986,23 @@ class LassoProblemModule(ProblemModule):
             A_ood_np = generate_A(A_ood_seed, self.cfg.m, self.cfg.n)
         A_ood_jax = jnp.array(A_ood_np)
 
-        # Generate b vectors using OOD x_samp distribution (uniform support,
-        # same scale as in-distribution).
-        b_batch = generate_batch_b_jax(
-            key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
-            x_samp_std=self.cfg.x_samp_std_in_dist,
-            x_samp_dist="uniform",
-            x_samp_uniform_range_mult=self.cfg.x_samp_ood_range_mult,
-        )
+        # Generate b vectors using selected OOD x_samp distribution.
+        x_ood_dist = self.cfg.get('x_ood_dist', 'unif')
+        if x_ood_dist == 'unif':
+            b_batch = generate_batch_b_jax(
+                key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
+                x_samp_std=self.cfg.x_samp_std_in_dist,
+                x_samp_dist="uniform",
+                x_samp_uniform_range_mult=self.cfg.x_samp_ood_range_mult,
+            )
+        elif x_ood_dist == 'normal':
+            b_batch = generate_batch_b_jax(
+                key, self.A_jax, N, self.cfg.p_xsamp_nonzero, self.cfg.b_noise_std,
+                x_samp_std=self.cfg.get('x_samp_ood_normal_std', 3.0),
+                x_samp_dist="normal",
+            )
+        else:
+            raise ValueError(f"Unknown x_ood_dist: {x_ood_dist!r}")
 
         b_batch_np = np.array(b_batch)
         x_opt_batch_np, f_opt_batch_np, _ = solve_batch_lasso_cvxpy(
@@ -1123,7 +1133,9 @@ def lasso_sample_creation_run(cfg):
     p_xsamp_nonzero = cfg.p_xsamp_nonzero
     b_noise_std = cfg.b_noise_std
     x_samp_std_in_dist = cfg.x_samp_std_in_dist
+    x_ood_dist = cfg.get('x_ood_dist', 'unif')
     x_samp_ood_range_mult = cfg.x_samp_ood_range_mult
+    x_samp_ood_normal_std = cfg.get('x_samp_ood_normal_std', 3.0)
 
     # =========================================================================
     # In-distribution A matrix (shared by training, validation, test)
@@ -1171,11 +1183,14 @@ def lasso_sample_creation_run(cfg):
 
     # =========================================================================
     # Out-of-Distribution Test Set
-    # (A reused from the in-distribution set; x_samp drawn uniformly on
-    # [-r * x_samp_std_in_dist, r * x_samp_std_in_dist] with
-    # r = x_samp_ood_range_mult, so the OOD shift is purely a shape change in b.)
+    # A is reused from the in-distribution set; the OOD shift is purely in b
+    # via the x_samp distribution selected by `x_ood_dist`:
+    #   'unif'   : x_samp ~ Uniform(-r * x_samp_std_in_dist, r * x_samp_std_in_dist)
+    #              with r = x_samp_ood_range_mult (shape shift, matched in-dist scale).
+    #   'normal' : x_samp ~ Normal(0, x_samp_ood_normal_std^2) (scale shift).
     # =========================================================================
-    log.info(f"Generating {out_of_dist_N} out-of-distribution problems...")
+    log.info(f"Generating {out_of_dist_N} out-of-distribution problems "
+             f"(x_ood_dist={x_ood_dist!r})...")
 
     # Reuse in-dist A; A_out_of_dist.npz is written so downstream consumers
     # that expect a separate file still resolve, but its contents match A_in_dist.
@@ -1184,19 +1199,30 @@ def lasso_sample_creation_run(cfg):
     np.savez_compressed("A_out_of_dist.npz", A=A_ood_np)
 
     key_ood = jax.random.PRNGKey(out_of_dist_seed)
-    b_ood_batch = generate_batch_b_jax(
-        key_ood, A_ood_jax, out_of_dist_N,
-        p_xsamp_nonzero, b_noise_std,
-        x_samp_std=x_samp_std_in_dist,
-        x_samp_dist="uniform",
-        x_samp_uniform_range_mult=x_samp_ood_range_mult,
-    )
+    if x_ood_dist == 'unif':
+        b_ood_batch = generate_batch_b_jax(
+            key_ood, A_ood_jax, out_of_dist_N,
+            p_xsamp_nonzero, b_noise_std,
+            x_samp_std=x_samp_std_in_dist,
+            x_samp_dist="uniform",
+            x_samp_uniform_range_mult=x_samp_ood_range_mult,
+        )
+    elif x_ood_dist == 'normal':
+        b_ood_batch = generate_batch_b_jax(
+            key_ood, A_ood_jax, out_of_dist_N,
+            p_xsamp_nonzero, b_noise_std,
+            x_samp_std=x_samp_ood_normal_std,
+            x_samp_dist="normal",
+        )
+    else:
+        raise ValueError(f"Unknown x_ood_dist: {x_ood_dist!r}")
     b_ood_np = np.array(b_ood_batch)
 
     log.info(f"Solving {out_of_dist_N} out-of-distribution Lasso problems...")
-    x_opt_ood_np, f_opt_ood_np, _ = solve_batch_lasso_cvxpy(
+    x_opt_ood_np, f_opt_ood_np, R_max_ood = solve_batch_lasso_cvxpy(
         A_ood_np, b_ood_np, lambd, lasso_dpp=lasso_dpp
     )
+    log.info(f"sample maximum radius (ood): {R_max_ood:.6f}")
     np.savez_compressed(
         "ood_set.npz",
         b_batch=b_ood_np,
@@ -1230,7 +1256,9 @@ def lasso_sample_creation_run(cfg):
         'p_xsamp_nonzero': p_xsamp_nonzero,
         'b_noise_std': b_noise_std,
         'x_samp_std_in_dist': x_samp_std_in_dist,
+        'x_ood_dist': x_ood_dist,
         'x_samp_ood_range_mult': x_samp_ood_range_mult,
+        'x_samp_ood_normal_std': x_samp_ood_normal_std,
     }
     np.savez_compressed("out_of_sample_metadata.npz", **metadata)
 
