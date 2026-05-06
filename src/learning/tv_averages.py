@@ -1,23 +1,51 @@
 """
-tv_averages.py — Average Lagrangian gap trajectories across all Olivetti faces.
+tv_averages.py — Average Lagrangian gap trajectories per learned schedule.
 
-For both missing-fraction values defined in tv_inpainting_test.py
-(MISSING_FRACTION and MISSING_FRACTION_OOD), this script:
-  1. Iterates over every Olivetti face (face_index = 0..399).
-  2. Builds the TV inpainting LP with that face as ground truth.
-  3. Runs the two learned PDHG schedules (l2o and ldro-pep) at K=K_MAX.
-  4. Captures the Lagrangian gap at each iteration.
-  5. Averages each gap trajectory across all images and prints the result.
+Two splits are evaluated:
+  in  : every Olivetti face at the fixed MISSING_FRACTION (shared mask seed).
+  ood : the 7 grayscale test images stored in test_images_64.npy, all at the
+        same MISSING_FRACTION but each with its own mask seed.
+
+For each split the script:
+  1. Builds the TV inpainting LP for every (image, fraction, mask) instance.
+  2. Runs each learned PDHG schedule (l2o, ldro-pep, lpep) at K=K_MAX.
+  3. Captures the Lagrangian gap at each iteration.
+  4. Reports mean / q10 / q90 trajectories, writes a CSV, and renders a PDF.
 """
 
 import os
 import sys
 from typing import Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy.sparse as sp
 from sklearn.datasets import fetch_olivetti_faces
 from tqdm import tqdm
+
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.size": 14,
+})
+
+SCHEDULE_DISPLAY_NAMES = {"l2o": "L2O", "ldro-pep": "DR-L2O", "lpep": "OPT-PEP"}
+SCHEDULE_COLORS = {
+    "l2o": "tab:blue",
+    "ldro-pep": "tab:orange",
+    "lpep": "tab:green",
+}
+
+# OOD set: 7 downsampled grayscale test images. PIXEL_SIZE selects which
+# square-side .npy stack to load (test_images_<PIXEL_SIZE>.npy). Each image is
+# corrupted at the same MISSING_FRACTION as the in-distribution split, but
+# with its own random mask (different seed per image).
+PIXEL_SIZE = 128
+TEST_IMAGES_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    f"test_images_{PIXEL_SIZE}.npy",
+)
+OOD_MASK_SEED_BASE = 1000
 
 _SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _SRC_DIR not in sys.path:
@@ -148,22 +176,81 @@ def evaluate_image(
     return out
 
 
+def evaluate_image_from_array(
+    image: np.ndarray,
+    missing_fraction: float,
+    random_seed: int,
+    schedules: dict,
+) -> dict:
+    """Same as ``evaluate_image`` but on an arbitrary grayscale image array.
+
+    The image is assumed to lie in [0, 1] and is rescaled by LP_UPPER, matching
+    the in-house ``generate_tv_inpainting_problem`` path. A random Bernoulli
+    mask at the given missing_fraction is drawn from the supplied seed.
+    """
+    img = np.asarray(image, dtype=np.float64) * LP_UPPER
+    M, N = img.shape
+    rng = np.random.default_rng(random_seed)
+    mask = rng.random((M, N)) >= missing_fraction
+    known_indices = np.flatnonzero(mask)
+    known_values = img.reshape(-1)[known_indices].copy()
+
+    K = M * N
+    K_v = (M - 1) * N
+    K_h = M * (N - 1)
+    n_vars = K + K_v + K_h
+    S = len(known_indices)
+
+    extractor = make_matrix_extractor(known_indices, M, N)
+    matrices = extractor(known_values=known_values)
+    solution = solve_lp(matrices)
+    m1 = matrices.G.shape[0]
+    x0, y0 = build_strict_interior_init(n_vars, m1, S, LP_UPPER)
+
+    out = {}
+    for label, (tau_arr, sigma_arr, theta_arr) in schedules.items():
+        out[label] = run_pdhg_capture_gaps(
+            matrices.c, matrices.G, matrices.h,
+            matrices.A, matrices.b,
+            matrices.l, matrices.u,
+            solution["raw_x"], solution["raw_y"],
+            x0, y0,
+            tau_arr, sigma_arr, theta_arr,
+        )
+    return out
+
+
 if __name__ == "__main__":
-    schedule_specs = ["l2o", "ldro-pep"]
+    schedule_specs = ["l2o", "ldro-pep", "lpep"]
     schedules = {label: load_schedule(label, K_MAX) for label in schedule_specs}
 
     faces = fetch_olivetti_faces()
-    n_images = len(faces.images)
+    n_faces = len(faces.images)
+
+    # In-distribution split: every Olivetti face at the fixed MISSING_FRACTION,
+    # all sharing seed 42 to keep the original mask pattern.
+    in_items = [
+        (faces.images[i].astype(np.float64), MISSING_FRACTION, 42)
+        for i in range(n_faces)
+    ]
+
+    # OOD split: 7 downsampled test images, all corrupted at MISSING_FRACTION,
+    # each with its own random mask (distinct seed per image).
+    test_images = np.load(TEST_IMAGES_PATH)
+    ood_items = [
+        (test_images[i].astype(np.float64), MISSING_FRACTION, OOD_MASK_SEED_BASE + i)
+        for i in range(test_images.shape[0])
+    ]
 
     splits = [
-        ("in",  MISSING_FRACTION,     42),
-        ("ood", MISSING_FRACTION_OOD, 43),
+        ("in", in_items),
+        ("ood", ood_items),
     ]
     K_total = K_MAX * NUM_REPS
 
     print(
-        f"Running {n_images} faces x {len(splits)} fractions x "
-        f"{len(schedule_specs)} schedules; K_total={K_total} "
+        f"Running in={len(in_items)} (Olivetti) + ood={len(ood_items)} (test images) "
+        f"x {len(schedule_specs)} schedules; K_total={K_total} "
         f"(K_MAX={K_MAX}, NUM_REPS={NUM_REPS})"
     )
     print(
@@ -173,32 +260,75 @@ if __name__ == "__main__":
 
     results = {
         split_name: {label: [] for label in schedule_specs}
-        for split_name, _, _ in splits
+        for split_name, _ in splits
     }
 
-    for idx in tqdm(range(n_images), desc="Images"):
-        for split_name, frac, seed in splits:
-            out = evaluate_image(idx, frac, seed, schedules)
+    for split_name, items in splits:
+        for image, frac, seed in tqdm(items, desc=f"{split_name} images"):
+            out = evaluate_image_from_array(image, frac, seed, schedules)
             for label in schedule_specs:
                 results[split_name][label].append(out[label])
 
+    output_dir = os.path.join(
+        _SRC_DIR, "learning_experiment_classes", "pdhg_stepsizes"
+    )
+    os.makedirs(output_dir, exist_ok=True)
+    stat_names = ("mean", "q10", "q90")
+
     print("\n" + "=" * 60)
-    print(f"Average Lagrangian gap loss over {n_images} Olivetti faces")
+    print("Lagrangian gap stats (mean, q10, q90)")
     print("=" * 60)
 
-    for split_name, frac, _ in splits:
-        print(f"\nmissing_fraction = {frac:.2f}  ({split_name})")
-        header = "  iter | " + " | ".join(f"{label:>15s}" for label in schedule_specs)
-        print(header)
-        print("  -----+-" + "-+-".join("-" * 15 for _ in schedule_specs))
+    all_stats = {}
+    for split_name, items in splits:
+        fractions = np.array([f for _, f, _ in items], dtype=np.float64)
+        if np.allclose(fractions, fractions[0]):
+            frac_label = f"missing_fraction = {fractions[0]:.2f}"
+        else:
+            frac_label = (
+                f"missing_fractions in [{fractions.min():.2f}, "
+                f"{fractions.max():.2f}]"
+            )
+        print(f"\n{frac_label}  ({split_name}, n={len(items)})")
 
-        means = {
-            label: np.asarray(results[split_name][label]).mean(axis=0)
-            for label in schedule_specs
-        }
+        stats = {}
+        for label in schedule_specs:
+            arr = np.asarray(results[split_name][label])
+            stats[label] = {
+                "mean": arr.mean(axis=0),
+                "q10": np.quantile(arr, 0.10, axis=0),
+                "q90": np.quantile(arr, 0.90, axis=0),
+            }
+        all_stats[split_name] = stats
+
+        cols = [f"{label}_{s}" for label in schedule_specs for s in stat_names]
+        header = "  iter | " + " | ".join(f"{c:>22s}" for c in cols)
+        print(header)
+        print("  -----+-" + "-+-".join("-" * 22 for _ in cols))
         for k in range(K_total + 1):
-            row = " | ".join(f"{means[label][k]:>15.6e}" for label in schedule_specs)
-            print(f"  {k:>4d} | {row}")
+            row_vals = [
+                f"{stats[label][s][k]:>22.6e}"
+                for label in schedule_specs
+                for s in stat_names
+            ]
+            print(f"  {k:>4d} | " + " | ".join(row_vals))
+
+        data = np.zeros((K_total + 1, 1 + len(cols)))
+        data[:, 0] = np.arange(K_total + 1)
+        for j, label in enumerate(schedule_specs):
+            for s_idx, s in enumerate(stat_names):
+                data[:, 1 + len(stat_names) * j + s_idx] = stats[label][s]
+        csv_path = os.path.join(
+            output_dir,
+            f"tv_average_gap_{split_name}_K{K_MAX}_reps{NUM_REPS}.csv",
+        )
+        np.savetxt(
+            csv_path, data,
+            delimiter=",",
+            header="iter," + ",".join(cols),
+            comments="",
+        )
+        print(f"  saved CSV:  {csv_path}")
 
         if "l2o" in schedule_specs and "ldro-pep" in schedule_specs:
             l2o_final = np.asarray(results[split_name]["l2o"])[:, -1]
@@ -207,8 +337,51 @@ if __name__ == "__main__":
             worst_idx = int(np.argmax(diff))
             print(
                 f"  argmax(l2o - ldro-pep) at k={K_total}: "
-                f"face_index={worst_idx}, "
+                f"image_index={worst_idx}, "
                 f"l2o={l2o_final[worst_idx]:.6e}, "
                 f"ldro-pep={ldro_final[worst_idx]:.6e}, "
                 f"diff={diff[worst_idx]:.6e}"
             )
+
+    fig, axes = plt.subplots(1, len(splits), figsize=(12, 4.5))
+    if len(splits) == 1:
+        axes = [axes]
+    ks = np.arange(K_total + 1)
+    for col_idx, (split_name, items) in enumerate(splits):
+        fractions = np.array([f for _, f, _ in items], dtype=np.float64)
+        if np.allclose(fractions, fractions[0]):
+            title = rf"missing fraction $= {fractions[0]:g}$"
+        else:
+            title = (
+                rf"missing fraction $\in "
+                rf"[{fractions.min():g}, {fractions.max():g}]$"
+            )
+        ax = axes[col_idx]
+        for label in schedule_specs:
+            color = SCHEDULE_COLORS.get(label)
+            display = SCHEDULE_DISPLAY_NAMES.get(label, label)
+            ax.plot(
+                ks, all_stats[split_name][label]["mean"],
+                marker="o", markersize=5,
+                label=display, color=color,
+            )
+            ax.fill_between(
+                ks,
+                all_stats[split_name][label]["q10"],
+                all_stats[split_name][label]["q90"],
+                alpha=0.2, color=color,
+            )
+        ax.set_yscale("log")
+        ax.set_xlabel(r"$k$")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=9)
+        if col_idx == 0:
+            ax.set_ylabel("Lagrangian gap")
+    fig.tight_layout()
+    pdf_path = os.path.join(
+        output_dir, f"tv_average_gap_K{K_MAX}_reps{NUM_REPS}.pdf"
+    )
+    fig.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\nsaved plot: {pdf_path}")

@@ -37,13 +37,13 @@ from tqdm import trange
 np.set_printoptions(suppress=True, precision=5)
 
 # Fraction of pixels marked as unknown in the random mask. Tune to taste.
-MISSING_FRACTION = 0.1
+MISSING_FRACTION = 0.2
 
 # Row-2 (OOD) missing fraction; same mask scheme but a heavier corruption.
 MISSING_FRACTION_OOD = 0.3
 
 # Number of PDHG iterations to run in the __main__ demo. Tune to taste.
-K_MAX = 8
+K_MAX = 10
 
 # Number of times to repeat the loaded learned stepsize schedule end-to-end.
 # Effective horizon for learned PDHG is K_MAX * NUM_REPS. NUM_REPS=1 keeps the
@@ -55,6 +55,17 @@ NUM_REPS = 1
 # Plotting always rescales to [0, 255] for imshow.
 SCALED_LP_01 = True
 LP_UPPER = 1.0 if SCALED_LP_01 else 255.0
+
+# Square side length (in pixels) to downscale row-3 PNG inputs to before
+# building the LP. Set to None to keep the source resolution. Unused while
+# row 3 reads from test_images_64.npy (already 64x64), but kept for the PNG
+# path-based loaders.
+DOWNSIZE = 128
+
+# Order of images stacked in src/learning/test_images_64.npy, matching the
+# dict insertion order in image_generation.py.
+TEST_IMAGE_NAMES = ["camera", "moon", "coins", "text", "clock", "page", "cell"]
+ROW3_TEST_IMAGE_NAME = "camera"
 
 
 class TVInpaintingMatrices(NamedTuple):
@@ -95,6 +106,102 @@ def generate_tv_inpainting_problem(
 
     return {
         "image": image,
+        "mask": mask,
+        "known_indices": known_indices,
+        "known_values": known_values,
+        "M": M,
+        "N": N,
+    }
+
+
+def _load_grayscale_png(path: str) -> np.ndarray:
+    """Read a grayscale PNG into a float64 array scaled to [0, LP_UPPER].
+
+    If the module-level DOWNSIZE is set, the image is resized to
+    (DOWNSIZE, DOWNSIZE) with Lanczos resampling before conversion.
+    """
+    from PIL import Image
+    im = Image.open(path)
+    if im.mode != "L":
+        im = im.convert("L")
+    if DOWNSIZE is not None:
+        im = im.resize((DOWNSIZE, DOWNSIZE), Image.LANCZOS)
+    return np.array(im).astype(np.float64) * (LP_UPPER / 255.0)
+
+
+def make_random_corruption_problem(
+    image: np.ndarray, missing_fraction: float, random_seed: int,
+) -> dict:
+    """Build a random-corruption problem dict from an in-memory grayscale image.
+
+    The image is assumed to lie in [0, 1] and is rescaled by LP_UPPER. Returns
+    the same dict shape as ``load_corrupted_grayscale_pair``.
+    """
+    img = np.asarray(image, dtype=np.float64) * LP_UPPER
+    M, N = img.shape
+    rng = np.random.default_rng(random_seed)
+    mask = rng.random((M, N)) >= missing_fraction
+    corrupted = np.where(mask, img, 0.0)
+    known_indices = np.flatnonzero(mask)
+    known_values = img.reshape(-1)[known_indices].copy()
+    return {
+        "image": img,
+        "corrupted": corrupted,
+        "mask": mask,
+        "known_indices": known_indices,
+        "known_values": known_values,
+        "M": M,
+        "N": N,
+    }
+
+
+def load_random_corruption_problem(
+    original_path: str, missing_fraction: float, random_seed: int,
+) -> dict:
+    """Load a grayscale PNG and synthetically blank out a random fraction of pixels.
+
+    The returned dict matches ``load_corrupted_grayscale_pair`` (including a
+    ``corrupted`` array showing the original with missing pixels set to 0) so
+    downstream code is identical regardless of corruption source.
+    """
+    image = _load_grayscale_png(original_path)
+    M, N = image.shape
+    rng = np.random.default_rng(random_seed)
+    mask = rng.random((M, N)) >= missing_fraction
+    corrupted = np.where(mask, image, 0.0)
+    known_indices = np.flatnonzero(mask)
+    known_values = image.reshape(-1)[known_indices].copy()
+    return {
+        "image": image,
+        "corrupted": corrupted,
+        "mask": mask,
+        "known_indices": known_indices,
+        "known_values": known_values,
+        "M": M,
+        "N": N,
+    }
+
+
+def load_corrupted_grayscale_pair(original_path: str, corrupted_path: str) -> dict:
+    """Load (original, corrupted) grayscale PNGs and derive the mask from their diff.
+
+    Pixels are 'known' iff the corrupted image equals the original at that
+    location; any disagreement marks a missing pixel. Returns the same dict
+    shape as ``generate_tv_inpainting_problem`` plus a ``corrupted`` field.
+    """
+    image = _load_grayscale_png(original_path)
+    corrupted = _load_grayscale_png(corrupted_path)
+    if image.shape != corrupted.shape:
+        raise ValueError(
+            f"original/corrupted shape mismatch: {image.shape} vs {corrupted.shape}"
+        )
+    mask = corrupted == image
+    M, N = image.shape
+    known_indices = np.flatnonzero(mask)
+    known_values = image.reshape(-1)[known_indices].copy()
+    return {
+        "image": image,
+        "corrupted": corrupted,
         "mask": mask,
         "known_indices": known_indices,
         "known_values": known_values,
@@ -495,7 +602,7 @@ if __name__ == "__main__":
     m1 = matrices.G.shape[0]
     x0, y0 = build_strict_interior_init(n_vars, m1, S, LP_UPPER)
 
-    xk_final, _ = run_PDHG(
+    xk_vanilla, _ = run_PDHG(
         matrices.c,
         matrices.G,
         matrices.h,
@@ -508,6 +615,7 @@ if __name__ == "__main__":
         x0,
         y0,
     )
+    vanilla1 = xk_vanilla[:K].reshape(M, N)
 
     print("\n" + "=" * 60)
     print("Testing PDHG with learned per-iteration stepsizes")
@@ -517,7 +625,7 @@ if __name__ == "__main__":
         _SRC_DIR, "learning_experiment_classes", "pdhg_stepsizes",
     )
     # (label, subfolder) — order determines plot order when multiple exist.
-    schedule_specs = [("l2o", "l2o"), ("ldro-pep", "ldro-pep")]
+    schedule_specs = [("lpep", "lpep"), ("l2o", "l2o"), ("ldro-pep", "ldro-pep")]
     learned_iterates: list[tuple[str, np.ndarray]] = []
     for label, subfolder in schedule_specs:
         s_path = os.path.join(
@@ -570,6 +678,21 @@ if __name__ == "__main__":
     m1_2 = matrices2.G.shape[0]
     x0_2, y0_2 = build_strict_interior_init(n_vars, m1_2, S2, LP_UPPER)
 
+    xk_vanilla2, _ = run_PDHG(
+        matrices2.c,
+        matrices2.G,
+        matrices2.h,
+        matrices2.A,
+        matrices2.b,
+        matrices2.l,
+        matrices2.u,
+        solution2["raw_x"],
+        solution2["raw_y"],
+        x0_2,
+        y0_2,
+    )
+    vanilla2 = xk_vanilla2[:K].reshape(M, N)
+
     learned_iterates2: list[tuple[str, np.ndarray]] = []
     for label, subfolder in schedule_specs:
         s_path = os.path.join(
@@ -601,6 +724,82 @@ if __name__ == "__main__":
         learned_iterates2.append((label, xk_learned2[:K].reshape(M, N)))
 
     print("\n" + "=" * 60)
+    print(f"Generating third-row problem ({ROW3_TEST_IMAGE_NAME} from test_images_64.npy)")
+    print("=" * 60)
+
+    test_images_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "test_images_128.npy",
+    )
+    test_images = np.load(test_images_path)
+    row3_idx = TEST_IMAGE_NAMES.index(ROW3_TEST_IMAGE_NAME)
+    problem3 = make_random_corruption_problem(
+        test_images[row3_idx],
+        missing_fraction=MISSING_FRACTION,
+        random_seed=44,
+    )
+    M3, N3 = problem3["M"], problem3["N"]
+    K3 = M3 * N3
+    K_v3 = (M3 - 1) * N3
+    K_h3 = M3 * (N3 - 1)
+    n_vars3 = K3 + K_v3 + K_h3
+    S3 = len(problem3["known_indices"])
+    miss_pct3 = int(round(100 * (1.0 - S3 / K3)))
+    print(f"[row 3] M={M3}, N={N3}, K={K3}, S={S3} ({miss_pct3}% missing)")
+
+    extractor3 = make_matrix_extractor(problem3["known_indices"], M3, N3)
+    matrices3 = extractor3(known_values=problem3["known_values"])
+    solution3 = solve_lp(matrices3)
+    print(f"[row 3] optimal objective: {solution3['objective_value']:.4f}")
+
+    m1_3 = matrices3.G.shape[0]
+    x0_3, y0_3 = build_strict_interior_init(n_vars3, m1_3, S3, LP_UPPER)
+
+    xk_vanilla3, _ = run_PDHG(
+        matrices3.c,
+        matrices3.G,
+        matrices3.h,
+        matrices3.A,
+        matrices3.b,
+        matrices3.l,
+        matrices3.u,
+        solution3["raw_x"],
+        solution3["raw_y"],
+        x0_3,
+        y0_3,
+    )
+    vanilla3 = xk_vanilla3[:K3].reshape(M3, N3)
+
+    learned_iterates3: list[tuple[str, np.ndarray]] = []
+    for label, subfolder in schedule_specs:
+        s_path = os.path.join(
+            stepsize_root, subfolder, f"learned_pdhg_stepsizes_K{K_MAX}.csv",
+        )
+        if not os.path.exists(s_path):
+            continue
+        arr = np.loadtxt(s_path, delimiter=",", skiprows=1)
+        tau_arr = np.tile(arr[:, 0], NUM_REPS)
+        sigma_arr = np.tile(arr[:, 1], NUM_REPS)
+        theta_arr = np.tile(arr[:, 2], NUM_REPS)
+
+        xk_learned3, _ = run_PDHG_with_stepsizes(
+            matrices3.c,
+            matrices3.G,
+            matrices3.h,
+            matrices3.A,
+            matrices3.b,
+            matrices3.l,
+            matrices3.u,
+            solution3["raw_x"],
+            solution3["raw_y"],
+            x0_3,
+            y0_3,
+            tau_arr,
+            sigma_arr,
+            theta_arr,
+        )
+        learned_iterates3.append((label, xk_learned3[:K3].reshape(M3, N3)))
+
+    print("\n" + "=" * 60)
     print("Warm-start to optimum radii  R = ||[x0-x*; y0-y*]||")
     print("=" * 60)
     R_row1 = float(np.linalg.norm(
@@ -609,8 +808,12 @@ if __name__ == "__main__":
     R_row2 = float(np.linalg.norm(
         np.concatenate([x0_2 - solution2["raw_x"], y0_2 - solution2["raw_y"]])
     ))
+    R_row3 = float(np.linalg.norm(
+        np.concatenate([x0_3 - solution3["raw_x"], y0_3 - solution3["raw_y"]])
+    ))
     print(f"[row 1] random {int(round(MISSING_FRACTION * 100))}% missing : R = {R_row1:.4f}")
     print(f"[row 2] random {int(round(MISSING_FRACTION_OOD * 100))}% missing : R = {R_row2:.4f}")
+    print(f"[row 3] {ROW3_TEST_IMAGE_NAME:<13s} {miss_pct3}% missing : R = {R_row3:.4f}")
 
     print("\n" + "=" * 60)
     print("Plotting original / corrupted / LP reconstruction / learned PDHG")
@@ -625,6 +828,10 @@ if __name__ == "__main__":
     corrupted2 = np.where(problem2["mask"], problem2["image"], 0.0)
     reconstructed2 = solution2["raw_x"][:K].reshape(M, N)
 
+    original3 = problem3["image"]
+    corrupted3 = problem3["corrupted"]
+    reconstructed3 = solution3["raw_x"][:K3].reshape(M3, N3)
+
     horizon_label = (
         f"K={K_MAX}" if NUM_REPS == 1 else f"K={K_MAX}x{NUM_REPS}"
     )
@@ -634,8 +841,9 @@ if __name__ == "__main__":
         "Original",
         f"Corrupted ({miss_pct}% missing)",
         "L1-TV Reconstruction (LP)",
+        "vanilla",
     ]
-    panels_row1 = [original, corrupted, reconstructed]
+    panels_row1 = [original, corrupted, reconstructed, vanilla1]
     for label, img in learned_iterates:
         titles_row1.append(f"learned PDHG ({label}), {horizon_label}")
         panels_row1.append(img)
@@ -645,23 +853,38 @@ if __name__ == "__main__":
         None,
         f"Corrupted ({miss_pct_ood}% missing)",
         "L1-TV Reconstruction (LP)",
+        "vanilla",
     ]
-    panels_row2 = [None, corrupted2, reconstructed2]
+    panels_row2 = [None, corrupted2, reconstructed2, vanilla2]
     for label, img in learned_iterates2:
         titles_row2.append(f"learned PDHG ({label}), {horizon_label}")
         panels_row2.append(img)
 
-    n_panels = max(len(panels_row1), len(panels_row2))
+    titles_row3 = [
+        "Original",
+        f"Corrupted ({miss_pct3}% missing)",
+        "L1-TV Reconstruction (LP)",
+        "vanilla",
+    ]
+    panels_row3 = [original3, corrupted3, reconstructed3, vanilla3]
+    for label, img in learned_iterates3:
+        titles_row3.append(f"learned PDHG ({label}), {horizon_label}")
+        panels_row3.append(img)
+
+    n_panels = max(len(panels_row1), len(panels_row2), len(panels_row3))
     panels_row1 += [None] * (n_panels - len(panels_row1))
     titles_row1 += [None] * (n_panels - len(titles_row1))
     panels_row2 += [None] * (n_panels - len(panels_row2))
     titles_row2 += [None] * (n_panels - len(titles_row2))
+    panels_row3 += [None] * (n_panels - len(panels_row3))
+    titles_row3 += [None] * (n_panels - len(titles_row3))
 
-    fig, axes = plt.subplots(2, n_panels, figsize=(3.0 * n_panels, 6.4))
+    fig, axes = plt.subplots(3, n_panels, figsize=(3.0 * n_panels, 9.6))
     plot_scale = 255.0 / LP_UPPER
     for row_axes, row_panels, row_titles in (
         (axes[0], panels_row1, titles_row1),
         (axes[1], panels_row2, titles_row2),
+        (axes[2], panels_row3, titles_row3),
     ):
         for ax, img, title in zip(row_axes, row_panels, row_titles):
             if img is None:
