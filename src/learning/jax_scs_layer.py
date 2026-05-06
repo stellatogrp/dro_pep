@@ -478,8 +478,15 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
             A_dense, b, c, x, jnp.array(d_obj)
         )
 
-        _adjoint_cache.clear()
-        
+        # Don't clear _adjoint_cache here. This Python statement runs at JAX
+        # *trace* time of _solve_bwd (not at execution time of compute_grads),
+        # so it would empty the cache BEFORE the deferred fwd-callback gets
+        # to populate it -> bwd-callback reads a cleared cache -> zero grad
+        # on the FIRST call (subsequent calls reuse the compiled bwd without
+        # re-running this Python side effect, masking the bug). Each fwd-
+        # callback invocation overwrites the cache anyway, so leaving it
+        # populated between calls is fine.
+
         return dA, db, dc
     
     _solve.defvjp(_solve_fwd, _solve_bwd)
