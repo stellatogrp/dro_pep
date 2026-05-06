@@ -1,22 +1,19 @@
-"""Regression probe: PDLP LDRO-PEP gradient must be deterministic across calls.
+"""Regression test: PDLP LDRO-PEP gradient must be deterministic across calls.
 
-Originally written to test whether dual-uniqueness regularization fixed an
-apparent SDP non-determinism, this probe instead exposed a JAX pure_callback
-ordering bug in jax_scs_layer.py:_solve_bwd: an `_adjoint_cache.clear()`
-side-effect ran at JAX *trace* time and emptied the cache that the deferred
-forward callback would later populate, causing the very first
-`value_and_grad` call to read an empty cache and return zeros.
+Evaluates ``jax.value_and_grad`` of the LDRO-PEP loss N times at the
+production initial step sizes (with a fixed minibatch) and asserts both the
+loss and the gradient are bit-identical across calls.
 
-The fix: removed the trace-time `clear()` from `_solve_bwd`. With the fix,
-ALL repeats produce identical loss + identical gradient. Without the fix,
-repeat 0 returns zero-gradient and repeats 1+ return the correct value.
-
-This script evaluates ``value_and_grad`` of the LDRO-PEP loss N times at the
-production init and asserts both the loss and the gradient are bit-identical
-across calls.
+Guards against regression of a JAX ``pure_callback`` ordering bug in
+``learning/jax_scs_layer.py:_solve_bwd``: a Python side-effect that mutates
+the shared adjoint cache and runs at JAX *trace* time of the backward can
+empty the cache before the deferred forward callback populates it, making
+the very first ``value_and_grad`` call return zeros.
 
 Usage:
-    PDLP_DATA_DIR=<sample dir> python -m tests.probe_pdlp_dual_reg \
+    PDLP_DATA_DIR=<sample dir> pytest src/tests/test_pdlp_grad_determinism.py -v -s
+
+    PDLP_DATA_DIR=<sample dir> python -m tests.test_pdlp_grad_determinism \
         [K=5] [n_repeats=3]
 """
 import os
@@ -82,19 +79,18 @@ def run(K=5, n_repeats=3):
 def test_pdlp_grad_determinism():
     """Pytest entry: assert grad and loss are bit-identical across 3 calls.
 
-    Regression test for the _solve_bwd cache-clear bug. Skipped if
-    PDLP_DATA_DIR not set.
+    Skipped if PDLP_DATA_DIR is not set.
     """
     if "PDLP_DATA_DIR" not in os.environ:
         import pytest
         pytest.skip("Set PDLP_DATA_DIR to a PDLP sample dir to run this test.")
     losses, norms = run(K=5, n_repeats=3)
     assert max(losses) - min(losses) < 1e-9, (
-        f"loss is non-deterministic across calls: {losses}"
+        f"loss is non-deterministic across consecutive value_and_grad calls: {losses}"
     )
     assert max(norms) - min(norms) < 1e-6, (
-        f"raw_grad_norm is non-deterministic across calls: {norms} "
-        "(regression of jax_scs_layer.py:_solve_bwd cache-clear bug)"
+        f"raw_grad_norm is non-deterministic across consecutive value_and_grad "
+        f"calls: {norms}"
     )
 
 
