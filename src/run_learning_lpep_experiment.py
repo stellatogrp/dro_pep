@@ -182,9 +182,9 @@ Learn_Lasso_params = conditional_product(
 PDLP_options = [
     ['learning_framework=lpep'],
     ['N=5'],
-    ['sgd_iters=1000'],
+    ['sgd_iters=20'],
     ['eta_t=1e-5', 'eta_t=1e-4', 'eta_t=1e-3'],
-    ['K_max=[8]'],
+    ['K_max=[8,9,10]'],
 ]
 
 Learn_PDLP_params = conditional_product(

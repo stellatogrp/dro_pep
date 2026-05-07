@@ -4,10 +4,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 # # SBATCH --mem-per-cpu=4G
-#SBATCH --mem=20G
+#SBATCH --mem=6G
 # #SBATCH --constraint=intel
-#SBATCH --time=00-05:59:59
-#SBATCH --array=0-2
+#SBATCH --time=00-01:29:59
+#SBATCH --array=0
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/PDLP/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu

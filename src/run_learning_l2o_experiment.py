@@ -186,10 +186,10 @@ Lasso_options = [
     ['training_sample_N=1000'],
     ['dro_obj=expectation'],
     ['sgd_iters=1000'],
-    ['grad_clip_norm=10.0'],
+    ['grad_clip_norm=1.0'],
     # ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
-    ['eta_t=1e-3'],
-    ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
+    ['eta_t=1e-4'],
+    ['weight_decay=1e-5', 'weight_decay=1e-4'],
     # ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
     ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]'],
 ]
@@ -210,9 +210,11 @@ Learn_Lasso_params = conditional_product(
 
 PDLP_options = [
     ['learning_framework=l2o'],
-    ['N=4', 'N=5'],
+    ['N=20'],
     ['sgd_iters=500'],
-    ['K_max=[8]'],
+    ['eta_t=1e-2'],
+    ['weight_decay=0'],
+    ['K_max=[1]', 'K_max=[2]', 'K_max=[3]', 'K_max=[4]', 'K_max=[5]', 'K_max=[6]', 'K_max=[7]', 'K_max=[8]', 'K_max=[9]', 'K_max=[10]'],
 ]
 
 Learn_PDLP_params = conditional_product(

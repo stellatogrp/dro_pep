@@ -216,10 +216,10 @@ PDLP_options = [
     ['N=5'],
     # ['dro_obj=expectation', 'dro_obj=cvar'],
     # ['alpha=0.1'],
-    ['sgd_iters=1000'],
+    ['sgd_iters=10'],
     ['eta_t=1e-4', 'eta_t=1e-3'],
-    ['eps=0.1', 'eps=1.0', 'eps=10.0'],
-    ['K_max=[8]'],
+    ['eps=1.0', 'eps=10.0'],
+    ['K_max=[8, 9, 10]'],
 ]
 
 Learn_PDLP_params = conditional_product(
