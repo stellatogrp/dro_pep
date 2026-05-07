@@ -8,8 +8,12 @@ Two splits are evaluated:
 
 For each split the script:
   1. Builds the TV inpainting LP for every (image, fraction, mask) instance.
-  2. Runs each learned PDHG schedule (l2o, ldro-pep, lpep) at K=K_MAX.
-  3. Captures the Lagrangian gap at each iteration.
+  2. Runs the learned PDHG schedules. ldro-pep and lpep use the single
+     K=K_MAX trajectory; l2o instead pulls a separate K-specific schedule
+     for each k in 1..K_MAX, runs it for k iterations, and reports the
+     final-iterate gap at index k (so the curve at index k always reflects
+     a schedule that was actually trained for k steps).
+  3. Captures the Lagrangian gap at each iteration index 0..K_MAX.
   4. Reports mean / q10 / q90 trajectories, writes a CSV, and renders a PDF.
 """
 
@@ -35,6 +39,11 @@ SCHEDULE_COLORS = {
     "ldro-pep": "tab:orange",
     "lpep": "tab:green",
 }
+
+# Labels whose curve is built from per-K schedules (one CSV per k, where the
+# point at index k uses the schedule trained for k iterations). All other
+# labels use the single K=K_MAX trajectory.
+PER_K_LABELS = {"l2o"}
 
 # OOD set: 7 downsampled grayscale test images. PIXEL_SIZE selects which
 # square-side .npy stack to load (test_images_<PIXEL_SIZE>.npy). Each image is
@@ -132,10 +141,70 @@ def load_schedule(subfolder: str, K_max: int) -> Tuple[np.ndarray, np.ndarray, n
     if not os.path.exists(s_path):
         raise FileNotFoundError(f"No K={K_max} schedule CSV at {s_path}")
     arr = np.loadtxt(s_path, delimiter=",", skiprows=1)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
     tau_arr = np.tile(arr[:, 0], NUM_REPS)
     sigma_arr = np.tile(arr[:, 1], NUM_REPS)
     theta_arr = np.tile(arr[:, 2], NUM_REPS)
     return tau_arr, sigma_arr, theta_arr
+
+
+def load_per_k_schedules(subfolder: str, K_max: int) -> dict:
+    """Load one CSV per k in 1..K_max from `subfolder`; return {k: (tau, sigma, theta)}."""
+    stepsize_root = os.path.join(
+        _SRC_DIR, "learning_experiment_classes", "pdhg_stepsizes",
+    )
+    out = {}
+    for k in range(1, K_max + 1):
+        s_path = os.path.join(
+            stepsize_root, subfolder, f"learned_pdhg_stepsizes_K{k}.csv"
+        )
+        if not os.path.exists(s_path):
+            raise FileNotFoundError(f"No K={k} schedule CSV at {s_path}")
+        arr = np.loadtxt(s_path, delimiter=",", skiprows=1)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.shape[0] != k:
+            raise ValueError(
+                f"Expected {k} rows in {s_path}, got {arr.shape[0]}"
+            )
+        out[k] = (arr[:, 0], arr[:, 1], arr[:, 2])
+    return out
+
+
+def _run_schedules(matrices, raw_x, raw_y, x0, y0, schedules: dict) -> dict:
+    """Run each schedule on the given LP. Trajectory schedules (tuples) capture
+    every iterate's gap; per-K schedules (dicts of {k: schedule}) capture only
+    the final-iterate gap for each k.
+    """
+    out = {}
+    for label, sched in schedules.items():
+        if isinstance(sched, dict):
+            K_max_local = max(sched.keys())
+            gaps = np.empty(K_max_local + 1, dtype=np.float64)
+            for k_idx in sorted(sched.keys()):
+                tau_arr, sigma_arr, theta_arr = sched[k_idx]
+                full = run_pdhg_capture_gaps(
+                    matrices.c, matrices.G, matrices.h,
+                    matrices.A, matrices.b,
+                    matrices.l, matrices.u,
+                    raw_x, raw_y, x0, y0,
+                    tau_arr, sigma_arr, theta_arr,
+                )
+                if k_idx == 1:
+                    gaps[0] = full[0]
+                gaps[k_idx] = full[-1]
+            out[label] = gaps
+        else:
+            tau_arr, sigma_arr, theta_arr = sched
+            out[label] = run_pdhg_capture_gaps(
+                matrices.c, matrices.G, matrices.h,
+                matrices.A, matrices.b,
+                matrices.l, matrices.u,
+                raw_x, raw_y, x0, y0,
+                tau_arr, sigma_arr, theta_arr,
+            )
+    return out
 
 
 def evaluate_image(
@@ -163,17 +232,9 @@ def evaluate_image(
     m1 = matrices.G.shape[0]
     x0, y0 = build_strict_interior_init(n_vars, m1, S, LP_UPPER)
 
-    out = {}
-    for label, (tau_arr, sigma_arr, theta_arr) in schedules.items():
-        out[label] = run_pdhg_capture_gaps(
-            matrices.c, matrices.G, matrices.h,
-            matrices.A, matrices.b,
-            matrices.l, matrices.u,
-            solution["raw_x"], solution["raw_y"],
-            x0, y0,
-            tau_arr, sigma_arr, theta_arr,
-        )
-    return out
+    return _run_schedules(
+        matrices, solution["raw_x"], solution["raw_y"], x0, y0, schedules,
+    )
 
 
 def evaluate_image_from_array(
@@ -207,22 +268,27 @@ def evaluate_image_from_array(
     m1 = matrices.G.shape[0]
     x0, y0 = build_strict_interior_init(n_vars, m1, S, LP_UPPER)
 
-    out = {}
-    for label, (tau_arr, sigma_arr, theta_arr) in schedules.items():
-        out[label] = run_pdhg_capture_gaps(
-            matrices.c, matrices.G, matrices.h,
-            matrices.A, matrices.b,
-            matrices.l, matrices.u,
-            solution["raw_x"], solution["raw_y"],
-            x0, y0,
-            tau_arr, sigma_arr, theta_arr,
-        )
-    return out
+    return _run_schedules(
+        matrices, solution["raw_x"], solution["raw_y"], x0, y0, schedules,
+    )
 
 
 if __name__ == "__main__":
     schedule_specs = ["l2o", "ldro-pep", "lpep"]
-    schedules = {label: load_schedule(label, K_MAX) for label in schedule_specs}
+    if any(label in PER_K_LABELS for label in schedule_specs) and NUM_REPS != 1:
+        raise ValueError(
+            f"per-K schedules require NUM_REPS == 1 (got {NUM_REPS}); "
+            "the per-K curve has length K_MAX+1, while NUM_REPS>1 would "
+            "produce a length-K_MAX*NUM_REPS+1 trajectory for the others."
+        )
+    schedules = {
+        label: (
+            load_per_k_schedules(label, K_MAX)
+            if label in PER_K_LABELS
+            else load_schedule(label, K_MAX)
+        )
+        for label in schedule_specs
+    }
 
     faces = fetch_olivetti_faces()
     n_faces = len(faces.images)

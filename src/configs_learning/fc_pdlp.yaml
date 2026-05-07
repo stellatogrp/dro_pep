@@ -47,14 +47,14 @@ decay_rate: 0.9
 # ----------------------------------------------------------------------------
 # Batch sampling
 # ----------------------------------------------------------------------------
-N: 10                                   # minibatch size
+N: 5                                   # minibatch size
 training_sample_N: 250                   # total pre-sampled training instances
-mr_estimation_size: 100                 # pool size for estimating M_val and R_val
+mr_estimation_size: 1000                 # pool size for estimating M_val and R_val
 mr_estimation_seed: 20260421
 
-out_of_sample_val_N: 100
-out_of_sample_test_N: 200
-out_of_dist_N: 20
+out_of_sample_val_N: 1000
+out_of_sample_test_N: 250
+out_of_dist_N: 250
 
 # Seeds for sample-creation generation (also used to deterministically
 # subsample N rows from the saved bundles when `data_source_dir` is set).
@@ -64,7 +64,7 @@ out_of_sample_test_seed: 20000
 out_of_dist_seed: 30000
 
 # K_max loop inside pdlp_run (per-K CSV logging)
-K_max: [5, 10, 15]
+K_max: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 sgd_seed: 500
 

@@ -37,7 +37,7 @@ from tqdm import trange
 np.set_printoptions(suppress=True, precision=5)
 
 # Fraction of pixels marked as unknown in the random mask. Tune to taste.
-MISSING_FRACTION = 0.2
+MISSING_FRACTION = 0.1
 
 # Row-2 (OOD) missing fraction; same mask scheme but a heavier corruption.
 MISSING_FRACTION_OOD = 0.3
