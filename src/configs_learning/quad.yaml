@@ -1,0 +1,69 @@
+# Problem parameters
+mu: 1.
+L: 10.
+R: 10.
+dim: 400
+
+# type of learning framework
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
+
+# Batch size
+N: 20
+
+seed: 50
+
+# Algorithm and optimizer type (selected by Slurm job index)
+alg: "vanilla_gd"           # stub: vanilla_gd or nesterov_gd or nesterov_fgm
+optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
+stepsize_type: "vector" # "scalar" or "vector"
+vector_init: "fixed" # "fixed" or "silver"
+
+# Loss type composition for training and validation
+# Options: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
+# 'final': Only final iterate metric
+# 'weighted': Exponentially weighted sum (emphasizes later iterations)
+# 'cumulative': Mean of metrics at all iterates
+training_loss_type_composition: "weighted"
+validation_loss_type_composition: "final"
+decay_rate: 0.9  # Decay rate for weighted composition (w_k = decay_rate^(K-k))
+
+# K_max loop inside quad_run (per-K CSV logging)
+# K_max: [5, 10, 15, 20]
+K_max: [5]
+
+# Optimization hyperparameters
+pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
+dro_obj: "cvar"  # "expectation" or "cvar"
+sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
+dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'average'
+
+learn_beta: True  # True or False depending on if beta is learnable or not
+
+# SGD training parameters
+sgd_iters: 1000
+eta_t: 1e-3     # learning rate for stepsizes (descent)
+weight_decay: 1e-3  # weight decay for sgd_wd
+grad_clip_norm: 10.0  # max L2 norm across the full gradient tuple; norms above this are scaled down (direction preserved)
+
+# Outputs
+output_dir: "learn_dro_outputs"
+# Set to a previous Quad sample-creation Hydra run dir to reuse its bundles (or null otherwise)
+# R = 10:
+data_source_dir: /scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Quad/2026-04-28/17-10-00
+# R = 20:
+# data_source_dir: /scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Quad/2026-04-27/22-13-28  
+
+# Sample sizes
+training_sample_N: 1000
+out_of_sample_val_N: 250    # Number of validation samples (in-distribution)
+out_of_sample_test_N: 500   # Number of test samples (in-distribution)
+out_of_dist_N: 500         # Number of out-of-distribution test samples
+
+# Random seeds
+training_seed: 40000            # Seed for training set generation (sample creation)
+out_of_sample_val_seed: 10000   # Seed for validation set generation
+out_of_sample_test_seed: 20000  # Seed for test set generation
+out_of_dist_seed: 30000         # Seed for OOD set generation

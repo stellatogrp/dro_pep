@@ -5,7 +5,7 @@ eta: 0.159
 
 L: 6.3 # FILL THIS IN ONCE KNOWN
 
-K_min: 1
+K_min: 26
 K_max: 30
 
 alg: nesterov_fgm  # grad_desc or nesterov_grad_desc or nesterov_fgm
@@ -34,6 +34,6 @@ dro_fname: dro.csv
 
 eps:
   log_min: -2
-  log_max: 0
-  logspace_count: 7
+  log_max: -1
+  logspace_count: 4
 alpha: 0.1

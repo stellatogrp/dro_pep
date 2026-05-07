@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=QPEP
+#SBATCH --job-name=HDRO
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=80G
-#SBATCH --time=01-01:59:59
-#SBATCH --array=0-1
+#SBATCH --mem-per-cpu=120G
+#SBATCH --time=00-02:59:59
+#SBATCH --array=1,3
 #SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Huber/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
@@ -21,4 +21,5 @@ module load anaconda3/2024.10
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
-python run_pep_experiment.py Quad cluster
+cd "$(dirname "$0")/.."
+python run_dro_experiment.py Huber cluster

@@ -10,7 +10,7 @@ from .utils import gradient_descent, nesterov_accelerated_gradient, nesterov_fgm
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
-from ucimlrepo import fetch_ucirepo
+# from ucimlrepo import fetch_ucirepo
 from .lyap_classes.gd import gd_lyap, gd_lyap_nobisect
 
 log = logging.getLogger(__name__)

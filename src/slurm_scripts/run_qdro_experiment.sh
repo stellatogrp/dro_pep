@@ -1,12 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=HPEP
+#SBATCH --job-name=QDRO
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=80G
-#SBATCH --time=01-01:59:59
-#SBATCH --array=0-1
-#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Huber/runs/%A.txt
+#SBATCH --mem-per-cpu=600G
+#SBATCH --time=00-23:59:59
+#SBATCH --constraint=intel # useful to make sure paradiso-mkl is available
+#SBATCH --array=0-7
+#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Quad/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1
@@ -17,8 +18,10 @@
 # export xla_force_host_platform_device_count=1
 
 module purge
+module load intel-mkl/2024.2
 module load anaconda3/2024.10
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
-python run_pep_experiment.py Huber cluster
+cd "$(dirname "$0")/.."
+python run_dro_experiment.py Quad cluster

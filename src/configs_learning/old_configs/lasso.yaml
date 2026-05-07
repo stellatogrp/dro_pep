@@ -1,0 +1,62 @@
+# Problem parameters
+m: 300
+n: 200
+lambd: 0.1
+
+# R: null  # null to compute from samples, or a float value
+# these below are for m: 300, n: 200 with 1000 samples, scaled up by 5% for buffer
+# m < n: R = 10.306403
+# m > n: R = 8.735880
+R_strongcvx: 9.172674
+R_nonstrongcvx: 10.8217232
+
+# Sparsity and noise parameters for sampling
+p_A_nonzero: 0.4        # Probability of non-zero entries in A
+p_xsamp_nonzero: 0.25   # Probability of non-zero entries in x samples
+noise_eps: 0.001        # Noise level for b generation
+
+# Sample sizes
+N: 16                   # Batch size for SGD training
+R_sample_size: 1000     # Number of samples for R computation (if R is null)
+
+# Random seeds
+seed: 50                # Seed for SGD randomness
+A_seed: 1000            # Seed for A matrix generation (fixed across experiments)
+b_seed: 2000            # Seed for b vector sampling
+
+# Type of learning framework
+learning_framework: 'ldro-pep'  # 'ldro-pep' or 'l2o' or 'lpep'
+
+# Algorithm and optimizer type (selected by Slurm job index)
+alg: "ista"            # ista or fista
+optimizer_type: "adamw" # "vanilla_sgd", "adamw", or "sgd_wd"
+stepsize_type: "vector" # "scalar" or "vector"
+vector_init: "fixed" # "fixed" or "silver"
+
+# K_max loop inside quad_run (per-K CSV logging)
+# K_max: [5, 10, 15, 20]
+K_max: [10]
+
+# Optimization hyperparameters
+pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
+dro_obj: "expectation"  # "expectation" or "cvar"
+sdp_backend: "scs"  # "scs" (CvxpyLayers) or "clarabel" (Clarabel+diffcp)
+dro_canon_backend: "manual_jax"  # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'average'
+
+learn_beta: True  # True or False depending on if beta is learnable or not
+
+# SGD training parameters
+sgd_iters: 100
+eta_t: 1e-3     # learning rate for stepsizes (descent)
+weight_decay: 1e-2  # weight decay for sgd_wd
+
+# MOSEK solver tolerances
+mosek_tol_dfeas: 1e-2
+mosek_tol_pfeas: 1e-2
+mosek_tol_rel_gap: 1e-2
+
+# Outputs
+output_dir: "learn_dro_outputs"

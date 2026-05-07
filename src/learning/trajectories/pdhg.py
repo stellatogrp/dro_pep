@@ -1,0 +1,377 @@
+"""
+PDHG (Chambolle-Pock) trajectory computation for DRO-PEP on Linear Programs.
+
+This module computes PDHG trajectories and constructs Gram representations
+that match the PEP construction from pep_construction_chambolle_pock_linop.py.
+
+The LP problem is:
+    min_x  c^T x
+    s.t.   G x >= h      (m1 inequality constraints)
+           A x = b       (m2 equality constraints)
+           l <= x <= u   (box constraints)
+
+This is reformulated as a saddle-point problem:
+    min_x max_y L(x, y) = f1(x) + <Kx, y> - h_dual(y)
+
+where:
+    K = [G; A] is the stacked constraint matrix
+    q = [h; b] is the stacked RHS
+    f1(x) = c^T x + indicator_{[l,u]}(x)
+    h_dual(y) = q^T y + indicator_Y(y)  where Y = {y: y[:m1] >= 0}
+
+PDHG Algorithm:
+    For k = 0, ..., K-1:
+        x_{k+1} = prox_{τ f1}(x_k - τ K^T y_k) = proj_{[l,u]}(x_k - τ K^T y_k - τ c)
+        x_bar_{k+1} = x_{k+1} + θ (x_{k+1} - x_k)
+        y_{k+1} = prox_{σ h_dual}(y_k + σ K x_bar_{k+1}) = proj_Y(y_k + σ K x_bar_{k+1} + σ q)
+
+For the DRO-PEP framework, we shift coordinates so the saddle point is at origin:
+    x_shifted = x - x_opt
+    y_shifted = y - y_opt
+"""
+
+import jax
+import jax.numpy as jnp
+from functools import partial
+
+
+def proj_box(v, l, u):
+    """Project v onto box [l, u]."""
+    return jnp.clip(v, l, u)
+
+
+def proj_nonneg_first_m1(v, m1):
+    """Project first m1 components to non-negative, leave rest unchanged."""
+    v_ineq = jnp.maximum(v[:m1], 0.0)
+    v_eq = v[m1:]
+    return jnp.concatenate([v_ineq, v_eq])
+
+
+@partial(jax.jit, static_argnames=['K_max', 'm1', 'return_Gram_representation'])
+def problem_data_to_pdhg_trajectories(
+    stepsizes,
+    c, K_mat, q, l, u,
+    x0, y0,
+    x_opt, y_opt,
+    K_max, m1,
+    M=None,
+    return_Gram_representation=True
+):
+    """
+    Compute PDHG trajectories on LP and return Gram representation matching PEP construction.
+
+    The LP data defines the saddle-point problem:
+        min_x max_y  c^T x + y^T (q - K x)
+        s.t.  l <= x <= u,  y[:m1] >= 0
+
+    This function shifts coordinates so the saddle point is at the origin,
+    runs PDHG, and constructs the Gram matrix matching pep_construction_chambolle_pock_linop.py.
+
+    The Gram basis has:
+        dimG = 4 + 2*(K_max + 2) + 2*K_max + 3 = 4*K_max + 11
+
+        Indices:
+        - 0: dx0 (x_0 - x_s)
+        - 1: dy0 (y_0 - y_s)
+        - 2: x_s (= 0 in shifted coords)
+        - 3: y_s (= 0 in shifted coords)
+        - 4 to 5+K: gf1_0, ..., gf1_K, gf1_s (K+2 subgradients of f1)
+        - 6+K to 7+2K: gh_0, ..., gh_K, gh_s (K+2 subgradients of h)
+        - 8+2K to 7+3K: w_0, ..., w_{K-1} (K^T y_k)
+        - 8+3K to 7+4K: z_1, ..., z_K (K x_bar_k)
+        - 8+4K: K_xK
+        - 9+4K: Kt_yK
+        - 10+4K: K_dx0
+
+    Function values:
+        dimF = 2*(K_max + 2)
+        F1: [f1(x_0)-f1_s, ..., f1(x_K)-f1_s, 0]
+        F_h: [h(y_0)-h_s, ..., h(y_K)-h_s, 0]
+
+    Args:
+        stepsizes: Tuple (tau, sigma, theta) - scalars or arrays of length K_max
+        c: (n,) cost vector
+        K_mat: (m, n) constraint matrix [G; A] stacked
+        q: (m,) RHS vector [h; b] stacked
+        l: (n,) lower bounds on x
+        u: (n,) upper bounds on x
+        x0: (n,) initial primal point (ORIGINAL coordinates)
+        y0: (m,) initial dual point (ORIGINAL coordinates)
+        x_opt: (n,) optimal primal point
+        y_opt: (m,) optimal dual point
+        K_max: Number of PDHG iterations
+        m1: Number of inequality constraints (first m1 components of y >= 0)
+        M: Operator norm ||K||. If None, computed from K_mat.
+        return_Gram_representation: If True, return (G, F) Gram representation.
+            If False, return raw trajectory data.
+
+    Returns:
+        If return_Gram_representation:
+            G: (dimG, dimG) Gram matrix
+            F: (dimF,) concatenated function values [F1, F_h]
+        Else:
+            x_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter, f1_iter, h_iter, W
+            where W is the metric matrix for the modified inner product
+    """
+    tau_raw, sigma_raw, theta_raw = stepsizes
+    n = c.shape[0]
+    m = K_mat.shape[0]
+
+    # Broadcast step sizes
+    tau = jnp.broadcast_to(tau_raw, (K_max,))
+    sigma = jnp.broadcast_to(sigma_raw, (K_max,))
+    theta = jnp.broadcast_to(theta_raw, (K_max,))
+
+    if M is None:
+        M = jnp.linalg.norm(K_mat, ord=2)
+
+    # ===== Shift coordinates =====
+    # Shifted: x_shifted = x - x_opt, y_shifted = y - y_opt
+    # Shifted box constraints: l_s = l - x_opt, u_s = u - x_opt
+    l_shifted = l - x_opt
+    u_shifted = u - x_opt
+
+    x0_shifted = x0 - x_opt
+    y0_shifted = y0 - y_opt
+
+    # ===== Define shifted functions =====
+    # Original: f1(x) = c^T x + indicator_{[l,u]}(x)
+    # Shifted: f1_shifted(x) = c^T (x + x_opt) + indicator_{[l_s, u_s]}(x)
+    #                        = c^T x + c^T x_opt + indicator
+    # At x=0: f1_shifted(0) = c^T x_opt (assuming x_opt in [l, u])
+
+    def f1_shifted(x):
+        """f1(x + x_opt) = c^T (x + x_opt)"""
+        return jnp.dot(c, x + x_opt)
+
+    def prox_f1_shifted(v_shifted, tau_k):
+        """
+        Proximal operator of f1_shifted(x) = c^T(x + x_opt) + indicator_{[l,u]}(x + x_opt)
+
+        Strategy: Shift to original space, apply prox, shift back.
+        prox_{tau f1}(v) where f1(x) = c^T x + indicator_{[l,u]}(x)
+                       = proj_{[l,u]}(v - tau * c)
+        """
+        v_original = v_shifted + x_opt
+        # Apply prox in original coordinates
+        result_original = proj_box(v_original - tau_k * c, l, u)
+        # Shift back to get result in shifted coordinates
+        return result_original - x_opt
+
+    def h_shifted(y):
+        """h(y + y_opt) = q^T (y + y_opt)"""
+        return jnp.dot(q, y + y_opt)
+
+    def prox_h_shifted(v_shifted, sigma_k):
+        """
+        Proximal operator of h_shifted(y) = q^T(y + y_opt) + indicator_Y(y + y_opt)
+        where Y = {y: y[:m1] >= 0} (first m1 components non-negative)
+
+        Strategy: Shift to original space, apply prox, shift back.
+        prox_{sigma h}(v) where h(y) = q^T y + indicator_Y(y)
+                        = proj_Y(v - sigma * q)
+        """
+        v_original = v_shifted + y_opt
+        # Apply prox in original coordinates
+        result_original = proj_nonneg_first_m1(v_original - sigma_k * q, m1)
+        # Shift back to get result in shifted coordinates
+        return result_original - y_opt
+
+    # ===== Run PDHG in shifted coordinates =====
+    x_iter = jnp.zeros((K_max + 1, n))
+    y_iter = jnp.zeros((K_max + 1, m))
+    gf1_iter = jnp.zeros((K_max + 1, n))  # subgradients of f1
+    gh_iter = jnp.zeros((K_max + 1, m))   # subgradients of h
+    w_iter = jnp.zeros((K_max, n))        # w_k = K^T @ y_k
+    z_iter = jnp.zeros((K_max, m))        # z_k = K @ x_bar_k
+    f1_iter = jnp.zeros(K_max + 1)
+    h_iter = jnp.zeros(K_max + 1)
+
+    # Initial point
+    x_iter = x_iter.at[0].set(x0_shifted)
+    y_iter = y_iter.at[0].set(y0_shifted)
+    f1_iter = f1_iter.at[0].set(f1_shifted(x0_shifted))
+    h_iter = h_iter.at[0].set(h_shifted(y0_shifted))
+
+    # Initial subgradients from proximal optimality condition
+    # For f1_shifted: use a small tau to compute subgradient via prox optimality
+    # The subgradient includes both the linear term c AND the normal cone of the box constraint
+    tau_init = 1e-10
+    v_x_init = x0_shifted - tau_init * K_mat.T @ y0_shifted
+    x_prox_init = prox_f1_shifted(v_x_init, tau_init)
+    gf1_0 = (v_x_init - x_prox_init) / tau_init
+
+    # For h_shifted: similarly compute initial subgradient
+    sigma_init = 1e-10
+    v_y_init = y0_shifted + sigma_init * K_mat @ x0_shifted
+    y_prox_init = prox_h_shifted(v_y_init, sigma_init)
+    gh_0 = (v_y_init - y_prox_init) / sigma_init
+
+    gf1_iter = gf1_iter.at[0].set(gf1_0)
+    gh_iter = gh_iter.at[0].set(gh_0)
+
+    x_curr = x0_shifted
+    y_curr = y0_shifted
+
+    def pdhg_step(k, carry):
+        x_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter, f1_iter, h_iter, x_curr, y_curr = carry
+
+        tau_k = tau[k]
+        sigma_k = sigma[k]
+        theta_k = theta[k]
+
+        # ===== PRIMAL UPDATE (all in shifted coords) =====
+        # Compute w_k = K^T @ y_curr (shifted coords)
+        w_k = K_mat.T @ y_curr
+        w_iter = w_iter.at[k].set(w_k)
+
+        # Primal step: x_next = prox_{tau f1_shifted}(x_curr - tau K^T y_curr)
+        v_x = x_curr - tau_k * w_k
+        x_next = prox_f1_shifted(v_x, tau_k)
+
+        # Subgradient from prox optimality condition:
+        # 0 ∈ ∂f1_shifted(x_next) + (x_next - v_x)/tau
+        # => ∂f1_shifted(x_next) = (v_x - x_next)/tau
+        # This includes BOTH the linear term c AND the normal cone!
+        gf1_next = (v_x - x_next) / tau_k
+
+        # ===== EXTRAPOLATION (shifted coords) =====
+        x_bar = x_next + theta_k * (x_next - x_curr)
+
+        # ===== DUAL UPDATE (all in shifted coords) =====
+        # Compute z_k = K @ x_bar (shifted coords)
+        z_k = K_mat @ x_bar
+        z_iter = z_iter.at[k].set(z_k)
+
+        # Dual step: y_next = prox_{sigma h_shifted}(y_curr + sigma K x_bar)
+        v_y = y_curr + sigma_k * z_k
+        y_next = prox_h_shifted(v_y, sigma_k)
+
+        # Subgradient from prox optimality condition:
+        # 0 ∈ ∂h_shifted(y_next) + (y_next - v_y)/sigma
+        # => ∂h_shifted(y_next) = (v_y - y_next)/sigma
+        # This includes BOTH the linear term q AND the constraint normal cone!
+        gh_next = (v_y - y_next) / sigma_k
+
+        # Store iterates
+        x_iter = x_iter.at[k + 1].set(x_next)
+        y_iter = y_iter.at[k + 1].set(y_next)
+        gf1_iter = gf1_iter.at[k + 1].set(gf1_next)
+        gh_iter = gh_iter.at[k + 1].set(gh_next)
+        f1_iter = f1_iter.at[k + 1].set(f1_shifted(x_next))
+        h_iter = h_iter.at[k + 1].set(h_shifted(y_next))
+
+        return (x_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter, f1_iter, h_iter, x_next, y_next)
+
+    carry = (x_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter, f1_iter, h_iter, x_curr, y_curr)
+    result = jax.lax.fori_loop(0, K_max, pdhg_step, carry)
+    x_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter, f1_iter, h_iter, x_K, y_K = result
+
+    # Metric matrix W for modified inner product
+    # <embed_primal(x), embed_dual(y)>_W = <Kx, y> / M
+    W = jnp.block([
+        [jnp.eye(n), K_mat.T / M],
+        [K_mat / M, jnp.eye(m)]
+    ])
+
+    if not return_Gram_representation:
+        # Return raw trajectories and metric matrix
+        return x_iter, y_iter, gf1_iter, gh_iter, w_iter, z_iter, f1_iter, h_iter, W
+
+    # ===== Build Gram Matrix =====
+    dimG = 4 + 2*(K_max + 2) + 2*K_max + 3
+    dimF1 = K_max + 2
+    dimF_h = K_max + 2
+    dimF = dimF1 + dimF_h
+
+    # Index mapping (must match pep_construction_chambolle_pock_linop.py)
+    idx_dx0 = 0
+    idx_dy0 = 1
+    idx_xs = 2
+    idx_ys = 3
+    idx_gf1_start = 4
+    idx_gh_start = 4 + (K_max + 2)
+    idx_w_start = idx_gh_start + (K_max + 2)
+    idx_z_start = idx_w_start + K_max
+    idx_K_xK = idx_z_start + K_max
+    idx_Kt_yK = idx_K_xK + 1
+    idx_K_dx0 = idx_Kt_yK + 1
+
+    # Shifted coords: x_s = 0, y_s = 0
+    dx0 = x0_shifted
+    dy0 = y0_shifted
+
+    # Saddle point subgradients (at origin in shifted coords)
+    # Even though x_s = 0 and y_s = 0 in shifted coords, the interpolation
+    # inequalities need the ACTUAL function subgradients, not operator-based values.
+    #
+    # For h_shifted(y) = q^T(y + y_opt), the gradient is q everywhere (including at y=0)
+    # For f1_shifted(x) = c^T(x + x_opt) + indicator, the linear part has gradient c
+    #
+    # Setting gh_s = q ensures the h interpolation inequality is satisfied for the linear function
+    gf1_s = c
+    gh_s = q
+
+    # Analysis vectors (in SHIFTED coords for Gram matrix)
+    # These match PEP pairs: (x_K, K_xK) and (y_K, Kt_yK) where x_K, y_K are shifted
+    K_xK = K_mat @ x_K       # K @ x_K_shifted
+    Kt_yK = K_mat.T @ y_K    # K^T @ y_K_shifted
+    K_dx0 = K_mat @ dx0      # K @ (x0 - x_opt) = K @ dx0
+
+    # Build G_half: embed primal in R^n and dual in R^m into R^{n+m}
+    embedded_dim = n + m
+    G_half = jnp.zeros((embedded_dim, dimG))
+
+    def embed_primal(v):
+        return jnp.concatenate([v, jnp.zeros(m)])
+
+    def embed_dual(v):
+        return jnp.concatenate([jnp.zeros(n), v])
+
+    # Fill basis vectors
+    G_half = G_half.at[:, idx_dx0].set(embed_primal(dx0))
+    G_half = G_half.at[:, idx_dy0].set(embed_dual(dy0))
+    G_half = G_half.at[:, idx_xs].set(embed_primal(jnp.zeros(n)))
+    G_half = G_half.at[:, idx_ys].set(embed_dual(jnp.zeros(m)))
+
+    # gf1_k for k = 0, ..., K, and gf1_s
+    for k in range(K_max + 1):
+        G_half = G_half.at[:, idx_gf1_start + k].set(embed_primal(gf1_iter[k]))
+    G_half = G_half.at[:, idx_gf1_start + K_max + 1].set(embed_primal(gf1_s))
+
+    # gh_k for k = 0, ..., K, and gh_s
+    for k in range(K_max + 1):
+        G_half = G_half.at[:, idx_gh_start + k].set(embed_dual(gh_iter[k]))
+    G_half = G_half.at[:, idx_gh_start + K_max + 1].set(embed_dual(gh_s))
+
+    # w_k = K^T @ y_k (primal space)
+    for k in range(K_max):
+        G_half = G_half.at[:, idx_w_start + k].set(embed_primal(w_iter[k]))
+
+    # z_k = K @ x_bar_k (dual space)
+    for k in range(K_max):
+        G_half = G_half.at[:, idx_z_start + k].set(embed_dual(z_iter[k]))
+
+    # Analysis vectors
+    G_half = G_half.at[:, idx_K_xK].set(embed_dual(K_xK))
+    G_half = G_half.at[:, idx_Kt_yK].set(embed_primal(Kt_yK))
+    G_half = G_half.at[:, idx_K_dx0].set(embed_dual(K_dx0))
+
+    # Compute Gram matrix using metric W
+    G = G_half.T @ W @ G_half
+
+    # ===== Build Function Values =====
+    # f1_s = f1_shifted(0) = c^T x_opt
+    # h_s = h_shifted(0) = q^T y_opt
+    f1_s = jnp.dot(c, x_opt)
+    h_s = jnp.dot(q, y_opt)
+
+    # F1: [f1(x_0) - f1_s, ..., f1(x_K) - f1_s, 0]
+    F1 = jnp.concatenate([f1_iter - f1_s, jnp.array([0.0])])
+
+    # F_h: [h(y_0) - h_s, ..., h(y_K) - h_s, 0]
+    F_h = jnp.concatenate([h_iter - h_s, jnp.array([0.0])])
+
+    F = jnp.concatenate([F1, F_h])
+
+    return G, F

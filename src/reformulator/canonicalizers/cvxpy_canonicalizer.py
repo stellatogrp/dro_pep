@@ -1,13 +1,13 @@
 import cvxpy as cp
 import numpy as np
 
-from .canonicalizer import Canonicalizer
+from .custom_interp_canonicalizer import CustomInterpCanonicalizer
 
 
-class CvxpyCanonicalizer(Canonicalizer):
+class CvxpyCanonicalizer(CustomInterpCanonicalizer):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None, obj_vec_cutoff=1):
-        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters, obj_vec_cutoff=obj_vec_cutoff)
+    def __init__(self, pep_data, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
+        super().__init__(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
 
     def setup_problem(self):
         if self.measure == 'expectation':
@@ -47,7 +47,7 @@ class CvxpyCanonicalizer(Canonicalizer):
             G_sample, F_sample = samples_to_use[i]
             constraints += [- self.c_vals.T @ y[i] - cp.trace(G_sample @ Gz[i]) - F_sample.T @ Fz[i] <= s[i]]
             # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz[i]), Fz[i]]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz[i])]))]
 
             LstarG = 0
             LstarF = 0
@@ -71,7 +71,7 @@ class CvxpyCanonicalizer(Canonicalizer):
 
         prob = cp.Problem(cp.Minimize(obj), constraints)
 
-        probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
+        # probdata, _, _ = prob.get_problem_data(cp.CLARABEL)
         # A_cp = probdata['A']
         # print('A shape from cvxpy:', A_cp.shape)
 
@@ -148,8 +148,8 @@ class CvxpyCanonicalizer(Canonicalizer):
 
             # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz2[i]), Fz2[i]]))]
             # constraints += [cp.SOC(lambd, cp.hstack([cp.vec(Gz1[i]), Fz1[i]]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz1[i])]))]
-            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2[i]@G_preconditioner ), cp.multiply(F_preconditioner**2, Fz2[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz1[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz1[i])]))]
+            constraints += [cp.SOC(lambd, cp.hstack([cp.vec( G_preconditioner@Gz2[i]@G_preconditioner, order='F'), cp.multiply(F_preconditioner**2, Fz2[i])]))]
 
             y1A_adj = 0
             y2A_adj = 0

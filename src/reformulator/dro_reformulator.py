@@ -6,7 +6,6 @@ import scipy.sparse as spa
 
 from .canonicalizers.clarabel_canonicalizer import ClarabelCanonicalizer
 from .canonicalizers.cvxpy_canonicalizer import CvxpyCanonicalizer
-from PEPit.tools.expressions_to_matrices import expression_to_matrices
 
 np.set_printoptions(precision=5)  # Print few decimal places
 np.set_printoptions(suppress=True)  # Suppress scientific notation
@@ -24,24 +23,34 @@ VALID_WRAPPERS = [
 
 
 class DROReformulator(object):
+    """
+    DRO reformulator that constructs and solves the DRO optimization problem.
+    
+    Args:
+        pep_data: Tuple containing PEP constraint matrices:
+            (A_obj, b_obj, A_vals, b_vals, c_vals, PSD_A_vals, PSD_b_vals, PSD_c_vals, PSD_shapes)
+        samples: List of (G, F) tuples representing sampled Gram matrices
+        measure: Risk measure ('expectation' or 'cvar')
+        wrapper: Solver wrapper ('cvxpy' or 'clarabel')
+        precond: Whether to apply preconditioning
+        precond_type: Type of preconditioning ('average', 'max', 'min')
+        mro_clusters: Number of MRO clusters (optional)
+    """
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None, obj_vec_cutoff=1):
-        self.pep_problem = pep_problem
+    def __init__(self, pep_data, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
+        self.pep_data = pep_data
         self.samples = samples
 
         if measure not in VALID_MEASURES:
             raise NotImplementedError(f'{measure} not a valid measure')
 
-        if pep_problem.objective is None:
-            raise AssertionError('pep problem needs to be solved to extract data')
-
         self.measure = measure
         self.mro_clusters = mro_clusters
 
         if wrapper == 'cvxpy':
-            self.canon = CvxpyCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters, obj_vec_cutoff=obj_vec_cutoff)
+            self.canon = CvxpyCanonicalizer(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
         elif wrapper == 'clarabel':
-            self.canon = ClarabelCanonicalizer(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters, obj_vec_cutoff=obj_vec_cutoff)
+            self.canon = ClarabelCanonicalizer(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
         else:
             raise NotImplementedError(f'wrapper {wrapper} not implemented')
 

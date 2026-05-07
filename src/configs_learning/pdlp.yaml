@@ -1,0 +1,98 @@
+# ----------------------------------------------------------------------------
+# TV Inpainting on Olivetti Faces (PDLP)
+#
+# Replaces the previous facility-location LP. Sample creation uses the helpers
+# in src/learning/tv_inpainting_test.py.
+# ----------------------------------------------------------------------------
+
+# --- Image / dataset ---
+image_M: 64                  # Olivetti images are 64x64
+image_N: 64
+n_subjects_total: 40         # full Olivetti dataset
+images_per_subject: 10       # consecutive blocks of 10 share a subject
+n_subjects_train: 28         # 70%
+n_subjects_val: 4            # 10%
+n_subjects_test: 8           # 20%
+
+# --- Corruption ---
+missing_fraction_in_dist: 0.1     # used for train/val/test pools
+missing_fraction_out_of_dist: 0.2 # heavier corruption -> distribution shift for OOD
+scaled_lp_01: true               # mirrors SCALED_LP_01; lp_upper derived in code
+                                  # (true => lp_upper=1.0, false => lp_upper=255.0)
+# NOTE: the PEP construction requires (x0, y0) in the strict interior of
+# [l, u] x (R^{m1}_+ x R^{m2}). Sample creation and the trainer both use
+#   x0 = 0.5 * lp_upper * ones,   y0 = [0.1 * ones(m1); zeros(m2)]
+# (see build_strict_interior_init / _make_cp_tv_traj_fn). There is no
+# corrupted-image warm start in the production path; that variant exists only
+# in src/learning/tv_inpainting_test.py as a diagnostic.
+
+# --- Seeds ---
+person_split_seed: 12345
+training_mask_seed_base: 40000
+val_mask_seed_base: 10000
+test_mask_seed_base: 20000
+ood_mask_seed_base: 30000
+
+# --- Operator-norm / IC-radius safety factors (Lasso-analog) ---
+m_safety_factor: 1.2
+r_safety_factor: 1.1
+
+# ----------------------------------------------------------------------------
+# Algorithm / framework (carried forward; consumed once learning wiring lands)
+# ----------------------------------------------------------------------------
+alg: 'cp'                               # PDLP uses Chambolle-Pock
+pep_obj: 'obj_val'                      # duality gap is the only CP metric
+learning_framework: 'ldro-pep'          # 'ldro-pep', 'l2o', or 'lpep'
+
+stepsize_type: "vector"                 # "scalar" or "vector"
+vector_init: "fixed"                    # only 'fixed' supported for CP today
+
+learn_tau: True
+learn_sigma: True
+learn_theta: True
+
+# ----------------------------------------------------------------------------
+# Loss composition
+# ----------------------------------------------------------------------------
+training_loss_type_composition: "weighted"
+validation_loss_type_composition: "final"
+decay_rate: 0.9
+
+# ----------------------------------------------------------------------------
+# Batch sampling. The pool sizes are pinned by the person split (fixed at the
+# pool size, one mask per image — see plan); we still expose training_sample_N
+# etc. for downstream loaders that read them.
+# ----------------------------------------------------------------------------
+N: 5                                   # SGD minibatch size
+training_sample_N: 280                  # = n_subjects_train * images_per_subject
+out_of_sample_val_N: 40                 # = n_subjects_val * images_per_subject
+out_of_sample_test_N: 80                # = n_subjects_test * images_per_subject
+out_of_dist_N: 400                      # full dataset
+
+K_max: [5]
+sgd_seed: 500
+
+# ----------------------------------------------------------------------------
+# DRO / SDP
+# ----------------------------------------------------------------------------
+dro_obj: "expectation"                  # "expectation" or "cvar"
+sdp_backend: "diffcp"
+dro_canon_backend: "manual_jax"         # "manual_jax" or "cvxpylayers"
+eps: 0.1
+alpha: 0.1
+precond_type: 'identity'
+
+# ----------------------------------------------------------------------------
+# SGD training parameters
+# ----------------------------------------------------------------------------
+optimizer_type: "adamw"
+sgd_iters: 1000
+eta_t: 1e-3
+weight_decay: 1e-5
+grad_clip_norm: 1.0
+
+# ----------------------------------------------------------------------------
+# Outputs
+# ----------------------------------------------------------------------------
+output_dir: "learn_dro_outputs"
+data_source_dir: "/home/vranjan/dro_pep/src/sample_creation_outputs/PDLP/2026-05-02/15-49-18/"  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.

@@ -1,16 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=QDRO
+#SBATCH --job-name=PDLP
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem-per-cpu=600G
-#SBATCH --time=00-23:59:59
-#SBATCH --constraint=intel # useful to make sure paradiso-mkl is available
-#SBATCH --array=0-7
-#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/dro_pep_out/Quad/runs/%A.txt
+# # SBATCH --mem-per-cpu=4G
+#SBATCH --mem=4G
+# #SBATCH --constraint=intel
+#SBATCH --time=00-01:00:59
+#SBATCH --array=0-8
+#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/PDLP/runs/%A.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
 #SBATCH --mail-user=vranjan@princeton.edu
 # #SBATCH --gres=gpu:1
+#SBATCH --chdir=/home/vranjan/dro_pep/src
 
 # os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='true'
 # export XLA_PYTHON_CLIENT_MEM_FRACTION='0.30'
@@ -19,8 +21,9 @@
 
 module purge
 module load intel-mkl/2024.2
-module load anaconda3/2024.10
+module load anaconda3/2025.12
 # module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
 conda activate algover
 
-python run_dro_experiment.py Quad cluster
+# cd "$(dirname "$0")/.."
+python run_learning_l2o_experiment.py PDLP cluster

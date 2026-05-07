@@ -3,15 +3,15 @@ import numpy as np
 import logging
 import scipy.sparse as spa
 
-from .canonicalizer import Canonicalizer
+from .custom_interp_canonicalizer import CustomInterpCanonicalizer
 
 log = logging.getLogger(__name__)
 
 
-class ClarabelCanonicalizer(Canonicalizer):
+class ClarabelCanonicalizer(CustomInterpCanonicalizer):
 
-    def __init__(self, pep_problem, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None, obj_vec_cutoff=1):
-        super().__init__(pep_problem, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters, obj_vec_cutoff=obj_vec_cutoff)
+    def __init__(self, pep_data, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
+        super().__init__(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
 
     def setup_problem(self):
         if self.measure == 'expectation':
