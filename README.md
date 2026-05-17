@@ -37,7 +37,7 @@ sample
 dro
 pep
 learning
-learning_l2oo
+learning_l2o
 learning_optpep
 ```
 and ```<experiment_name>``` is one of the following:
