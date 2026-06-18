@@ -38,6 +38,8 @@ out_of_sample_outputs/
 learn_l2o_outputs/
 sample_creation_outputs/
 pdhg_stepsizes/
+*.project
+ripple_tests/
 
 ## Bibliography auxiliary files (bibtex/biblatex/biber):
 *.bbl
