@@ -1,6 +1,7 @@
 m: 100
 n: 150
-eta: 1.786
+# eta: 1.786
+eta: 1
 
 # spiked-MP degenerate two-level spectrum of A^T A: {bulk_q*L (mult r-n_spikes), L}
 bulk_q: 0.08
@@ -43,7 +44,7 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -4
+  log_min: -2
   log_max: -1
-  logspace_count: 4
-alpha: 0.1
+  logspace_count: 1
+alpha: 0.01

@@ -1,21 +1,24 @@
 mu: 0
 L: 1
-eta: 1  # final step size = eta / L 
+eta: 1  # final step size = eta / L
 dim: 300
-R: 10
+R: 10  # placeholder, overwritten by compute_R (max ||x*||)
+ref_N: 200  # number of x* draws used to set R = max ||x*||
 
 K_min: 1
 K_max: 30
 
-alg: grad_desc  # grad_desc or nesterov_grad_desc or nesterov_fgm
+alg: grad_desc  # grad_desc or nesterov_grad_desc
 dro_obj: expectation # expectation or cvar
 dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
-precond_type: average # 'average' or 'max' or 'min'
+precond: false  # true = apply preconditioning; false = identity (no preconditioning)
+precond_type: average # 'average' or 'max' or 'min' (only used when precond: true)
 
 seed:
   full_samples: 0
   train: 100
+  R_ref: 200
 
 sample_N: 10000
 
@@ -32,7 +35,7 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -2
-  log_max: 0
+  log_min: -1
+  log_max: 1
   logspace_count: 7
 alpha: 0.1

@@ -1,15 +1,25 @@
+import diffcp_patch  # noqa: F401  # COO->CSC fix for diffcp/clarabel
+import jax
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import logging
 import time
+import cvxpy as cp
 from tqdm import trange
 
 from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
-from PEPit import PEP
-from PEPit.functions import SmoothStronglyConvexQuadraticFunction, SmoothStronglyConvexFunction
 from reformulator.dro_reformulator import DROReformulator
+from learning.pep_constructions import (
+    construct_gd_pep_data, construct_fgm_pep_data, pep_data_to_numpy,
+)
+from learning.trajectories import (
+    problem_data_to_gd_trajectories, problem_data_to_nesterov_fgm_trajectories,
+)
 from .lyap_classes.gd import gd_lyap, gd_lyap_nobisect
+
+jax.config.update("jax_enable_x64", True)
 
 log = logging.getLogger(__name__)
 
@@ -24,36 +34,37 @@ def rejection_sample_MP(dim, mu, L):
 
 
 class Quad(object):
+    """Offset MP quadratic: f(x) = 0.5 (x - x*)^T Q (x - x*), start x0 = 0.
 
-    def __init__(self, dim, mu=0, L=10, R=1):
-        # self.dim = dim
+    Q ~ Marchenko-Pastur (rejection-sampled into [mu, L]); x* ~ N(0, I_dim).
+    The optimum is x* with f* = 0, and the initial radius R = ||x0 - x*|| = ||x*||
+    is determined by the draw (not controlled).
+    """
+
+    def __init__(self, dim, mu=0, L=1, x_star=None):
         self.mu = mu
         self.L = L
-        self.R = R
 
-        self.x0 = np.zeros(dim)
-        self.x0[0] = R
-
-        # self.Q = marchenko_pastur(dim, mu, L)
         self.Q = rejection_sample_MP(dim, mu, L)
-        # eigvals = np.real(np.linalg.eigvals(self.Q))
-        # print(np.min(eigvals), np.max(eigvals), self.Q.shape)
-        # # print(eigvals)
-
         self.dim = self.Q.shape[0]
-        # self.Q = generate_P_fixed_mu_L(dim, mu, L)
 
-        self.f_star = 0
-        self.x_star = np.zeros(self.dim)
+        if x_star is None:
+            x_star = np.random.normal(0, 1, self.dim)
+        self.x_star = x_star
+
+        self.x0 = np.zeros(self.dim)
+        self.f_star = 0.0
+
+    @property
+    def R(self):
+        return float(np.linalg.norm(self.x_star))
 
     def f(self, x):
-        return .5 * x.T @ self.Q @ x
-    
-    def g(self, x):
-        return self.Q @ x
+        d = x - self.x_star
+        return .5 * d.T @ self.Q @ d
 
-    def sample_init_point(self):
-        return sample_x0_centered_disk(self.dim, self.R)
+    def g(self, x):
+        return self.Q @ (x - self.x_star)
 
 
 class QuadBadAccel(object):
@@ -81,45 +92,177 @@ class QuadBadAccel(object):
         return sample_x0_centered_disk(self.dim, self.R)
 
 
+# =============================================================================
+# Shared helpers for the offset-quadratic custom PEP/DRO pipeline
+# =============================================================================
+
+def xstar_rng(cfg):
+    """RNG stream for x* draws, independent of the (global) stream used for Q.
+
+    Shared by compute_R and quad_dro so the DRO samples' x* are a prefix of the
+    reference set ⇒ R = max||x*|| over ref_N draws bounds every DRO sample, and
+    the PEP initial condition ||x0 - x*||^2 <= R^2 stays feasible."""
+    return np.random.default_rng(cfg.seed.R_ref)
+
+
+def compute_R(cfg):
+    """Set the family's initial radius R = (1+margin) * max_{ref_N} ||x*||.
+
+    x* ~ N(0, I_dim); R = ||x0 - x*|| = ||x*|| since x0 = 0. Deterministic
+    (seed.R_ref) so samples/pep/dro share one radius envelope. Mutates cfg.R.
+    The small margin keeps samples strictly inside the radius (boundary samples
+    make the small-eps DRO SDP numerically marginal)."""
+    rng = xstar_rng(cfg)
+    R = float(max(np.linalg.norm(rng.normal(size=(cfg.dim,))) for _ in range(cfg.ref_N)))
+    cfg.R = R * 1.001
+    log.info(f'computed radius R={cfg.R}')
+    return cfg.R
+
+
+def nesterov_betas(K_max):
+    """Standard FGM momentum: t_0=1, t_{k+1}=0.5(1+sqrt(1+4 t_k^2)),
+    beta_k=(t_k-1)/t_{k+1}. Returns array of length K_max (beta[0]=0)."""
+    t = 1.0
+    betas = []
+    for _ in range(K_max):
+        t_next = 0.5 * (1 + np.sqrt(1 + 4 * t ** 2))
+        betas.append((t - 1) / t_next)
+        t = t_next
+    return np.array(betas)
+
+
+def simulate_quad(h, alg, gamma, beta, K_max):
+    """Numpy forward sim in shifted coords (z = x - x*, z0 = -x*) mirroring the
+    custom construction dynamics exactly. Records final-iterate metrics for
+    k=1..K_max. Returns (obj_val, grad_sq_norm, opt_dist_sq_norm) lists."""
+    Q = h.Q
+    obj, gsq, dsq = [], [], []
+    if alg == 'grad_desc':
+        z = -h.x_star
+        for _ in range(K_max):
+            z = z - gamma * (Q @ z)
+            gz = Q @ z
+            obj.append(0.5 * float(z @ gz))
+            gsq.append(float(gz @ gz))
+            dsq.append(float(z @ z))
+    elif alg == 'nesterov_grad_desc':
+        x_prev = -h.x_star
+        y = -h.x_star
+        for k in range(K_max):
+            x_new = y - gamma * (Q @ y)
+            y = x_new + beta[k] * (x_new - x_prev)
+            x_prev = x_new
+            gx = Q @ x_new
+            obj.append(0.5 * float(x_new @ gx))
+            gsq.append(float(gx @ gx))
+            dsq.append(float(x_new @ x_new))
+    else:
+        raise NotImplementedError(f"simulate_quad: unsupported alg '{alg}'")
+    return obj, gsq, dsq
+
+
+def solve_pep_sdp(pep_data):
+    """Solve the worst-case PEP SDP from a custom pep_data 9-tuple with CLARABEL.
+
+    maximize <A_obj, G> + b_obj.F  s.t.  G >= 0 and
+    <A_vals[i], G> + b_vals[i].F + c_vals[i] <= 0 for all i."""
+    (A_obj, b_obj, A_vals, b_vals, c_vals, *_) = pep_data
+    dimG = A_obj.shape[0]
+    dimF = b_obj.shape[0]
+    G = cp.Variable((dimG, dimG), symmetric=True)
+    F = cp.Variable(dimF)
+    cons = [G >> 0]
+    for i in range(A_vals.shape[0]):
+        cons.append(cp.trace(A_vals[i] @ G) + b_vals[i] @ F + c_vals[i] <= 0)
+    prob = cp.Problem(cp.Maximize(cp.trace(A_obj @ G) + b_obj @ F), cons)
+    prob.solve(solver=cp.CLARABEL)
+    solvetime = prob.solver_stats.solve_time
+    return prob.value, solvetime
+
+
+def _build_pep_and_traj(cfg, k, gamma, mu, L, R, beta_full):
+    """Return (pep_data_np, traj_fn) for the configured alg at horizon k.
+
+    traj_fn(h) runs the matching custom trajectory on shifted coords
+    (z0 = -h.x_star, zs = 0, fs = 0) and returns (G, F)."""
+    zs = jnp.zeros(cfg.dim)
+    fs = 0.0
+    if cfg.alg == 'grad_desc':
+        pep_data = pep_data_to_numpy(construct_gd_pep_data(
+            gamma, mu, L, R, k, pep_obj=cfg.dro_pep_obj, composition_type='final'))
+        stp = jnp.full(k, gamma)
+
+        def traj_fn(h, stp=stp, k=k):
+            return problem_data_to_gd_trajectories(
+                stp, jnp.asarray(h.Q), jnp.asarray(-h.x_star), zs, fs, k,
+                return_Gram_representation=True)
+    elif cfg.alg == 'nesterov_grad_desc':
+        beta = jnp.asarray(beta_full[:k])
+        pep_data = pep_data_to_numpy(construct_fgm_pep_data(
+            gamma, beta, mu, L, R, k, pep_obj=cfg.dro_pep_obj, composition_type='final'))
+        stp = (jnp.full(k, gamma), beta)
+
+        def traj_fn(h, stp=stp, k=k):
+            return problem_data_to_nesterov_fgm_trajectories(
+                stp, jnp.asarray(h.Q), jnp.asarray(-h.x_star), zs, fs, k,
+                return_Gram_representation=True)
+    else:
+        raise NotImplementedError(
+            f"custom PEP/DRO supports 'grad_desc'/'nesterov_grad_desc' only, got '{cfg.alg}'")
+    return pep_data, traj_fn
+
+
+def plot_worst_case(df, col, cfg):
+    worst_cases = df[['K', col]].groupby(['K']).max()
+    plt.figure()
+    plt.plot(range(1, cfg.K_max + 1), worst_cases)
+    plt.yscale('log')
+    plt.title(col)
+    plt.savefig('worstcases.pdf')
+    plt.close()
+
+
+def compute_empirical_cvar(values, alpha):
+    """Empirical CVaR at level alpha: mean of the worst (largest) alpha-fraction."""
+    n_tail = max(1, int(np.ceil(alpha * len(values))))
+    return float(np.mean(np.sort(values)[-n_tail:]))
+
+
+def plot_sample_summary(summary, cfg):
+    """Plot empirical mean, CVaR(alpha), and worst-case of the metric vs K."""
+    Ks = summary['K']
+    plt.figure()
+    plt.plot(Ks, summary['mean'], label='mean')
+    plt.plot(Ks, summary['cvar'], label=f"CVaR (alpha={cfg.alpha})")
+    plt.plot(Ks, summary['worst'], label='worst-case', linestyle='--')
+    plt.yscale('log')
+    plt.xlabel('iteration K')
+    plt.ylabel(cfg.dro_pep_obj)
+    plt.title(f"Quad {cfg.alg}: empirical metrics")
+    plt.legend()
+    plt.savefig('sample_summary.pdf')
+    plt.close()
+
+
 def quad_samples(cfg):
     log.info(cfg)
     np.random.seed(cfg.seed.full_samples)
+    # R is not needed for the empirical forward sim (simulate_quad ignores it).
+
+    gamma = cfg.eta / cfg.L
+    beta = nesterov_betas(cfg.K_max)
 
     df = []
-
-    params = {
-        't': cfg.eta / cfg.L,
-        'K_max': cfg.K_max,
-        'q': cfg.mu / cfg.L, 
-    }
-
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
-
     for i in trange(cfg.sample_N):
-        h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        # h = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        # x0 = h.x0
-        x0 = h.sample_init_point()
-        xs = h.x_star
-        fs = h.f_star
-
-        x_stack, g_stack, f_stack = algo(h.f, h.g, x0, xs, params)
-        # stacks: [xs, x0, ..., xK]
+        h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L)
+        obj, gsq, dsq = simulate_quad(h, cfg.alg, gamma, beta, cfg.K_max)
         for k in range(1, cfg.K_max + 1):
             df.append(pd.Series({
                 'i': i,
                 'K': k,
-                'obj_val': f_stack[k+1] - fs,
-                'grad_sq_norm': np.linalg.norm(g_stack[k+1]) ** 2,
-                'opt_dist_sq_norm': np.linalg.norm(x_stack[k+1] - xs) ** 2,
+                'obj_val': obj[k-1],
+                'grad_sq_norm': gsq[k-1],
+                'opt_dist_sq_norm': dsq[k-1],
             }))
 
         if i % 1000 == 0:
@@ -130,184 +273,122 @@ def quad_samples(cfg):
     df_to_save = pd.DataFrame(df)
     df_to_save.to_csv(cfg.sample_fname, index=False)
 
+    plot_worst_case(df_to_save, cfg.dro_pep_obj, cfg)
+
+    # Empirical mean / CVaR(alpha) / worst-case of the configured metric per K.
+    alpha = cfg.alpha
+    summary_rows = []
+    for k in range(1, cfg.K_max + 1):
+        vals = df_to_save.loc[df_to_save['K'] == k, cfg.dro_pep_obj].to_numpy()
+        summary_rows.append(pd.Series({
+            'K': k,
+            'mean': float(np.mean(vals)),
+            'cvar': compute_empirical_cvar(vals, alpha),
+            'worst': float(np.max(vals)),
+        }))
+    summary = pd.DataFrame(summary_rows)
+    summary.to_csv('sample_summary.csv', index=False)
+    log.info(summary)
+    plot_sample_summary(summary, cfg)
+
 
 def quad_pep(cfg):
     log.info(cfg)
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
+    if cfg.alg not in ('grad_desc', 'nesterov_grad_desc'):
+        raise NotImplementedError(
+            f"custom PEP supports 'grad_desc'/'nesterov_grad_desc' only, got '{cfg.alg}'")
 
-    # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
-    objs = ['obj_val']
-    # objs = ['opt_dist_sq_norm']
+    compute_R(cfg)
+    mu, L, R = cfg.mu, cfg.L, cfg.R
+    gamma = cfg.eta / L
+    beta_full = nesterov_betas(cfg.K_max)
 
     res = []
-
-    # quad_pep_subproblem(cfg, algo, 1, objs[0])
     for k in range(cfg.K_min, cfg.K_max + 1):
-        for obj in objs:
-            tau, solvetime = quad_pep_subproblem(cfg, algo, k, obj)
+        pep_data, _ = _build_pep_and_traj(cfg, k, gamma, mu, L, R, beta_full)
+        tau, solvetime = solve_pep_sdp(pep_data)
+        log.info(f'----pep SDP solved at k={k}: tau={tau}----')
 
-            res.append(pd.Series({
-                'K': k,
-                'obj': obj,
-                'val': tau,
-                'solvetime': solvetime,
-            }))
-            df = pd.DataFrame(res)
-            df.to_csv(cfg.pep_fname, index=False)
-
-
-def quad_pep_subproblem(cfg, algo, k, obj, return_problem=False):
-    problem = PEP()
-    # func = problem.declare_function(SmoothStronglyConvexQuadraticFunction, mu=cfg.mu, L=cfg.L)
-    func = problem.declare_function(SmoothStronglyConvexFunction, mu=cfg.mu, L=cfg.L)
-    xs = func.stationary_point()
-    fs = func(xs)
-    x0 = problem.set_initial_point()
-
-    params = {
-        't': cfg.eta / cfg.L,
-        'K_max': k,
-        'q': cfg.mu / cfg.L, 
-    }
-    log.info(params)
-
-    problem.set_initial_condition((x0 - xs) ** 2 <= cfg.R ** 2)
-    x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
-
-    # problem.set_performance_metric(func(x) - fs)
-    if obj == 'obj_val':
-        problem.set_performance_metric(f_stack[-1] - fs)
-    elif obj == 'grad_sq_norm':
-        problem.set_performance_metric((g_stack[-1]) ** 2)
-    elif obj == 'opt_dist_sq_norm':
-        problem.set_performance_metric((x_stack[-1] - xs) ** 2)
-    else:
-        log.info('should be unreachable code')
-        exit(0)
-
-    if return_problem:
-        return problem
-
-    # start = time.time()
-    # pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
-    pepit_tau = problem.solve(wrapper='cvxpy', solver='MOSEK')
-    # pepit_tau = problem.solve(wrapper='mosek')
-    # solvetime = time.time() - start
-
-    solvetime = problem.wrapper.prob.solver_stats.solve_time
-
-    log.info(pepit_tau)
-    return pepit_tau, solvetime
+        res.append(pd.Series({
+            'K': k,
+            'obj': cfg.dro_pep_obj,
+            'val': tau,
+            'solvetime': solvetime,
+        }))
+        df = pd.DataFrame(res)
+        df.to_csv(cfg.pep_fname, index=False)
 
 
 def quad_dro(cfg):
     log.info(cfg)
 
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
+    if cfg.alg not in ('grad_desc', 'nesterov_grad_desc'):
+        raise NotImplementedError(
+            f"custom DRO supports 'grad_desc'/'nesterov_grad_desc' only, got '{cfg.alg}'")
 
     if cfg.dro_obj == 'expectation':
         N = cfg.training.expectation_N
         num_clusters = cfg.num_clusters.expectation
-        dro_obj = 'expectation'
-
+        measure = 'expectation'
     elif cfg.dro_obj == 'cvar':
         N = cfg.training.cvar_N
         num_clusters = cfg.num_clusters.cvar
-        dro_obj = 'cvar'
-
+        measure = 'cvar'
     else:
         log.info('invalid dro obj')
         exit(0)
 
+    compute_R(cfg)
+    mu, L, R = cfg.mu, cfg.L, cfg.R
+    gamma = cfg.eta / L
+    beta_full = nesterov_betas(cfg.K_max)
+
     eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
     alpha = cfg.alpha
 
+    # x* from the same stream as compute_R (prefix ⇒ all samples satisfy ||x*|| <= R);
+    # Q drawn fresh per instance from the global stream (seed.train).
     np.random.seed(cfg.seed.train)
-    quad_funcs = []
-    for i in range(N):
-        q = Quad(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        # q = QuadBadAccel(cfg.dim, mu=cfg.mu, L=cfg.L, R=cfg.R)
-        quad_funcs.append(q)
-    
+    rng_x = xstar_rng(cfg)
+    quad_funcs = [Quad(cfg.dim, mu=cfg.mu, L=cfg.L, x_star=rng_x.normal(size=cfg.dim))
+                  for _ in range(N)]
+    max_sample_R = max(h.R for h in quad_funcs) * 1.001
+    if max_sample_R > cfg.R:
+        log.warning(f'sample radius {max_sample_R} exceeds reference R {cfg.R}; '
+                    f'raising R (increase ref_N >= N to keep pep/dro consistent)')
+        cfg.R = max_sample_R
+        R = cfg.R
+
     res = []
     sample_df_list = []
 
     for k in range(cfg.K_min, cfg.K_max + 1):
+        pep_data, traj_fn = _build_pep_and_traj(cfg, k, gamma, mu, L, R, beta_full)
+        A_obj_np, b_obj_np = pep_data[0], pep_data[1]
+
         samples = []
-        problem = quad_pep_subproblem(cfg, algo, k, cfg.dro_pep_obj, return_problem=True)
-        # problem.solve(wrapper='cvxpy', solver='CLARABEL')
-        mosek_params = {
-            # 'intpntCoTolDfeas': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-7,
-        }
-        pepit_tau = problem.solve(
-            wrapper='cvxpy',
-            solver='MOSEK',
-            mosek_params=mosek_params,
-        )
-        log.info(f'----pep problem solved at k={k}----')
-
         for i in range(N):
-            h = quad_funcs[i]
-            # x0 = h.x0
-            x0 = h.sample_init_point()
-            xs = h.x_star
-            fs = h.f_star
-
-            params = {
-                't': cfg.eta / cfg.L,
-                'K_max': k,
-                'q': cfg.mu / cfg.L, 
-            }
-
-            G, F = generate_trajectories(h.f, h.g, x0, xs, fs, algo, params)
-            # log.info(F.shape)
+            G, F = traj_fn(quad_funcs[i])
+            G, F = np.asarray(G), np.asarray(F)
             samples.append((G, F))
-            sample_df_list.append(pd.Series({
-                'i': i,
-                'K': k,
-                'obj_val': F[-1] - F[0],
-                'grad_sq_norm': G[-1, -1],
-            }))
-        sample_df = pd.DataFrame(sample_df_list)
-        sample_df.to_csv('samples.csv', index=False)
-        # log.info(samples)
+            emp = float(np.trace(A_obj_np @ G) + b_obj_np @ F)  # PEP objective on the sample
+            sample_df_list.append(pd.Series({'i': i, 'K': k, 'obj_val': emp}))
+        pd.DataFrame(sample_df_list).to_csv('samples.csv', index=False)
 
         DR = DROReformulator(
-            problem,
+            pep_data,
             samples,
-            dro_obj,
+            measure,
             'clarabel',
-            precond=True,
+            precond=cfg.precond,
             precond_type=cfg.precond_type,
             mro_clusters=num_clusters,
         )
+        log.info(f'----dro reformulator built at k={k}----')
 
         for eps_idx, eps in enumerate(eps_vals):
-            log.info(eps_idx)
-            log.info(eps)
-
             DR.set_params(eps=eps, alpha=alpha)
             out = DR.solve()
-            # dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
             if num_clusters is not None:
                 dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
             else:
@@ -322,7 +403,7 @@ def quad_dro(cfg):
                 'solvetime': out['solvetime'],
                 'dro_feas_sol': dro_feas,
             }))
-        
+
             df = pd.DataFrame(res)
             df.to_csv(cfg.dro_fname, index=False)
 
