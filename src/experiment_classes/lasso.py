@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from tqdm import trange
 
 # from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, generate_trajectories
-from .utils import sample_x0_centered_disk
+from .utils import sample_x0_centered_disk, build_eps_vals
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction, ConvexLipschitzFunction, ConvexFunction
 from PEPit.primitive_steps import proximal_step
@@ -219,59 +219,48 @@ def lasso_samples(cfg):
     log.info(f'L: {L}, mu: {mu}')
 
     x0 = np.zeros(cfg.n)
-
-    np.random.seed(cfg.seed.out_of_sample)
-    sample_b = []
-    sample_xopt = []
+    alpha_vals = list(cfg.alpha_vals)
+    n_repeats = cfg.cross_val_repeats
     max_R = 0
 
-    df = []
+    # Repeat the whole sampling experiment n_repeats times (independent reseeds; A, lambd, R fixed)
+    # to build a distribution of per-K empirical mean / CVaR / worst summaries for eps cross-val.
+    dist = []
+    for j in trange(n_repeats):
+        np.random.seed(cfg.seed.out_of_sample + j)
+        df = []
+        for i in range(cfg.N):
+            b_samp = generate_single_b(cfg, A)
+            xopt_samp, R_samp = solve_single_cvxpy(cfg, A, b_samp)
+            max_R = max(max_R, R_samp)
 
-    for i in trange(cfg.N):
-        b_samp = generate_single_b(cfg, A)
-        xopt_samp, R_samp = solve_single_cvxpy(cfg, A, b_samp)
-        max_R = max(max_R, R_samp)
+            F_vals = simulate_alg(cfg, x0, A, b_samp, xopt_samp, L, ATA_lu, ATA_piv, alg=cfg.alg)
 
-        sample_b.append(b_samp)
-        sample_xopt.append(xopt_samp)
+            for k in range(1, cfg.K_max + 1):
+                df.append(pd.Series({
+                    'i': i,
+                    'K': k,
+                    'obj_val': F_vals[k-1],
+                }))
 
-        F_vals = simulate_alg(cfg, x0, A, b_samp, xopt_samp, L, ATA_lu, ATA_piv, alg=cfg.alg)
-        # log.info(F_vals)
+        df_to_save = pd.DataFrame(df)
+        summary = summarize_per_k(df_to_save, alpha_vals, 'obj_val', cfg.K_max)
 
-        for k in range(1, cfg.K_max + 1):
-            df.append(pd.Series({
-                'i': i,
-                'K': k,
-                'obj_val': F_vals[k-1],
-            }))
-
-        if i % 1000 == 0:
-            log.info(f'saving at i={i}')
-            df_to_save = pd.DataFrame(df)
+        if j == 0:
+            # Repeat-0 artifacts reproduce the legacy single-run outputs.
             df_to_save.to_csv(cfg.sample_fname, index=False)
-    
+            plot_worst_case(df_to_save, 'obj_val', cfg)
+            summary.to_csv('sample_summary.csv', index=False)
+            log.info(summary)
+            plot_sample_summary(summary, cfg)
+
+        dist.append(summary.assign(repeat=j))
+
     log.info(f'maximum sample radius: {max_R}')
 
-    df_to_save = pd.DataFrame(df)
-    df_to_save.to_csv(cfg.sample_fname, index=False)
-
-    plot_worst_case(df_to_save, 'obj_val', cfg)
-
-    # Empirical mean / CVaR(alpha) / worst-case of f(x_K)-f* per iteration K.
-    alpha = cfg.alpha
-    summary_rows = []
-    for k in range(1, cfg.K_max + 1):
-        vals = df_to_save.loc[df_to_save['K'] == k, 'obj_val'].to_numpy()
-        summary_rows.append(pd.Series({
-            'K': k,
-            'mean': float(np.mean(vals)),
-            'cvar': compute_empirical_cvar(vals, alpha),
-            'worst': float(np.max(vals)),
-        }))
-    summary = pd.DataFrame(summary_rows)
-    summary.to_csv('sample_summary.csv', index=False)
-    log.info(summary)
-    plot_sample_summary(summary, cfg)
+    dist_df = pd.concat(dist, ignore_index=True)
+    dist_df = dist_df[['repeat'] + [c for c in dist_df.columns if c != 'repeat']]
+    dist_df.to_csv('sample_summary_dist.csv', index=False)
 
 
 def plot_worst_case(df, col, cfg):
@@ -290,12 +279,51 @@ def compute_empirical_cvar(values, alpha):
     return float(np.mean(np.sort(values)[-n_tail:]))
 
 
+def summarize_per_k(df_to_save, alpha_vals, col, K_max):
+    """Per-K mean / worst / cvar_<a> summary rows for one experiment."""
+    rows = []
+    for k in range(1, K_max + 1):
+        vals = df_to_save.loc[df_to_save['K'] == k, col].to_numpy()
+        row = {'K': k, 'mean': float(np.mean(vals)), 'worst': float(np.max(vals))}
+        for a in alpha_vals:
+            row[f'cvar_{a}'] = compute_empirical_cvar(vals, a)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def default_alpha(alpha_vals):
+    """Default CVaR level for single-alpha plots: 0.05 if present, else the middle value."""
+    return 0.05 if 0.05 in alpha_vals else alpha_vals[len(alpha_vals) // 2]
+
+
 def plot_sample_summary(summary, cfg):
-    """Plot empirical mean, CVaR(alpha), and worst-case of f(x_K)-f* vs K."""
+    """Plot empirical mean, CVaR(alpha), and worst-case of f(x_K)-f* vs K.
+
+    Produces two figures: one overlaying every alpha in cfg.alpha_vals, and one
+    using only the default alpha.
+    """
     Ks = summary['K']
+    alpha_vals = list(cfg.alpha_vals)
+
+    # All-alpha version.
     plt.figure()
     plt.plot(Ks, summary['mean'], label='mean')
-    plt.plot(Ks, summary['cvar'], label=f"CVaR (alpha={cfg.alpha})")
+    for a in alpha_vals:
+        plt.plot(Ks, summary[f'cvar_{a}'], label=f"CVaR (alpha={a})")
+    plt.plot(Ks, summary['worst'], label='worst-case', linestyle='--')
+    plt.yscale('log')
+    plt.xlabel('iteration K')
+    plt.ylabel('f(x_K) - f*')
+    plt.title(f"Lasso {cfg.alg}: empirical metrics")
+    plt.legend()
+    plt.savefig('sample_summary_all_alpha.pdf')
+    plt.close()
+
+    # Default-alpha version.
+    a = default_alpha(alpha_vals)
+    plt.figure()
+    plt.plot(Ks, summary['mean'], label='mean')
+    plt.plot(Ks, summary[f'cvar_{a}'], label=f"CVaR (alpha={a})")
     plt.plot(Ks, summary['worst'], label='worst-case', linestyle='--')
     plt.yscale('log')
     plt.xlabel('iteration K')
@@ -608,8 +636,10 @@ def lasso_dro(cfg):
         log.info('invalid dro obj')
         exit(0)
 
-    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
-    alpha = cfg.alpha
+    eps_vals = build_eps_vals(cfg)
+    alpha_vals = list(cfg.alpha_vals)
+    # alpha only affects the cvar objective; expectation ignores it (single pass).
+    alphas_to_run = alpha_vals if measure == 'cvar' else [alpha_vals[0]]
     x0 = np.zeros(cfg.n)
     gamma = cfg.eta / L
 
@@ -673,23 +703,25 @@ def lasso_dro(cfg):
         )
         log.info(f'----dro reformulator built at k={k}----')
         for eps_idx, eps in enumerate(eps_vals):
-            DR.set_params(eps=eps, alpha=alpha)
-            out = DR.solve()
-            if num_clusters is not None:
-                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
-            else:
-                dro_feas = out['obj']
+            for alpha_idx, alpha in enumerate(alphas_to_run):
+                DR.set_params(eps=eps, alpha=alpha)
+                out = DR.solve()
+                if num_clusters is not None:
+                    dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+                else:
+                    dro_feas = out['obj']
 
-            res.append(pd.Series({
-                'K': k,
-                'eps_idx': eps_idx,
-                'eps': eps,
-                'alpha': alpha,
-                'mro_sol': out['obj'],
-                'solvetime': out['solvetime'],
-                'dro_feas_sol': dro_feas,
-            }))
+                res.append(pd.Series({
+                    'K': k,
+                    'eps_idx': eps_idx,
+                    'eps': eps,
+                    'alpha_idx': alpha_idx,
+                    'alpha': alpha,
+                    'mro_sol': out['obj'],
+                    'solvetime': out['solvetime'],
+                    'dro_feas_sol': dro_feas,
+                }))
 
-            df = pd.DataFrame(res)
-            df.to_csv(cfg.dro_fname, index=False)
+                df = pd.DataFrame(res)
+                df.to_csv(cfg.dro_fname, index=False)
 

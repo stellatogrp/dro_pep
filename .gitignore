@@ -396,3 +396,4 @@ cython_debug/
 
 .direnv
 .envrc
+*.csv

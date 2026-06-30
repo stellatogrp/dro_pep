@@ -9,7 +9,7 @@ import time
 import cvxpy as cp
 from tqdm import trange
 
-from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L
+from .utils import marchenko_pastur, gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk, generate_P_fixed_mu_L, build_eps_vals
 from reformulator.dro_reformulator import DROReformulator
 from learning.pep_constructions import (
     construct_gd_pep_data, construct_fgm_pep_data, pep_data_to_numpy,
@@ -228,12 +228,51 @@ def compute_empirical_cvar(values, alpha):
     return float(np.mean(np.sort(values)[-n_tail:]))
 
 
+def summarize_per_k(df_to_save, alpha_vals, col, K_max):
+    """Per-K mean / worst / cvar_<a> summary rows for one experiment."""
+    rows = []
+    for k in range(1, K_max + 1):
+        vals = df_to_save.loc[df_to_save['K'] == k, col].to_numpy()
+        row = {'K': k, 'mean': float(np.mean(vals)), 'worst': float(np.max(vals))}
+        for a in alpha_vals:
+            row[f'cvar_{a}'] = compute_empirical_cvar(vals, a)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def default_alpha(alpha_vals):
+    """Default CVaR level for single-alpha plots: 0.05 if present, else the middle value."""
+    return 0.05 if 0.05 in alpha_vals else alpha_vals[len(alpha_vals) // 2]
+
+
 def plot_sample_summary(summary, cfg):
-    """Plot empirical mean, CVaR(alpha), and worst-case of the metric vs K."""
+    """Plot empirical mean, CVaR(alpha), and worst-case of the metric vs K.
+
+    Produces two figures: one overlaying every alpha in cfg.alpha_vals, and one
+    using only the default alpha.
+    """
     Ks = summary['K']
+    alpha_vals = list(cfg.alpha_vals)
+
+    # All-alpha version.
     plt.figure()
     plt.plot(Ks, summary['mean'], label='mean')
-    plt.plot(Ks, summary['cvar'], label=f"CVaR (alpha={cfg.alpha})")
+    for a in alpha_vals:
+        plt.plot(Ks, summary[f'cvar_{a}'], label=f"CVaR (alpha={a})")
+    plt.plot(Ks, summary['worst'], label='worst-case', linestyle='--')
+    plt.yscale('log')
+    plt.xlabel('iteration K')
+    plt.ylabel(cfg.dro_pep_obj)
+    plt.title(f"Quad {cfg.alg}: empirical metrics")
+    plt.legend()
+    plt.savefig('sample_summary_all_alpha.pdf')
+    plt.close()
+
+    # Default-alpha version.
+    a = default_alpha(alpha_vals)
+    plt.figure()
+    plt.plot(Ks, summary['mean'], label='mean')
+    plt.plot(Ks, summary[f'cvar_{a}'], label=f"CVaR (alpha={a})")
     plt.plot(Ks, summary['worst'], label='worst-case', linestyle='--')
     plt.yscale('log')
     plt.xlabel('iteration K')
@@ -246,50 +285,47 @@ def plot_sample_summary(summary, cfg):
 
 def quad_samples(cfg):
     log.info(cfg)
-    np.random.seed(cfg.seed.full_samples)
     # R is not needed for the empirical forward sim (simulate_quad ignores it).
 
     gamma = cfg.eta / cfg.L
     beta = nesterov_betas(cfg.K_max)
+    alpha_vals = list(cfg.alpha_vals)
+    n_repeats = cfg.cross_val_repeats
 
-    df = []
-    for i in trange(cfg.sample_N):
-        h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L)
-        obj, gsq, dsq = simulate_quad(h, cfg.alg, gamma, beta, cfg.K_max)
-        for k in range(1, cfg.K_max + 1):
-            df.append(pd.Series({
-                'i': i,
-                'K': k,
-                'obj_val': obj[k-1],
-                'grad_sq_norm': gsq[k-1],
-                'opt_dist_sq_norm': dsq[k-1],
-            }))
+    # Repeat the whole sampling experiment n_repeats times (independent reseeds) to build a
+    # distribution of per-K empirical mean / CVaR / worst summaries for eps cross-validation.
+    dist = []
+    for j in trange(n_repeats):
+        np.random.seed(cfg.seed.full_samples + j)
+        df = []
+        for i in range(cfg.sample_N):
+            h = Quad(cfg.dim, mu=cfg.mu, L=cfg.L)
+            obj, gsq, dsq = simulate_quad(h, cfg.alg, gamma, beta, cfg.K_max)
+            for k in range(1, cfg.K_max + 1):
+                df.append(pd.Series({
+                    'i': i,
+                    'K': k,
+                    'obj_val': obj[k-1],
+                    'grad_sq_norm': gsq[k-1],
+                    'opt_dist_sq_norm': dsq[k-1],
+                }))
 
-        if i % 1000 == 0:
-            log.info(f'saving at i={i}')
-            df_to_save = pd.DataFrame(df)
+        df_to_save = pd.DataFrame(df)
+        summary = summarize_per_k(df_to_save, alpha_vals, cfg.dro_pep_obj, cfg.K_max)
+
+        if j == 0:
+            # Repeat-0 artifacts reproduce the legacy single-run outputs.
             df_to_save.to_csv(cfg.sample_fname, index=False)
+            plot_worst_case(df_to_save, cfg.dro_pep_obj, cfg)
+            summary.to_csv('sample_summary.csv', index=False)
+            log.info(summary)
+            plot_sample_summary(summary, cfg)
 
-    df_to_save = pd.DataFrame(df)
-    df_to_save.to_csv(cfg.sample_fname, index=False)
+        dist.append(summary.assign(repeat=j))
 
-    plot_worst_case(df_to_save, cfg.dro_pep_obj, cfg)
-
-    # Empirical mean / CVaR(alpha) / worst-case of the configured metric per K.
-    alpha = cfg.alpha
-    summary_rows = []
-    for k in range(1, cfg.K_max + 1):
-        vals = df_to_save.loc[df_to_save['K'] == k, cfg.dro_pep_obj].to_numpy()
-        summary_rows.append(pd.Series({
-            'K': k,
-            'mean': float(np.mean(vals)),
-            'cvar': compute_empirical_cvar(vals, alpha),
-            'worst': float(np.max(vals)),
-        }))
-    summary = pd.DataFrame(summary_rows)
-    summary.to_csv('sample_summary.csv', index=False)
-    log.info(summary)
-    plot_sample_summary(summary, cfg)
+    dist_df = pd.concat(dist, ignore_index=True)
+    dist_df = dist_df[['repeat'] + [c for c in dist_df.columns if c != 'repeat']]
+    dist_df.to_csv('sample_summary_dist.csv', index=False)
 
 
 def quad_pep(cfg):
@@ -343,8 +379,10 @@ def quad_dro(cfg):
     gamma = cfg.eta / L
     beta_full = nesterov_betas(cfg.K_max)
 
-    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
-    alpha = cfg.alpha
+    eps_vals = build_eps_vals(cfg)
+    alpha_vals = list(cfg.alpha_vals)
+    # alpha only affects the cvar objective; expectation ignores it (single pass).
+    alphas_to_run = alpha_vals if measure == 'cvar' else [alpha_vals[0]]
 
     # x* from the same stream as compute_R (prefix ⇒ all samples satisfy ||x*|| <= R);
     # Q drawn fresh per instance from the global stream (seed.train).
@@ -387,25 +425,27 @@ def quad_dro(cfg):
         log.info(f'----dro reformulator built at k={k}----')
 
         for eps_idx, eps in enumerate(eps_vals):
-            DR.set_params(eps=eps, alpha=alpha)
-            out = DR.solve()
-            if num_clusters is not None:
-                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
-            else:
-                dro_feas = out['obj']
+            for alpha_idx, alpha in enumerate(alphas_to_run):
+                DR.set_params(eps=eps, alpha=alpha)
+                out = DR.solve()
+                if num_clusters is not None:
+                    dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+                else:
+                    dro_feas = out['obj']
 
-            res.append(pd.Series({
-                'K': k,
-                'eps_idx': eps_idx,
-                'eps': eps,
-                'alpha': alpha,
-                'mro_sol': out['obj'],
-                'solvetime': out['solvetime'],
-                'dro_feas_sol': dro_feas,
-            }))
+                res.append(pd.Series({
+                    'K': k,
+                    'eps_idx': eps_idx,
+                    'eps': eps,
+                    'alpha_idx': alpha_idx,
+                    'alpha': alpha,
+                    'mro_sol': out['obj'],
+                    'solvetime': out['solvetime'],
+                    'dro_feas_sol': dro_feas,
+                }))
 
-            df = pd.DataFrame(res)
-            df.to_csv(cfg.dro_fname, index=False)
+                df = pd.DataFrame(res)
+                df.to_csv(cfg.dro_fname, index=False)
 
 
 def quad_lyap(cfg):
@@ -423,8 +463,8 @@ def quad_lyap(cfg):
         exit(0)
 
     N = cfg.training.lyap_N
-    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
-    alpha = cfg.alpha
+    eps_vals = build_eps_vals(cfg)
+    alpha = cfg.alpha_vals[0]
 
     np.random.seed(cfg.seed.train)
     quad_funcs = []
