@@ -197,37 +197,37 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='Lasso_all.pdf'):
 
     # Worst-case
     ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+    # ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
         
     # CVaR
     ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color)
-    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
+    # ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Expectation
     ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_bound, label='Expectation (Bound)', color=exp_color)
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
+    # ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # --- Subplot 1: FISTA ---
     ax[1].set_title('FISTA')
 
     # Worst-case
     ax[1].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+    # ax[1].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
     ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_bound, label='Expectation (Bound)', color=exp_color)
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
+    # ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
     ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color)
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
+    # ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
 
     # --- Legend and Final Touches ---
     # Adjust subplot positions to make room for legend
     for axi in ax:
         box = axi.get_position()
-        axi.set_position([box.x0, box.y0 + 0.2, box.width, box.height - 0.2])
+        axi.set_position([box.x0, box.y0 + 0.16, box.width, box.height - 0.2])
 
     # Get handles and labels from the first plot (they are identical for both)
     handles, labels = ax[0].get_legend_handles_labels()

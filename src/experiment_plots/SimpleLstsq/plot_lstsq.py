@@ -29,7 +29,7 @@ def main():
     # scaled_theory = scaled_theory_df.to_numpy()
     
     ax.set_yscale('log')
-    # ax.set_xscale('log')
+    ax.set_xscale('log')
 
     # ax.set_ylabel(r'$\| x^K - x^\star\|$')
     ax.set_ylabel(r'$f(x^K) - f(x^\star)$')
@@ -63,13 +63,13 @@ def main():
     plt.tight_layout()
 
     # Center the title over the plot + legend combination rather than the axes alone.
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    ax_bbox = ax.get_window_extent(renderer)
-    legend_bbox = legend.get_window_extent(renderer)
-    center_x = (ax_bbox.x0 + legend_bbox.x1) / 2
-    # Convert target center from pixels to axes-fraction coords (title x lives in axes coords).
-    title.set_x((center_x - ax_bbox.x0) / ax_bbox.width)
+    # fig.canvas.draw()
+    # renderer = fig.canvas.get_renderer()
+    # ax_bbox = ax.get_window_extent(renderer)
+    # legend_bbox = legend.get_window_extent(renderer)
+    # center_x = (ax_bbox.x0 + legend_bbox.x1) / 2
+    # # Convert target center from pixels to axes-fraction coords (title x lives in axes coords).
+    # title.set_x((center_x - ax_bbox.x0) / ax_bbox.width)
 
     plt.savefig('box_pgd.pdf')
 
