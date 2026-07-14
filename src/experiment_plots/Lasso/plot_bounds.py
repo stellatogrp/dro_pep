@@ -1,13 +1,14 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.ticker import ScalarFormatter, NullFormatter, NullLocator
 
 plt.rcParams.update({
     "text.usetex": True,
     "font.family": "serif",
     # "font.sans-serif": ["Helvetica Neue"],
-    "font.size": 14,
-    "figure.figsize": (12, 7),
+    "font.size": 17,
+    "figure.figsize": (12, 5),
 })
 
 exp_K_max = 25
@@ -17,6 +18,52 @@ cvar_K_max = 25
 
 num_per_group = 100
 groups = 100
+
+# CVaR confidence levels (must match cfg.alpha_vals used to generate dro.csv).
+ALPHA_VALS = [0.01, 0.05, 0.10]
+DEFAULT_ALPHA = 0.05
+
+# Across-repeat coverage level used to cross-validate the eps choice. Independent of alpha
+# (the within-experiment CVaR tail level) -- it is NOT 1 - alpha.
+COVERAGE_QUANTILE = 0.95
+
+# Log-scale x-axis ticks (plain integer labels) for the iteration axis (data goes to 25).
+X_TICKS = [1, 3, 6, 12, 24]
+
+
+def set_log_xaxis(axi):
+    """Log-scale the iteration (K) axis with readable integer ticks."""
+    axi.set_xscale('log')
+    axi.set_xticks(X_TICKS)
+    axi.xaxis.set_major_formatter(ScalarFormatter())
+    axi.xaxis.set_minor_formatter(NullFormatter())
+    axi.xaxis.set_minor_locator(NullLocator())  # no stray log minor ticks
+
+
+def quantile_threshold_per_k(dist, metric_col, q=COVERAGE_QUANTILE):
+    """Per-K q-quantile of metric_col taken ACROSS repeats. Series indexed by K."""
+    return dist.groupby('K')[metric_col].quantile(q)
+
+
+def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
+    """Per-K: smallest dro_feas_sol (over eps) that is >= the across-repeat 95th-quantile
+    threshold for metric_col; fall back to the largest available bound if none qualifies.
+    Prints the chosen eps per K to stdout."""
+    if alpha is not None and 'alpha' in dro.columns:
+        dro = dro[np.isclose(dro['alpha'], alpha)]
+    thr = quantile_threshold_per_k(dist, metric_col)
+    bounds = []
+    chosen_eps = []
+    for k in range(1, K_max + 1):
+        rows = dro[dro['K'] == k]
+        feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
+        pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
+                else rows.loc[rows['dro_feas_sol'].idxmax()])
+        bounds.append(float(pick['dro_feas_sol']))
+        chosen_eps.append(float(pick['eps']))
+    print(f"[cross_val eps] {label or metric_col}: {[round(e, 6) for e in chosen_eps]}")
+    return bounds, chosen_eps
+
 
 def compute_exp_prob(samples, pep, dro, k):
     dro_bound = dro[dro['K'] == k]['dro_feas_sol'].iloc[0]
@@ -38,7 +85,7 @@ def compute_empirical_avg(samples, k):
     return samples[samples['K'] == k]['obj_val'].mean()
 
 
-def compute_cvar_prob(samples, pep, dro, k, alpha=0.1):
+def compute_cvar_prob(samples, pep, dro, k, alpha=0.05):
     dro_bound = dro[dro['K'] == k]['dro_feas_sol'].iloc[0]
     # dro_bound = dro[dro['K'] == k]['mro_sol'].iloc[0]
     count = 0
@@ -57,15 +104,24 @@ def compute_cvar_prob(samples, pep, dro, k, alpha=0.1):
     return count / groups
 
 
-def compute_empirical_cvar(samples, k, alpha=0.1):
+def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
     samples_k = samples[samples['K'] == k]
     quantile = samples_k['obj_val'].quantile(1-alpha)
     tail_loss = samples_k[samples_k['obj_val'] >= quantile]
     return tail_loss['obj_val'].mean()
 
+
 ISTA_samples = pd.read_csv('data/samples/ISTA_1_25/samples.csv')
 FISTA_samples = pd.read_csv('data/samples/FISTA_1_25/samples.csv')
+ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
+FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
 # OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_25/samples.csv')
+# ISTA_samples = pd.read_csv('data/dro/ISTA_exp_1_25/samples.csv')
+# FISTA_samples = pd.read_csv('data/dro/FISTA_exp_1_25/samples.csv')
+
+# Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
+ISTA_dist = pd.read_csv('data/samples/ISTA_1_25/sample_summary_dist.csv')
+FISTA_dist = pd.read_csv('data/samples/FISTA_1_25/sample_summary_dist.csv')
 
 ISTA_pep = pd.read_csv('data/pep/ISTA_1_25/pep.csv')
 FISTA_pep = pd.read_csv('data/pep/FISTA_1_25/pep.csv')
@@ -79,117 +135,19 @@ FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_25/dro.csv')
 # OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
 
 
-def main_bounds():
-    ISTA_color = 'tab:blue'
-    FISTA_color = 'tab:orange'
-    # OptISTA_color = 'tab:red'
-
-    ISTA_exp_dro_eps = ISTA_exp_dro[ISTA_exp_dro['eps_idx'] == 2]
-    ISTA_cvar_dro_eps = ISTA_cvar_dro[ISTA_cvar_dro['eps_idx'] == 1]
-    FISTA_exp_dro_eps = FISTA_exp_dro[FISTA_exp_dro['eps_idx'] == 2]
-    FISTA_cvar_dro_eps = FISTA_cvar_dro[FISTA_cvar_dro['eps_idx'] == 1]
-    # OptISTA_exp_dro_eps = OptISTA_exp_dro[OptISTA_exp_dro['eps_idx'] == 2]
-    # OptISTA_cvar_dro_eps = OptISTA_cvar_dro[OptISTA_cvar_dro['eps_idx'] == 1]
-
-    ISTA_worst_k = []
-    FISTA_worst_k = []
-    # OptISTA_worst_k = []
-
-    ISTA_exp_k = []
-    FISTA_exp_k = []
-    # OptISTA_exp_k = []
-    ISTA_cvar_k = []
-    FISTA_cvar_k = []
-    # OptISTA_cvar_k = []
-
-    for k in range(1, exp_K_max + 1):
-        ISTA_exp_k.append(compute_empirical_avg(ISTA_samples, k))
-        FISTA_exp_k.append(compute_empirical_avg(FISTA_samples, k))
-        # OptISTA_exp_k.append(compute_empirical_avg(OptISTA_samples, k))
-    
-    for k in range(1, cvar_K_max + 1):
-        ISTA_cvar_k.append(compute_empirical_cvar(ISTA_samples, k))
-        FISTA_cvar_k.append(compute_empirical_cvar(FISTA_samples, k))
-        # OptISTA_cvar_k.append(compute_empirical_cvar(OptISTA_samples, k))
-
-    ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-    FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-    # OptISTA_worst_cases = OptISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-
-    fig, ax = plt.subplots(1, 3)
-
-    ax[0].set_ylabel(r'$f(x^K) - f^\star$')
-    ax[0].set_yscale('log')
-    ax[1].set_yscale('log')
-    ax[2].set_yscale('log')
-
-    ax[0].grid(color='lightgray', alpha=0.3)
-    ax[1].grid(color='lightgray', alpha=0.3)
-    ax[2].grid(color='lightgray', alpha=0.3)
-
-    ax[0].set_xticks([5, 10, 15, 20, 25])
-
-    ax[1].sharey(ax[0])
-    ax[2].sharey(ax[0])
-
-    ax[1].sharex(ax[0])
-    ax[2].sharex(ax[0])
-
-    ax[0].set_xlabel(r'$K$')
-    ax[1].set_xlabel(r'$K$')
-
-    ax[0].set_title('Worst-case')
-    ax[2].set_title('Expectation')
-    ax[1].set_title('CVaR')
-
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='ISTA DRO Bound', color=ISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='FISTA DRO Bound', color=FISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='ISTA Sample', linestyle='--', color=ISTA_color)
-    ax[0].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='FISTA Sample', linestyle='--', color=FISTA_color)
-    # ax[0].plot(range(1, exp_K_max + 1), OptISTA_pep[OptISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='OptISTA', color=OptISTA_color)
-    # ax[0].plot(range(1, exp_K_max + 1), OptISTA_worst_cases[:exp_K_max], label='Sample OptISTA', linestyle='--', color=OptISTA_color)
-
-    ax[2].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Sample ISTA', linestyle='--', color=ISTA_color)
-    ax[2].plot(range(1, exp_K_max + 1), ISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=ISTA_color)
-    ax[2].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Sample FISTA', linestyle='--', color=FISTA_color)
-    ax[2].plot(range(1, exp_K_max + 1), FISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=FISTA_color)
-    # ax[1].plot(range(1, exp_K_max + 1), OptISTA_exp_k, label='Sample OptISTA', linestyle='--', color=OptISTA_color)
-    # ax[1].plot(range(1, exp_K_max + 1), OptISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], color=OptISTA_color)
-
-    ax[1].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='Sample ISTA', linestyle='--', color=ISTA_color)
-    ax[1].plot(range(1, cvar_K_max + 1), ISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=ISTA_color)
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='Sample FISTA', linestyle='--', color=FISTA_color)
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=FISTA_color)
-    # ax[2].plot(range(1, cvar_K_max + 1), OptISTA_cvar_k, label='Sample OptISTA', linestyle='--', color=OptISTA_color)
-    # ax[2].plot(range(1, cvar_K_max + 1), OptISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], color=OptISTA_color)
-
-    for axi in ax:
-        box = axi.get_position()
-        # x0, y0, x1, y1 = bbox.x0, bbox.y0, bbox.x1, bbox.y1
-        axi.set_position([box.x0, box.y0+.05, box.width, box.height-.05])
-
-    # ax[0].legend()
-    handles, labels = ax[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center', ncols=6)
-
-    plt.suptitle('Lasso Minimization')
-    # plt.tight_layout()
-    plt.show()
-    # plt.savefig(f'Lasso_all.pdf')
-
-
-def main_bounds_alg():
+def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='Lasso_all.pdf'):
     """
     Generates and saves a plot comparing ISTA and FGM algorithms
-    across worst-case, expectation, and CVaR metrics.
+    across worst-case, expectation, and CVaR metrics at a single alpha level.
     """
 
     # --- Data Preparation ---
-    # Select specific epsilon index for DRO bounds
-    ISTA_exp_dro_eps = ISTA_exp_dro[ISTA_exp_dro['eps_idx'] == 2]
-    ISTA_cvar_dro_eps = ISTA_cvar_dro[ISTA_cvar_dro['eps_idx'] == 1]
-    FISTA_exp_dro_eps = FISTA_exp_dro[FISTA_exp_dro['eps_idx'] == 1]
-    FISTA_cvar_dro_eps = FISTA_cvar_dro[FISTA_cvar_dro['eps_idx'] == 0]
+    # Cross-validate the eps choice per K: smallest DRO bound that exceeds the across-repeat
+    # 95th quantile of the matching empirical metric (mean for expectation, cvar_<alpha> for CVaR).
+    ISTA_exp_bound, ISTA_exp_eps = cross_val_bound(ISTA_exp_dro, ISTA_dist, 'mean', exp_K_max, label='ISTA exp')
+    FISTA_exp_bound, FISTA_exp_eps = cross_val_bound(FISTA_exp_dro, FISTA_dist, 'mean', exp_K_max, label='FISTA exp')
+    ISTA_cvar_bound, ISTA_cvar_eps = cross_val_bound(ISTA_cvar_dro, ISTA_dist, f'cvar_{alpha}', cvar_K_max, alpha, label=f'ISTA cvar a={alpha}')
+    FISTA_cvar_bound, FISTA_cvar_eps = cross_val_bound(FISTA_cvar_dro, FISTA_dist, f'cvar_{alpha}', cvar_K_max, alpha, label=f'FISTA cvar a={alpha}')
 
     # Compute empirical (sample) expectation and CVaR values
     ISTA_exp_k = []
@@ -200,14 +158,14 @@ def main_bounds_alg():
     for k in range(1, exp_K_max + 1):
         ISTA_exp_k.append(compute_empirical_avg(ISTA_samples, k))
         FISTA_exp_k.append(compute_empirical_avg(FISTA_samples, k))
-    
+
     for k in range(1, cvar_K_max + 1):
-        ISTA_cvar_k.append(compute_empirical_cvar(ISTA_samples, k))
-        FISTA_cvar_k.append(compute_empirical_cvar(FISTA_samples, k))
+        ISTA_cvar_k.append(compute_empirical_cvar(ISTA_samples, k, alpha))
+        FISTA_cvar_k.append(compute_empirical_cvar(FISTA_samples, k, alpha))
 
     # Compute empirical (sample) worst-case values
-    ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-    FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
+    # ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
+    # FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
 
     # Define colors for metrics
     worst_case_color = '#FFAA1C'
@@ -228,8 +186,8 @@ def main_bounds_alg():
     for axi in ax:
         axi.set_yscale('log')
         axi.grid(color='lightgray', alpha=0.3)
-        axi.set_xticks([10, 20, 30, 40])
-    
+        set_log_xaxis(axi)
+
     # Share Y and X axes
     ax[1].sharey(ax[0])
     ax[1].sharex(ax[0])
@@ -239,37 +197,37 @@ def main_bounds_alg():
 
     # Worst-case
     ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+    # ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
         
     # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR (Bound)', color=cvar_color)
-    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
-    
+    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color)
+    # ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
+
     # Expectation
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Expectation (Bound)', color=exp_color)
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_bound, label='Expectation (Bound)', color=exp_color)
+    # ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # --- Subplot 1: FISTA ---
     ax[1].set_title('FISTA')
 
     # Worst-case
     ax[1].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
+    # ax[1].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_dro_eps['dro_feas_sol'][:exp_K_max], label='Expectation (Bound)', color=exp_color)
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
+    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_bound, label='Expectation (Bound)', color=exp_color)
+    # ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_dro_eps['dro_feas_sol'][:cvar_K_max], label='CVaR (Bound)', color=cvar_color)
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
+    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color)
+    # ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
 
     # --- Legend and Final Touches ---
     # Adjust subplot positions to make room for legend
     for axi in ax:
         box = axi.get_position()
-        axi.set_position([box.x0, box.y0 + 0.07, box.width, box.height - 0.07])
+        axi.set_position([box.x0, box.y0 + 0.16, box.width, box.height - 0.2])
 
     # Get handles and labels from the first plot (they are identical for both)
     handles, labels = ax[0].get_legend_handles_labels()
@@ -279,12 +237,79 @@ def main_bounds_alg():
 
     plt.suptitle('Lasso Minimization')
 
+    # Save the data behind the plot next to the PDF.
+    Ks = list(range(1, exp_K_max + 1))
+    plot_data = pd.DataFrame({
+        'K': Ks,
+        'alpha': alpha,
+        'ISTA_worst_bound': np.asarray(ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'])[:exp_K_max],
+        'ISTA_worst_sample': ISTA_worst_cases['obj_val'].to_numpy()[:exp_K_max],
+        'ISTA_exp_bound': ISTA_exp_bound, 'ISTA_exp_eps': ISTA_exp_eps, 'ISTA_exp_sample': ISTA_exp_k,
+        'ISTA_cvar_bound': ISTA_cvar_bound, 'ISTA_cvar_eps': ISTA_cvar_eps, 'ISTA_cvar_sample': ISTA_cvar_k,
+        'FISTA_worst_bound': np.asarray(FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'])[:exp_K_max],
+        'FISTA_worst_sample': FISTA_worst_cases['obj_val'].to_numpy()[:exp_K_max],
+        'FISTA_exp_bound': FISTA_exp_bound, 'FISTA_exp_eps': FISTA_exp_eps, 'FISTA_exp_sample': FISTA_exp_k,
+        'FISTA_cvar_bound': FISTA_cvar_bound, 'FISTA_cvar_eps': FISTA_cvar_eps, 'FISTA_cvar_sample': FISTA_cvar_k,
+    })
+    plot_data.to_csv(out_path.rsplit('.', 1)[0] + '.csv', index=False)
+
     # Save the figure
     # plt.show()
-    plt.savefig(f'Lasso_all.pdf')
+    plt.savefig(out_path)
+    plt.close(fig)
+
+
+def main_bounds_all_alpha(out_path='Lasso_all_alpha.pdf'):
+    """Overlay CVaR bound + sample curves for every alpha in ALPHA_VALS (ISTA and FISTA)."""
+    fig, ax = plt.subplots(1, 2)
+    ax[0].set_ylabel(r'$f(x^K) - f^\star$')
+    ax[0].set_xlabel(r'$K$')
+    ax[1].set_xlabel(r'$K$')
+    for axi in ax:
+        axi.set_yscale('log')
+        axi.grid(color='lightgray', alpha=0.3)
+        set_log_xaxis(axi)
+    ax[1].sharey(ax[0])
+    ax[1].sharex(ax[0])
+    ax[0].set_title('ISTA')
+    ax[1].set_title('FISTA')
+
+    cmap = plt.get_cmap('viridis')
+    records = []
+    for j, alpha in enumerate(ALPHA_VALS):
+        color = cmap(j / max(1, len(ALPHA_VALS) - 1))
+
+        ISTA_cvar_bound, ISTA_cvar_eps = cross_val_bound(ISTA_cvar_dro, ISTA_dist, f'cvar_{alpha}', cvar_K_max, alpha, label=f'ISTA cvar a={alpha}')
+        FISTA_cvar_bound, FISTA_cvar_eps = cross_val_bound(FISTA_cvar_dro, FISTA_dist, f'cvar_{alpha}', cvar_K_max, alpha, label=f'FISTA cvar a={alpha}')
+        ISTA_cvar_k = [compute_empirical_cvar(ISTA_samples, k, alpha) for k in range(1, cvar_K_max + 1)]
+        FISTA_cvar_k = [compute_empirical_cvar(FISTA_samples, k, alpha) for k in range(1, cvar_K_max + 1)]
+
+        for idx, k in enumerate(range(1, cvar_K_max + 1)):
+            records.append({'alg': 'ISTA', 'alpha': alpha, 'K': k, 'cvar_bound': ISTA_cvar_bound[idx],
+                            'cvar_eps': ISTA_cvar_eps[idx], 'cvar_sample': ISTA_cvar_k[idx]})
+            records.append({'alg': 'FISTA', 'alpha': alpha, 'K': k, 'cvar_bound': FISTA_cvar_bound[idx],
+                            'cvar_eps': FISTA_cvar_eps[idx], 'cvar_sample': FISTA_cvar_k[idx]})
+
+        ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound,
+                   label=rf'CVaR $\alpha={alpha}$ (Bound)', color=color)
+        ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k,
+                   label=rf'CVaR $\alpha={alpha}$ (Sample)', linestyle='--', color=color)
+        ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound,
+                   label=rf'CVaR $\alpha={alpha}$ (Bound)', color=color)
+        ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k,
+                   label=rf'CVaR $\alpha={alpha}$ (Sample)', linestyle='--', color=color)
+
+    for axi in ax:
+        box = axi.get_position()
+        axi.set_position([box.x0, box.y0 + 0.2, box.width, box.height - 0.2])
+    handles, labels = ax[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncols=3)
+    plt.suptitle('Lasso Minimization (CVaR across alpha)')
+    plt.savefig(out_path)
+    plt.close(fig)
 
 
 if __name__ == '__main__':
     # main()
-    # main_bounds()
     main_bounds_alg()
+    main_bounds_all_alpha()

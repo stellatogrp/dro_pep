@@ -1,9 +1,17 @@
-m: 200
-n: 300
+m: 100
+n: 150
+# eta: 1.786
 eta: 1
-lambd: 0.1
 
-R: 9.919344468 # this is found experimentally from out of sample data
+# spiked-MP degenerate two-level spectrum of A^T A: {bulk_q*L (mult r-n_spikes), L}
+bulk_q: 0.08
+n_spikes: 1
+spike_L: 1.0
+
+# lambda = lambda_frac * median_b ||A^T b||_inf  (computed at runtime -> overwrites lambd)
+lambda_frac: 0.002
+lambd: 0.0001      # placeholder, overwritten by compute_lambda_R
+R: 1.0             # placeholder, overwritten by compute_lambda_R (max ||x*||)
 
 K_min: 1
 K_max: 25
@@ -13,20 +21,21 @@ seed:
   out_of_sample: 10
   in_sample: 20
 
-p_A_nonzero: 0.4
-p_xsamp_nonzero: 0.25
-N: 100
-noise_eps: 0.001
+p_xsamp_nonzero: 0.2
+N: 200
+cross_val_repeats: 100
+noise_eps: 0.01
 
-alg: ista  # ista or fista or optista
-dro_obj: expectation  # expectation or cvar
+alg: fista  # ista or fista or optista
+dro_obj: cvar  # expectation or cvar
 pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
-precond_type: average # 'average' or 'max' or 'min'
+precond: false # true = apply preconditioning; false = identity (no preconditioning)
+precond_type: average # 'average' or 'max' or 'min' (only used when precond: true)
 
 training:
-  expectation_N: 100
-  cvar_N: 100
+  expectation_N: 1
+  cvar_N: 1
 num_clusters:
   expectation: null
   cvar: null
@@ -36,7 +45,8 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: 0
-  log_max: 1
-  logspace_count: 3
-alpha: 0.1
+  space_type: linspace   # logspace or linspace
+  log_min: -3
+  log_max: -1
+  space_count: 7
+alpha_vals: [0.01, 0.05, 0.10]

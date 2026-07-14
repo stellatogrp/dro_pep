@@ -1,10 +1,11 @@
 # Problem parameters, default from ALISTA code https://github.com/VITA-Group/ALISTA/blob/master/config.py
-m: 250
-n: 500
-lambd: 0.4
+m: 10
+n: 15
+lambd: 0.1
 
 # R_nonstrongcvx: 8.28634 # 1.2 * 6.905287  # with x std 1
-R_nonstrongcvx: 18.48 # 1.1 * 16.828221  # with x std 2
+# R_nonstrongcvx: 18.48 # 1.1 * 16.828221  # with x std 2
+R_nonstrongcvx: null
 
 # Sample sizes
 N: 10                # Batch size for SGD training
@@ -41,7 +42,7 @@ x_samp_ood_normal_std: 3.0
 z0_type: 'zero'
 
 # Type of learning framework
-learning_framework: 'ldro-pep'  # 'ldro-pep' | 'l2o' | 'lpep' | 'l2o-alista' (lasso+ista only)
+learning_framework: 'l2o'  # 'ldro-pep' | 'l2o' | 'lpep' | 'l2o-alista' (lasso+ista only)
 
 # Algorithm and optimizer type (selected by Slurm job index)
 alg: "ista"            # ista or fista
@@ -62,7 +63,8 @@ learn_beta: true  # Whether to learn FISTA beta parameters
 
 # K_max loop inside quad_run (per-K CSV logging)
 # K_max: [5, 10, 15, 20]
-K_max: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+# K_max: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+K_max: [10]
 
 # Optimization hyperparameters
 pep_obj: "obj_val"  # "obj_val" or "opt_dist_sq_norm" or "grad_sq_norm"
@@ -76,7 +78,7 @@ precond_type: 'average'
 # SGD training parameters
 sgd_iters: 500
 eta_t: 1e-3     # learning rate for stepsizes (descent)
-weight_decay: 1e-3  # weight decay for sgd_wd
+weight_decay: 0  # weight decay for sgd_wd
 grad_clip_norm: 10.0  # max L2 norm across the full gradient tuple; norms above this are scaled down (direction preserved)
 
 # Outputs
