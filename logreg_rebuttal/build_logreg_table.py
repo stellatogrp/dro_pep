@@ -281,33 +281,32 @@ def main():
     tex = []
     for ds_name, ds_title in [('test', 'In-distribution test set'),
                               ('ood', 'Out-of-distribution set')]:
-        md.append(f'**{ds_title}** (loss $f(x^K)-f^\\star$; '
-                  f'solved = fraction with loss $\\le {tol:g}(1+|f^\\star|)$)\n')
-        header = '| Method |' + ''.join(
-            f' K={K} mean [q10, q90] | K={K} solved |' for K in args.ks)
-        sep = '|---|' + '---|' * (2 * len(args.ks))
-        md += [header, sep]
-        for method in method_order:
-            cells = [f'| {method} |']
-            for K in args.ks:
+        # One block per K: full statistics per method.
+        for K in args.ks:
+            md.append(f'**{ds_title}, K={K}** (loss $f(x^K)-f^\\star$; '
+                      f'solved = fraction with loss $\\le {tol:g}(1+|f^\\star|)$)\n')
+            md.append('| Method | median [q10, q90] | mean | solved |')
+            md.append('|---|---|---|---|')
+            for method in method_order:
                 r = results[(results['method'] == method) & (results['K'] == K)
                             & (results['dataset'] == ds_name)]
                 if len(r) == 0:
-                    cells.append(' -- | -- |')
+                    md.append(f'| {method} | -- | -- | -- |')
                     continue
                 r = r.iloc[0]
-                cells.append(
-                    f" {fmt_sci(r['mean'])} [{fmt_sci(r['q10'])}, {fmt_sci(r['q90'])}] "
+                md.append(
+                    f"| {method} "
+                    f"| {fmt_sci(r['median'])} [{fmt_sci(r['q10'])}, {fmt_sci(r['q90'])}] "
+                    f"| {fmt_sci(r['mean'])} "
                     f"| {r[f'solved_{tol:g}'] * 100:.0f}% |")
-            md.append(''.join(cells))
-        md.append('')
+            md.append('')
 
-        # LaTeX block
+        # LaTeX block: one row per method, grouped columns per K.
         tex.append(f'% {ds_title}')
-        tex.append('\\begin{tabular}{l' + 'cc' * len(args.ks) + '}')
+        tex.append('\\begin{tabular}{l' + 'ccc' * len(args.ks) + '}')
         tex.append('\\toprule')
         tex.append('Method & ' + ' & '.join(
-            f'$K={K}$ mean & solved' for K in args.ks) + ' \\\\')
+            f'$K={K}$ median [q10, q90] & mean & solved' for K in args.ks) + ' \\\\')
         tex.append('\\midrule')
         for method in method_order:
             cells = [method]
@@ -315,11 +314,13 @@ def main():
                 r = results[(results['method'] == method) & (results['K'] == K)
                             & (results['dataset'] == ds_name)]
                 if len(r) == 0:
-                    cells += ['--', '--']
+                    cells += ['--', '--', '--']
                     continue
                 r = r.iloc[0]
-                cells += [f"{fmt_sci(r['mean'])}",
-                          f"{r[f'solved_{tol:g}'] * 100:.0f}\\%"]
+                cells += [
+                    f"{fmt_sci(r['median'])} [{fmt_sci(r['q10'])}, {fmt_sci(r['q90'])}]",
+                    f"{fmt_sci(r['mean'])}",
+                    f"{r[f'solved_{tol:g}'] * 100:.0f}\\%"]
             tex.append(' & '.join(cells) + ' \\\\')
         tex.append('\\bottomrule')
         tex.append('\\end{tabular}')

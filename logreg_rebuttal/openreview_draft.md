@@ -22,25 +22,42 @@ theory responses. Baselines: GD with $1/L$, the silver step-size schedule
 ($\text{L2O}$), worst-case-optimal ($\text{OPT-PEP}$), and our
 $\text{DR-L2O}$, each for both algorithm classes, $K \in \{5, 10, 15\}$,
 hyperparameters (learning rate, Wasserstein radius $\varepsilon$) selected on
-a validation set. Mean loss over 250 test instances (fraction solved at
-relative tolerance $10^{-2}$ in parentheses):
+a validation set. Statistics over 250 test instances; solved = fraction with
+loss $\le 10^{-2}(1+|f^\star|)$:
 
-**In-distribution / Out-of-distribution, K = 15:**
+**In-distribution, K = 15:**
 
-| Method | In-dist. | OOD |
-|---|---|---|
-| GD ($1/L$) | 9.3e-03 (76%) | 3.4e-03 (98%) |
-| Silver GD | 1.5e-03 (100%) | 3.3e-04 (100%) |
-| Nesterov FGM | 3.6e-04 (100%) | 1.1e-04 (100%) |
-| L2O GD | 4.9e-04 (100%) | 2.7e-02 (58%) |
-| L2O FGM | **2.3e-05** (100%) | 2.3e-02 (55%) |
-| OPT-PEP GD | 9.3e-03 (76%) | 3.4e-03 (98%) |
-| OPT-PEP FGM | 3.6e-04 (100%) | 1.1e-04 (100%) |
-| DR-L2O GD | 5.1e-03 (93%) | 1.5e-03 (100%) |
-| DR-L2O FGM | 2.1e-04 (100%) | **1.0e-04** (100%) |
+| Method | median [q10, q90] | mean | solved |
+|---|---|---|---|
+| GD ($1/L$) | 7.48e-03 [2.30e-03, 1.85e-02] | 9.32e-03 | 76% |
+| Silver GD | 6.55e-04 [4.63e-05, 4.01e-03] | 1.49e-03 | 100% |
+| Nesterov FGM | 1.32e-04 [2.37e-05, 8.82e-04] | 3.64e-04 | 100% |
+| L2O GD | 1.06e-04 [2.71e-06, 1.37e-03] | 4.90e-04 | 100% |
+| L2O FGM | **1.24e-05** [3.51e-06, 2.27e-05] | **2.31e-05** | 100% |
+| OPT-PEP GD | 7.48e-03 [2.30e-03, 1.85e-02] | 9.32e-03 | 76% |
+| OPT-PEP FGM | 1.32e-04 [2.37e-05, 8.82e-04] | 3.64e-04 | 100% |
+| DR-L2O GD | 3.67e-03 [7.98e-04, 1.14e-02] | 5.14e-03 | 93% |
+| DR-L2O FGM | 1.54e-04 [3.27e-05, 2.58e-04] | 2.14e-04 | 100% |
 
-*(full table for K ∈ {5, 10, 15} with quantile bands available; same
-qualitative picture at every K)*
+**Out-of-distribution, K = 15:**
+
+| Method | median [q10, q90] | mean | solved |
+|---|---|---|---|
+| GD ($1/L$) | 2.19e-03 [3.89e-04, 7.64e-03] | 3.37e-03 | 98% |
+| Silver GD | 5.33e-05 [6.54e-07, 9.35e-04] | 3.32e-04 | 100% |
+| Nesterov FGM | 9.32e-05 [1.07e-05, 1.54e-04] | 1.12e-04 | 100% |
+| L2O GD | 5.16e-03 [3.84e-05, 8.35e-02] | 2.72e-02 | 58% |
+| L2O FGM | 3.79e-03 [1.78e-05, 6.18e-02] | 2.32e-02 | 55% |
+| OPT-PEP GD | 2.19e-03 [3.89e-04, 7.64e-03] | 3.37e-03 | 98% |
+| OPT-PEP FGM | 9.32e-05 [1.07e-05, 1.54e-04] | 1.12e-04 | 100% |
+| DR-L2O GD | 7.64e-04 [7.42e-05, 3.89e-03] | 1.54e-03 | 100% |
+| DR-L2O FGM | 1.01e-04 [2.43e-06, 1.87e-04] | **1.00e-04** | 100% |
+
+*(full tables for K ∈ {5, 10, 15} available; same qualitative picture at
+every K)* Note the median/mean gap for L2O out-of-distribution: its failure
+under shift is a tail phenomenon (q90 $\approx 6\times 10^{-2}$, 45% of
+instances unsolved), which the median alone would hide — precisely the
+mean-vs-tail distinction raised in the reviews.
 
 The experiment confirms all three points the benchmark was designed to test:
 
