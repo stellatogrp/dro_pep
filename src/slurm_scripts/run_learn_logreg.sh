@@ -1,27 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=LogReg
+#SBATCH --job-name=LogRegDRO
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=24G
-# #SBATCH --constraint=intel
 #SBATCH --time=00-03:59:59
-#SBATCH --array=0-14
-#SBATCH -o /scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out/LogReg/runs/%A.txt
+#SBATCH --array=0-29
+#SBATCH -o /scratch/gpfs/BSTELLATO/bs37/learn_dro_pep_out/LogReg/runs/%A_%a.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
-#SBATCH --mail-user=vranjan@princeton.edu
-# #SBATCH --gres=gpu:1
+#SBATCH --mail-user=bs37@princeton.edu
 
-# os.environ['XLA_PYTHON_CLIENT_PREALLOCATE']='true'
-# export XLA_PYTHON_CLIENT_MEM_FRACTION='0.30'
-# export XLA_PYTHON_CLIENT_ALLOCATOR=platform
-# export xla_force_host_platform_device_count=1
+# DR-L2O LogReg sweep: 2 algs (vanilla_gd, nesterov_fgm) x 5 eps x 3 K = 30 tasks.
+# Task-index mapping lives in run_learning_experiment.py (Learn_LogReg_params).
 
 module purge
 module load intel-mkl/2024.2
-module load anaconda3/2025.12
-# module load anaconda3/2023.9 cudnn/cuda-11.x/8.2.0 cudatoolkit/11.3 nvhpc/21.5
-conda activate algover
 
-cd "$(dirname "$0")/.."
+REPO=/scratch/gpfs/BSTELLATO/bs37/projects/dr-l2o/dr-l2o_repo
+source "$REPO/.venv/bin/activate"
+export DRO_PEP_LEARN_OUT=/scratch/gpfs/BSTELLATO/bs37/learn_dro_pep_out
+
+cd "$REPO/src"
 python run_learning_experiment.py LogReg cluster
