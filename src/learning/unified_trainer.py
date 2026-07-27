@@ -37,6 +37,40 @@ from learning.jax_scs_layer import (
 log = logging.getLogger(__name__)
 
 
+def _reparam_modes(n_leaves: int, signed_momentum: bool) -> Tuple[str, ...]:
+    """Per-leaf reparameterization modes for the optimizer parameters.
+
+    Default: every leaf is sqrt-reparameterized (optimizer holds sqrt(s),
+    losses square it), which enforces nonnegativity. With
+    signed_momentum=True and a 2-leaf (t, beta) family (GD/FGM with
+    momentum, FISTA), the beta leaf is left as identity so momentum
+    coefficients can be learned with either sign. The sqrt reparam would
+    otherwise both clamp beta >= 0 and pin any beta_k initialized at 0
+    (d(beta)/d(raw) = 2*raw = 0 at raw=0).
+    """
+    modes = ['sqrt'] * n_leaves
+    if signed_momentum and n_leaves == 2:
+        modes[1] = 'identity'
+    return tuple(modes)
+
+
+def to_raw_params(stepsizes: Stepsizes, modes: Tuple[str, ...] | None = None) -> Stepsizes:
+    """Map algorithmic stepsizes to raw optimizer parameters."""
+    if modes is None:
+        return tuple(jnp.sqrt(jnp.asarray(s)) for s in stepsizes)
+    return tuple(
+        jnp.sqrt(jnp.asarray(s)) if m == 'sqrt' else jnp.asarray(s)
+        for s, m in zip(stepsizes, modes)
+    )
+
+
+def to_actual_params(raw: Stepsizes, modes: Tuple[str, ...] | None = None) -> Stepsizes:
+    """Map raw optimizer parameters back to algorithmic stepsizes."""
+    if modes is None:
+        return tuple(s ** 2 for s in raw)
+    return tuple(s ** 2 if m == 'sqrt' else s for s, m in zip(raw, modes))
+
+
 class UnifiedTrainer:
     """Unified training orchestrator for all three learning pipelines.
 
@@ -101,6 +135,12 @@ class UnifiedTrainer:
         # Optimizer parameters
         self.weight_decay = cfg.get('weight_decay', 1e-2)
         self.learn_beta = cfg.get('learn_beta', True)
+        # Allow signed momentum coefficients (beta leaf raw instead of
+        # sqrt-reparameterized). Default False preserves legacy behavior.
+        self.signed_momentum = cfg.get('signed_momentum', False)
+        # Per-leaf reparam modes; set in train() once the stepsizes structure
+        # is known (before any loss builder runs). None means all-sqrt.
+        self._modes = None
         # Max L2 norm across the full gradient tuple before the optimizer step.
         # Norms above this are scaled to exactly this value (direction preserved).
         self.grad_clip_norm = cfg.get('grad_clip_norm', 1.0)
@@ -134,7 +174,10 @@ class UnifiedTrainer:
         # Step 2: Initialize stepsizes
         stepsizes = self.problem_module.get_initial_stepsizes(self.alg, K, L, mu)
         log.info(f"Initial stepsizes: {stepsizes}")
-        sqrt_stepsizes = tuple(jnp.sqrt(jnp.asarray(s)) for s in stepsizes)
+        self._modes = _reparam_modes(len(stepsizes), self.signed_momentum)
+        if self.signed_momentum:
+            log.info(f"Reparam modes: {self._modes} (signed momentum enabled)")
+        sqrt_stepsizes = to_raw_params(stepsizes, self._modes)
 
         # Step 3+4: Pre-sample training + validation data (idempotent).
         # Data is K-independent; callers that hoist prepare_data() above the
@@ -223,10 +266,11 @@ class UnifiedTrainer:
         )
         psd_mat_dims_static = tuple(int(s) for s in _init_pep_data[8])
         R_sq = R ** 2
+        modes = self._modes
 
         def lpep_loss(sqrt_stepsizes):
             """Compute worst-case PEP objective at R=1, then scale by R^2."""
-            stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+            stepsizes = to_actual_params(sqrt_stepsizes, modes)
             pep_data = pep_data_fn(
                 stepsizes, mu, L, 1.0, K, self.pep_obj,
                 composition_type=self.training_loss_type_composition,
@@ -260,10 +304,11 @@ class UnifiedTrainer:
             Note: minibatch is a dict of data arrays, NOT an index.
         """
         traj_fn = self.problem_module.get_trajectory_fn(self.alg)
+        modes = self._modes
 
         def l2o_loss(sqrt_stepsizes, minibatch):
             """Compute trajectory-based loss with risk measure."""
-            stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+            stepsizes = to_actual_params(sqrt_stepsizes, modes)
             # minibatch is already extracted outside JIT boundary
 
             # Compute loss for each sample in batch
@@ -328,8 +373,10 @@ class UnifiedTrainer:
                     "@jax.jit ldro_pep_loss (no hoist; callback inside jit)."
                 )
 
+                modes_legacy = self._modes
+
                 def ldro_pep_loss_legacy(sqrt_stepsizes, minibatch):
-                    stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+                    stepsizes = to_actual_params(sqrt_stepsizes, modes_legacy)
                     G_batch, F_batch = self._compute_batched_gram_matrices(
                         stepsizes, minibatch, traj_fn, K
                     )
@@ -391,10 +438,11 @@ class UnifiedTrainer:
             pep_obj_local = self.pep_obj
             train_comp = self.training_loss_type_composition
             decay = self.decay_rate
+            modes = self._modes
 
             @jax.jit
             def _build_inputs(sqrt_stepsizes, minibatch):
-                stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+                stepsizes = to_actual_params(sqrt_stepsizes, modes)
                 G_batch, F_batch = self._compute_batched_gram_matrices(
                     stepsizes, minibatch, traj_fn, K
                 )
@@ -748,10 +796,11 @@ class UnifiedTrainer:
 
         # Capture validation loss type for use in closure
         val_loss_type = self.validation_loss_type_composition
+        modes = self._modes
 
         def val_loss_fn(sqrt_stepsizes):
             """Compute validation loss on held-out validation set."""
-            stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+            stepsizes = to_actual_params(sqrt_stepsizes, modes)
 
             def compute_single_val_metric(*args):
                 """Compute metric for a single validation sample."""
@@ -876,7 +925,7 @@ class UnifiedTrainer:
             TrainingResult with final actual stepsizes, history, losses, val_losses, and times.
         """
         def to_actual(sqrt_s):
-            return tuple(s ** 2 for s in sqrt_s)
+            return to_actual_params(sqrt_s, self._modes)
 
         # Track history (in actual stepsize form for external consumers)
         all_stepsizes_vals = [to_actual(sqrt_stepsizes)]
@@ -1018,7 +1067,7 @@ class UnifiedTrainer:
             sqrt_stepsizes: Current sqrt-reparameterized params.
             K: Number of algorithm iterations.
         """
-        actual_stepsizes = tuple(s ** 2 for s in sqrt_stepsizes)
+        actual_stepsizes = to_actual_params(sqrt_stepsizes, self._modes)
 
         def _fmt(s: jnp.ndarray) -> str:
             if jnp.ndim(s) > 0:
@@ -1045,9 +1094,10 @@ class UnifiedTrainer:
 
         Selective masking is implemented by zeroing the gradients of frozen
         entries before passing them through the optax chain. No projection is
-        needed: the loss functions square sqrt_stepsizes before use, so
-        nonnegativity of the algorithmic stepsize is guaranteed regardless of
-        the sign of sqrt_stepsize.
+        needed: sqrt-mode leaves are squared by the loss functions before use,
+        so their algorithmic stepsizes stay nonnegative regardless of the raw
+        parameter's sign; identity-mode leaves (signed momentum) are
+        intentionally unconstrained.
 
         Args:
             sqrt_stepsizes: Current sqrt-reparameterized params.

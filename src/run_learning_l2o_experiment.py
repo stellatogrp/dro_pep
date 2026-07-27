@@ -154,13 +154,16 @@ Learn_Quad_params = conditional_product(
     ]
 )
 
+# L2O LogReg sweep: 2 algs x 3 etas x 3 K = 18 tasks (array 0-17).
+# idx = alg_idx*9 + eta_idx*3 + K_idx (last list varies fastest).
 LogReg_options = [
     ['learning_framework=l2o'],
-    ['alg=vanilla_gd'],
     ['pep_obj=obj_val'],
     ['dro_obj=expectation'],
     ['N=20'],
     ['sgd_iters=500'],
+    ['alg=vanilla_gd', 'alg=nesterov_fgm'],
+    ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
     ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
@@ -255,7 +258,9 @@ def main():
         exit(0)
 
     if target_machine == 'cluster':
-        base_dir = '/scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out'
+        base_dir = os.environ.get(
+            'DRO_PEP_LEARN_OUT', '/scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out'
+        )
     elif target_machine == 'local':
         base_dir = '.'
     else:

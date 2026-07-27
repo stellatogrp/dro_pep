@@ -156,14 +156,18 @@ Learn_Quad_params = conditional_product(
     ]
 )
 
+# DR-L2O LogReg sweep: 2 algs x 5 eps x 3 K = 30 tasks (array 0-29).
+# itertools.product varies the LAST list fastest, so
+# idx = alg_idx*15 + eps_idx*3 + K_idx.
 LogReg_options = [
     ['learning_framework=ldro-pep'],
-    ['alg=vanilla_gd'],
     ['pep_obj=obj_val'],
     ['dro_obj=expectation'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
     ['N=20'],
     ['sgd_iters=500'],
+    ['eta_t=1e-3'],
+    ['alg=vanilla_gd', 'alg=nesterov_fgm'],
+    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
     ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
 ]
 
@@ -227,17 +231,6 @@ Learn_PDLP_params = conditional_product(
     conditional_groups=[],
 )
 
-LogReg_options = [
-    ['alg=vanilla_gd'],
-    ['pep_obj=obj_val'],
-    ['dro_obj=expectation', 'dro_obj=cvar'],
-    ['alpha=0.1'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
-    ['N=20'],
-    ['sgd_iters=500'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
-]
-
 func_driver_map = {
     'Quad': quad_driver,
     'Lasso': lasso_driver,
@@ -272,7 +265,9 @@ def main():
         exit(0)
 
     if target_machine == 'cluster':
-        base_dir = '/scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out'
+        base_dir = os.environ.get(
+            'DRO_PEP_LEARN_OUT', '/scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out'
+        )
     elif target_machine == 'local':
         base_dir = '.'
     else:
