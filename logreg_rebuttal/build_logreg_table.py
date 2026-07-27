@@ -96,8 +96,11 @@ FRAMEWORK_CFG = {
     'L2O': 'l2o',
     'OPT-PEP': 'lpep',
 }
-# Fixed robust choice for DR-L2O, per the paper-figure convention (not CV'd).
-DRL2O_EPS = 10.0
+# DR-L2O hyperparameter selection. The paper's methodology cross-validates
+# the Wasserstein radius, so by default eps is validation-selected across the
+# sweep (like the learning rate for L2O/OPT-PEP). Set to a float (e.g. 10.0)
+# to reproduce the intro-figure fixed-eps convention instead.
+DRL2O_EPS = None
 DRL2O_ETA = 1e-3
 
 
@@ -109,7 +112,10 @@ def load_candidates(runs_root, series, alg, K):
     )
     out = []
     for csv_path in sorted(glob.glob(pattern)):
-        run_dir = csv_path.split('/learn_dro_outputs/')[0]
+        # csv_path = <run_dir>/learn_dro_outputs/K_<K>/progress.csv; the outer
+        # series dir may ALSO be named learn_dro_outputs, so use dirname
+        # arithmetic rather than a string split.
+        run_dir = os.path.dirname(os.path.dirname(os.path.dirname(csv_path)))
         cfg_path = os.path.join(run_dir, '.hydra', 'config.yaml')
         if not os.path.isfile(cfg_path):
             continue
@@ -120,7 +126,7 @@ def load_candidates(runs_root, series, alg, K):
         if cfg.get('alg') != alg:
             continue
         if series == 'DR-L2O':
-            if float(cfg.get('eps', -1)) != DRL2O_EPS:
+            if DRL2O_EPS is not None and float(cfg.get('eps', -1)) != DRL2O_EPS:
                 continue
             if float(cfg.get('eta_t', -1)) != DRL2O_ETA:
                 continue
