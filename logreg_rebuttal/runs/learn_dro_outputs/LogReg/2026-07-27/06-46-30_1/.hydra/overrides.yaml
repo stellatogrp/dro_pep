@@ -1,0 +1,9 @@
+- learning_framework=ldro-pep
+- pep_obj=obj_val
+- dro_obj=expectation
+- N=20
+- sgd_iters=500
+- eta_t=1e-3
+- alg=vanilla_gd
+- eps=0.01
+- K_max=[10]

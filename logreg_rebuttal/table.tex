@@ -1,0 +1,33 @@
+% In-distribution test set
+\begin{tabular}{lcccccc}
+\toprule
+Method & $K=5$ mean & solved & $K=10$ mean & solved & $K=15$ mean & solved \\
+\midrule
+GD (1/L) & 4.08e-02 & 2\% & 1.75e-02 & 43\% & 9.32e-03 & 76\% \\
+Silver GD & 1.53e-02 & 52\% & 3.10e-03 & 98\% & 1.49e-03 & 100\% \\
+Nesterov FGM & 2.65e-02 & 16\% & 3.18e-03 & 97\% & 3.64e-04 & 100\% \\
+L2O GD & 4.15e-03 & 95\% & 1.15e-03 & 100\% & 4.90e-04 & 100\% \\
+L2O FGM & 1.30e-03 & 100\% & 1.29e-04 & 100\% & 2.31e-05 & 100\% \\
+OPT-PEP GD & 4.08e-02 & 2\% & 1.75e-02 & 43\% & 9.32e-03 & 76\% \\
+OPT-PEP FGM & 2.29e-02 & 28\% & 3.18e-03 & 97\% & 3.64e-04 & 100\% \\
+DR-L2O GD & 2.69e-02 & 15\% & 1.04e-02 & 74\% & 5.14e-03 & 93\% \\
+DR-L2O FGM & 7.30e-03 & 86\% & 6.61e-04 & 100\% & 2.14e-04 & 100\% \\
+\bottomrule
+\end{tabular}
+
+% Out-of-distribution set
+\begin{tabular}{lcccccc}
+\toprule
+Method & $K=5$ mean & solved & $K=10$ mean & solved & $K=15$ mean & solved \\
+\midrule
+GD (1/L) & 2.07e-02 & 30\% & 7.33e-03 & 84\% & 3.37e-03 & 98\% \\
+Silver GD & 5.81e-03 & 92\% & 8.36e-04 & 100\% & 3.32e-04 & 100\% \\
+Nesterov FGM & 1.20e-02 & 66\% & 7.63e-04 & 100\% & 1.12e-04 & 100\% \\
+L2O GD & 2.74e-02 & 60\% & 3.36e-02 & 54\% & 2.72e-02 & 58\% \\
+L2O FGM & 2.23e-02 & 60\% & 3.89e-02 & 52\% & 2.32e-02 & 55\% \\
+OPT-PEP GD & 2.07e-02 & 30\% & 7.33e-03 & 84\% & 3.37e-03 & 98\% \\
+OPT-PEP FGM & 8.74e-03 & 78\% & 7.63e-04 & 100\% & 1.12e-04 & 100\% \\
+DR-L2O GD & 1.16e-02 & 66\% & 3.67e-03 & 98\% & 1.54e-03 & 100\% \\
+DR-L2O FGM & 1.69e-03 & 99\% & 4.50e-04 & 100\% & 1.00e-04 & 100\% \\
+\bottomrule
+\end{tabular}
