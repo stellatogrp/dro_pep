@@ -8,15 +8,17 @@ delta: 0.0              # L2 regularization (= mu). MUST stay 0: this is the
 
 # Fallbacks only: when data_source_dir is set, L and R are recomputed from
 # training_set.npz (max per-instance smoothness / max ||x_opt||).
-L: 0.52                 # ~max lambda_max(A^T A)/(4m) at A_std=1, N_data=300
-R: 16.5                 # ~max ||x_opt|| over the training distribution
+L: 0.53                 # ~max lambda_max(A^T A)/(4m) at A_std=1, N_data=300
+R: 8.5                  # ~max ||x_opt|| over 1000 training instances
 
 beta_scale: 3.0         # Beta entries uniform in [-beta_scale, beta_scale]
 A_std: 1.0              # Standard deviation for A matrix entries
-eps_std: 4.0            # Label-noise std. Must be comparable to the margin
+eps_std: 6.0            # Label-noise std. Must be comparable to the margin
                         # scale (~7 here): with delta=0, near-separable data
-                        # sends ||x_opt|| to infinity. At 4.0 all instances
-                        # are decisively non-separable (f_opt >= ~0.1).
+                        # sends ||x_opt|| to infinity. At 4.0 a small tail of
+                        # 1000-sample sweeps was still near-separable
+                        # (||x_opt|| up to ~1000); at 6.0 the max over all
+                        # four canonical sets is ~8 with f_opt >= 0.18.
 
 # Sample sizes
 N: 20                   # Minibatch size for SGD training
