@@ -83,5 +83,6 @@ ood_std_multiplier: 1.25       # OOD scales BOTH A_std and eps_std by this
                                # non-separable); L grows by multiplier^2 ~ 1.56x
 
 # Pin training/eval sets to one sample-creation output (set after running
-# run_sample_creation.py; null falls back to fresh sampling).
-data_source_dir: null
+# run_sample_creation.py; null falls back to fresh sampling). Canonical
+# eps_std=6.0 sets for the NeurIPS rebuttal experiment (cluster path):
+data_source_dir: /scratch/gpfs/BSTELLATO/bs37/out_of_sample_out/sample_creation_outputs/LogReg/2026-07-27/06-01-07
