@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=LogRegLPEP
+#SBATCH --account=bstellato
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
