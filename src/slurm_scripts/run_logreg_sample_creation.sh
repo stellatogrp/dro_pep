@@ -14,8 +14,12 @@
 # each instance solved with CVXPY/CLARABEL. Output goes under
 # $DRO_PEP_SAMPLE_OUT/sample_creation_outputs/LogReg/<date>/<time>/.
 
-module purge
-module load intel-mkl/2024.2
+# Module system is unavailable in non-login job shells; export the Intel
+# runtime paths directly (MKL Pardiso needs libiomp5 from the compiler dir,
+# else clarabel dies with a symbol lookup error).
+module purge 2>/dev/null || true
+module load intel-mkl/2024.2 2>/dev/null || true
+export LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib:/opt/intel/oneapi/compiler/latest/lib:$LD_LIBRARY_PATH
 
 REPO=/scratch/gpfs/BSTELLATO/bs37/projects/dr-l2o/dr-l2o_repo
 source "$REPO/.venv/bin/activate"
