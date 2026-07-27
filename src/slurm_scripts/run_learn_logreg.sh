@@ -4,7 +4,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=24G
-#SBATCH --time=00-03:59:59
+#SBATCH --time=00-05:59:59
 #SBATCH --array=0-29
 #SBATCH -o /scratch/gpfs/BSTELLATO/bs37/learn_dro_pep_out/LogReg/runs/%A_%a.txt
 #SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT
