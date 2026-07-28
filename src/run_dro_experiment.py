@@ -85,6 +85,8 @@ LogReg_params = [
      'eps.space_type=logspace', 'eps.log_min=-3', 'eps.log_max=3', 'eps.space_count=13'],
     ['alg=nesterov_fgm', 'dro_obj=cvar', 'K_min=12', 'K_max=12',
      'eps.space_type=logspace', 'eps.log_min=-3', 'eps.log_max=3', 'eps.space_count=13'],
+    # bonus: FGM at eta=1.9 (beyond classical regime; certificate remains valid)
+    ['alg=nesterov_fgm', 'eta=1.9', 'dro_obj=expectation'],
 ]
 
 func_driver_map = {

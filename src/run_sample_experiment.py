@@ -45,6 +45,8 @@ Lasso_params = [
 LogReg_params = [
     ['alg=grad_desc', 'eta=1.9'],
     ['alg=nesterov_fgm'],
+    # bonus: FGM beyond the classical step-size regime (worst case diverges)
+    ['alg=nesterov_fgm', 'eta=1.9'],
 ]
 
 func_driver_map = {
