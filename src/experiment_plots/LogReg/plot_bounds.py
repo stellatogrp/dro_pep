@@ -114,7 +114,7 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='logreg_obj_val.pdf'):
     fgm_cvar_k = [compute_empirical_cvar(fgm['samples'], k, alpha) for k in range(1, K_MAX + 1)]
 
     fig, ax = plt.subplots(1, 2)
-    ax[0].set_ylabel(r'$f(x^K) - f^\star$')
+    ax[0].set_ylabel(r'$\|\nabla f(x^K)\|^2$')
     for axi in ax:
         axi.set_xlabel(r'$K$')
         axi.set_yscale('log')

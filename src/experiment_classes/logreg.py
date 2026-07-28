@@ -62,7 +62,9 @@ def logreg_grad(A, b, x, delta):
 
 
 def simulate_alg(cfg, A, b, x_opt, f_opt, t):
-    """Run cfg.alg from x0 = 0 and return gaps [f(x_k)-f*, k=1..K_max].
+    """Run cfg.alg from x0 = 0 and return the metric [m(x_k), k=1..K_max],
+    where m is cfg.pep_obj ('obj_val' -> f(x_k)-f*, 'grad_sq_norm' ->
+    ||grad f(x_k)||^2).
 
     Iterate conventions match construct_gd_pep_data / construct_fgm_pep_data
     (and the PEPit baseline below), so all three stages bound the same quantity.
@@ -73,10 +75,18 @@ def simulate_alg(cfg, A, b, x_opt, f_opt, t):
     x = np.zeros(d)
     gaps = []
 
+    def metric(xk):
+        if cfg.pep_obj == 'obj_val':
+            return logreg_gap(A, b, xk, f_opt, delta)
+        elif cfg.pep_obj == 'grad_sq_norm':
+            g = logreg_grad(A, b, xk, delta)
+            return float(g @ g)
+        raise ValueError(f"unsupported pep_obj '{cfg.pep_obj}'")
+
     if cfg.alg == 'grad_desc':
         for _ in range(K_max):
             x = x - t * logreg_grad(A, b, x, delta)
-            gaps.append(logreg_gap(A, b, x, f_opt, delta))
+            gaps.append(metric(x))
     elif cfg.alg == 'nesterov_fgm':
         # FGM in the same form as construct_fgm_pep_data and
         # logreg_fgm_trajectories: gradients at y_k, objective at
@@ -97,7 +107,7 @@ def simulate_alg(cfg, A, b, x_opt, f_opt, t):
             x_new = y - t * logreg_grad(A, b, y, delta)
             y = x_new + beta_k * (x_new - x_curr)
             x_curr = x_new
-            gaps.append(logreg_gap(A, b, x_new, f_opt, delta))
+            gaps.append(metric(x_new))
     else:
         raise NotImplementedError(f"unsupported alg '{cfg.alg}'")
 

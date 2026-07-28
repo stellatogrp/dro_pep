@@ -26,7 +26,7 @@ cross_val_repeats: 100
 
 alg: nesterov_fgm   # grad_desc or nesterov_grad_desc or nesterov_fgm
 dro_obj: cvar       # expectation or cvar
-pep_obj: obj_val    # obj_val or grad_sq_norm or opt_dist_sq_norm
+pep_obj: grad_sq_norm  # obj_val or grad_sq_norm or opt_dist_sq_norm
 
 precond: false      # true = apply preconditioning; false = identity
 precond_type: average  # 'average' or 'max' or 'min' (only used when precond: true)

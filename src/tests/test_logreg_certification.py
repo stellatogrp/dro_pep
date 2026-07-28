@@ -114,10 +114,12 @@ def test_gram_satisfies_pep_constraints(tiny_instances, alg):
             f"{alg} instance {i}: PEP constraint violated by {max_violation:.3e}")
 
 
+@pytest.mark.parametrize('pep_obj', ['obj_val', 'grad_sq_norm'])
 @pytest.mark.parametrize('alg', ['grad_desc', 'nesterov_fgm'])
-def test_gram_objective_matches_simulation(tiny_instances, alg):
+def test_gram_objective_matches_simulation(tiny_instances, alg, pep_obj):
     cfg, instances = tiny_instances
     cfg.alg = alg
+    cfg.pep_obj = pep_obj
     cfg.K_max = K_TEST
     mu = float(cfg.delta)
     cfg.L = float(max(inst[4] for inst in instances))
@@ -128,13 +130,13 @@ def test_gram_objective_matches_simulation(tiny_instances, alg):
     if alg == 'grad_desc':
         stp = (t_vec,)
         pep_data = construct_gd_pep_data(
-            t_vec, mu, cfg.L, R, K_TEST, 'obj_val', composition_type='final')
+            t_vec, mu, cfg.L, R, K_TEST, pep_obj, composition_type='final')
         traj_fn = logreg_gd_trajectories
     else:
         beta = jax_get_nesterov_fgm_beta_sequence(mu, cfg.L, K_TEST)
         stp = (t_vec, beta)
         pep_data = construct_fgm_pep_data(
-            t_vec, beta, mu, cfg.L, R, K_TEST, 'obj_val', composition_type='final')
+            t_vec, beta, mu, cfg.L, R, K_TEST, pep_obj, composition_type='final')
         traj_fn = logreg_fgm_trajectories
 
     A_obj = np.array(pep_data[0])
