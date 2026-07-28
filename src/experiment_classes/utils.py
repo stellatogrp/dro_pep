@@ -2,6 +2,18 @@ import numpy as np
 from scipy.stats import ortho_group
 
 
+def build_eps_vals(cfg):
+    """eps grid from cfg.eps. log_min/log_max are log10 endpoints; space_count is the point count.
+    space_type='logspace' -> np.logspace(log_min, log_max, count);
+    space_type='linspace' -> np.linspace(10**log_min, 10**log_max, count) (same range, linear)."""
+    e = cfg.eps
+    if e.space_type == 'logspace':
+        return np.logspace(e.log_min, e.log_max, num=e.space_count)
+    if e.space_type == 'linspace':
+        return np.linspace(10.0 ** e.log_min, 10.0 ** e.log_max, num=e.space_count)
+    raise ValueError(f"unknown eps.space_type '{e.space_type}', expected 'logspace' or 'linspace'")
+
+
 def generate_P_fixed_mu_L(d, mu, L):
     U = ortho_group.rvs(d)
     sigma = np.zeros(d)

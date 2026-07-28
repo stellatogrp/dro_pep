@@ -24,7 +24,7 @@ import sys
 log = logging.getLogger(__name__)
 
 from learning_experiment_classes.lasso import lasso_sample_creation_run as lasso_run
-# from learning_experiment_classes.logreg import logreg_out_of_sample_run as logreg_run
+from learning_experiment_classes.logreg import logreg_sample_creation_run as logreg_run
 from learning_experiment_classes.quad import quad_sample_creation_run as quad_run
 from learning_experiment_classes.pdlp import pdlp_sample_creation_run as pdlp_run
 
@@ -58,7 +58,7 @@ func_driver_map = {
 
 base_dir_map = {
     'Lasso': 'sample_creation_outputs/Lasso',
-    'LogReg': 'out_of_sample_outputs/LogReg',
+    'LogReg': 'sample_creation_outputs/LogReg',
     'Quad': 'sample_creation_outputs/Quad',
     'PDLP': 'sample_creation_outputs/PDLP',
 }
@@ -79,7 +79,9 @@ def main():
         exit(0)
 
     if target_machine == 'cluster':
-        base_dir = '/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out'
+        base_dir = os.environ.get(
+            'DRO_PEP_SAMPLE_OUT', '/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out'
+        )
     elif target_machine == 'local':
         base_dir = '.'
     else:
@@ -94,7 +96,9 @@ def main():
         'hydra.job.chdir=True'
     ]
 
-    sys.argv = [sys.argv[0]] + hydra_tags
+    # Preserve user-supplied hydra overrides (args after experiment & target_machine)
+    extra_args = sys.argv[3:]
+    sys.argv = [sys.argv[0]] + hydra_tags + extra_args
     driver()
 
 

@@ -1,76 +1,88 @@
 # Problem parameters
 n: 50                   # Dimension of beta
-N_data: 300            # Number of data points per problem
+N_data: 300             # Number of data points per problem
 p_beta_nonzero: 0.3     # Sparsity of true beta
-delta: 0.0             # L2 regularization parameter (equals mu)
+delta: 0.0              # L2 regularization (= mu). MUST stay 0: this is the
+                        # unregularized smooth-convex (non-strongly-convex)
+                        # benchmark; validate_config enforces it.
 
-# Computed on-the-fly if null
-L: 6.200262             # Lipschitz constant (from A matrix)
-R: 2.896123             # Initial radius (from optimal solutions)
+# Fallbacks only: when data_source_dir is set, L and R are recomputed from
+# training_set.npz (max per-instance smoothness / max ||x_opt||).
+L: 0.53                 # ~max lambda_max(A^T A)/(4m) at A_std=1, N_data=300
+R: 8.5                  # ~max ||x_opt|| over 1000 training instances
 
 beta_scale: 3.0         # Beta entries uniform in [-beta_scale, beta_scale]
 A_std: 1.0              # Standard deviation for A matrix entries
-eps_std: 0.1            # Standard deviation for label noise
+eps_std: 6.0            # Label-noise std. Must be comparable to the margin
+                        # scale (~7 here): with delta=0, near-separable data
+                        # sends ||x_opt|| to infinity. At 4.0 a small tail of
+                        # 1000-sample sweeps was still near-separable
+                        # (||x_opt|| up to ~1000); at 6.0 the max over all
+                        # four canonical sets is ~8 with f_opt >= 0.18.
 
 # Sample sizes
-N: 20                   # Batch size for SGD training
-L_sample_size: 1000     # Number of A samples for worst-case L computation
-R_sample_size: 100      # Number of (A, b) samples for R computation
+N: 20                   # Minibatch size for SGD training
+L_sample_size: 1000     # Number of A samples for worst-case L computation (fallback)
+R_sample_size: 100      # Number of (A, b) samples for R computation (fallback)
 
 # Random seeds
 seed: 50                # SGD randomness
-A_seed: 1000            # (deprecated - A now sampled per iteration)
-L_seed: 1001            # Seed for L computation
-R_seed: 5002            # Seed for R computation
+training_seed: 40000    # Seed for training-set subsampling / generation
+L_seed: 1001            # Seed for L computation (fallback)
+R_seed: 5002            # Seed for R computation (fallback)
 
 # Learning framework
-learning_framework: 'lpep'  # Options: 'ldro-pep', 'l2o', 'lpep'
+learning_framework: 'ldro-pep'  # Options: 'ldro-pep', 'l2o', 'lpep'
 
 # Algorithm and optimizer settings
 alg: 'vanilla_gd'       # Options: 'vanilla_gd', 'nesterov_fgm'
 optimizer_type: 'adamw' # Options: 'vanilla_sgd', 'adamw', 'sgd_wd'
 stepsize_type: 'vector' # Options: 'scalar', 'vector'
 vector_init: 'fixed'    # Options: 'fixed', 'silver'
+learn_beta: true        # Whether to learn beta (only for nesterov_fgm)
+signed_momentum: true   # Beta leaf stays raw (can go negative); t stays
+                        # sqrt-reparameterized. Exercises signed span coeffs.
+
+# Loss composition
+training_loss_type_composition: 'weighted'   # 'final' | 'cumulative' | 'weighted' | ...
+validation_loss_type_composition: 'final'
+decay_rate: 0.9         # Decay for PEP-side weighted composition
+l2o_decay_rate: 0.9     # Decay read by the trajectory-side weighted composition
 
 # K_max values
-# K_max: [5, 10, 15, 20]
-K_max: [15]
+K_max: [5]
 
 # Optimization hyperparameters
 pep_obj: 'obj_val'          # Options: 'obj_val', 'opt_dist_sq_norm', 'grad_sq_norm'
 dro_obj: 'expectation'      # Options: 'expectation', 'cvar'
-sdp_backend: 'scs'          # Options: 'scs', 'clarabel'
+sdp_backend: 'diffcp'       # Informational: all SDP solves go through Clarabel/diffcp
 dro_canon_backend: 'manual_jax'  # Options: 'manual_jax', 'cvxpylayers'
 eps: 0.1                    # Wasserstein ball radius
 alpha: 0.1                  # CVaR confidence level
-
-# L2O-specific loss formulations (only used when learning_framework='l2o')
-l2o_loss_type: 'weighted'      # Options: 'final', 'cumulative', 'weighted', 'per_step', 'distance_cumulative'
-l2o_decay_rate: 0.9         # Decay rate for 'weighted' loss type
 precond_type: 'average'     # Preconditioner type
 
-learn_beta: True           # Whether to learn beta (only for nesterov_fgm)
-
 # SGD training parameters
-sgd_iters: 500               # Number of SGD iterations
+sgd_iters: 500              # Number of SGD iterations
 eta_t: 1e-3                 # Learning rate for stepsizes
-weight_decay: 1e-2          # Weight decay for sgd_wd optimizer
-
-# MOSEK solver tolerances
-mosek_tol_dfeas: 1e-2
-mosek_tol_pfeas: 1e-2
-mosek_tol_rel_gap: 1e-2
+weight_decay: 0             # AdamW decay would pull raw (signed) beta toward 0
+grad_clip_norm: 10.0        # Global-norm gradient clip (matches quad/lasso)
 
 # Outputs
 output_dir: 'learn_dro_outputs'
 
-# Training and out-of-sample configuration
-training_sample_N: 500          # Number of training samples (pre-sampled)
-out_of_sample_val_N: 500       # Number of validation samples (in-distribution)
-out_of_sample_test_N: 1000     # Number of test samples (in-distribution)
+# Training and out-of-sample configuration (paper convention: 1000/250/250/250)
+training_sample_N: 1000        # Number of training samples (pre-sampled)
+out_of_sample_val_N: 250       # Number of validation samples (in-distribution)
+out_of_sample_test_N: 250      # Number of test samples (in-distribution)
 out_of_sample_val_seed: 10000  # Seed for generating validation problems
 out_of_sample_test_seed: 20000 # Seed for generating test problems
-out_of_dist_N: 1000            # Number of out-of-distribution test samples
+out_of_dist_N: 250             # Number of out-of-distribution test samples
 out_of_dist_seed: 30000        # Seed for generating out-of-distribution problems
-A_out_of_dist_seed: 4000       # Seed for out-of-distribution A matrix
-A_out_of_dist_std_multiplier: 2.0  # Multiplier for A_std in out-of-distribution
+ood_std_multiplier: 1.25       # OOD scales BOTH A_std and eps_std by this
+                               # (margin-preserving, so instances stay
+                               # non-separable); L grows by multiplier^2 ~ 1.56x
+
+# Pin training/eval sets to one sample-creation output (set after running
+# run_sample_creation.py; null falls back to fresh sampling). Canonical
+# eps_std=6.0 sets for the NeurIPS rebuttal experiment (cluster path):
+data_source_dir: /scratch/gpfs/BSTELLATO/bs37/out_of_sample_out/sample_creation_outputs/LogReg/2026-07-27/06-01-07
