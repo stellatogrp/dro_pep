@@ -43,8 +43,8 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  space_type: linspace   # logspace or linspace
-  log_min: -3
-  log_max: -1
-  space_count: 7
+  space_type: logspace   # logspace or linspace
+  log_min: -4
+  log_max: -0.5
+  space_count: 10
 alpha_vals: [0.01, 0.05, 0.10]

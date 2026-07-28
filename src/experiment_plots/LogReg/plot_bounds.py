@@ -160,11 +160,13 @@ def main_eps_sweep(k_fixed=12, alpha=DEFAULT_ALPHA, out_path='logreg_eps_sweep.p
                             (ax[1], 'FGM', 'Fast Gradient Method (FGM)')]:
         dro = pd.read_csv(f'data/dro/{alg}_sweep_K{k_fixed}/dro.csv')
         pep = pd.read_csv(f'data/pep/{alg}_1_24/pep.csv')
-        dist = pd.read_csv(f'data/samples/{alg}_1_24/sample_summary_dist.csv')
         pep_val = float(pep[(pep['K'] == k_fixed) & (pep['obj'] == 'obj_val')]['val'].iloc[0])
         rows = dro[(dro['K'] == k_fixed) & np.isclose(dro.get('alpha', alpha), alpha)] \
             if 'alpha' in dro.columns else dro[dro['K'] == k_fixed]
-        emp_mean = float(dist[dist['K'] == k_fixed]['mean'].mean())
+        # In-sample mean from the sweep run's own in-sample objectives (falls
+        # back gracefully when the out-of-sample dist file is not present).
+        ins = pd.read_csv(f'data/dro/{alg}_sweep_K{k_fixed}/samples.csv')
+        emp_mean = float(ins[ins['K'] == k_fixed]['obj_val'].mean())
 
         axi.plot(rows['eps'], rows['dro_feas_sol'], color=CVAR_COLOR, marker='s', markersize=5,
                  label='DRO-PEP (Bound)')

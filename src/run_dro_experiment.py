@@ -82,9 +82,9 @@ LogReg_params = [
     ['alg=nesterov_fgm', 'dro_obj=cvar'],
     # wide-eps interpolation sweep at fixed K (logreg_eps_sweep.pdf)
     ['alg=grad_desc', 'dro_obj=cvar', 'K_min=12', 'K_max=12',
-     'eps.space_type=logspace', 'eps.log_min=-3', 'eps.log_max=2', 'eps.space_count=12'],
+     'eps.space_type=logspace', 'eps.log_min=-3', 'eps.log_max=3', 'eps.space_count=13'],
     ['alg=nesterov_fgm', 'dro_obj=cvar', 'K_min=12', 'K_max=12',
-     'eps.space_type=logspace', 'eps.log_min=-3', 'eps.log_max=2', 'eps.space_count=12'],
+     'eps.space_type=logspace', 'eps.log_min=-3', 'eps.log_max=3', 'eps.space_count=13'],
 ]
 
 func_driver_map = {
