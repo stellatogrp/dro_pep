@@ -89,7 +89,7 @@ def _load(alg):
 
 def _plot_panel(axi, title, d, exp_bound, cvar_bound):
     Ks = range(1, K_MAX + 1)
-    pep_vals = np.asarray(d['pep'][d['pep']['obj'] == 'obj_val']['val'])[:K_MAX]
+    pep_vals = np.asarray(d['pep']['val'])[:K_MAX]  # single metric per run
     axi.set_title(title)
     axi.plot(Ks, pep_vals, label='Worst-case (Bound)', color=WORST_COLOR,
              marker=MARKERS['worst'], markevery=MARKEVERY, markersize=5)
@@ -160,7 +160,7 @@ def main_eps_sweep(k_fixed=12, alpha=DEFAULT_ALPHA, out_path='logreg_eps_sweep.p
                             (ax[1], 'FGM', 'Fast Gradient Method (FGM)')]:
         dro = pd.read_csv(f'data/dro/{alg}_sweep_K{k_fixed}/dro.csv')
         pep = pd.read_csv(f'data/pep/{alg}_1_24/pep.csv')
-        pep_val = float(pep[(pep['K'] == k_fixed) & (pep['obj'] == 'obj_val')]['val'].iloc[0])
+        pep_val = float(pep[pep['K'] == k_fixed]['val'].iloc[0])
         rows = dro[(dro['K'] == k_fixed) & np.isclose(dro.get('alpha', alpha), alpha)] \
             if 'alpha' in dro.columns else dro[dro['K'] == k_fixed]
         # In-sample mean from the sweep run's own in-sample objectives (falls
