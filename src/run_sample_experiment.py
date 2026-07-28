@@ -68,7 +68,8 @@ def main():
         exit(0)
     if sys.argv[2] == 'cluster':
         # raise NotImplementedError
-        base_dir = '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out'
+        base_dir = os.environ.get(
+            'DRO_PEP_CERT_OUT', '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out')
     elif sys.argv[2] == 'local':
         base_dir = '.'
     else:
