@@ -49,7 +49,7 @@ Lasso_params = [
 
 LogReg_params = [
     ['alg=grad_desc'],
-    ['alg=nesterov_grad_desc'],
+    ['alg=nesterov_fgm'],
 ]
 
 func_driver_map = {
