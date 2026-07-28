@@ -44,6 +44,14 @@ feature of the experiment, not an artifact.
   the eps grid is logspace 1e-4..10^-0.5 so the selection is not pinned
   at a grid edge (observed selections: GD 0.0175, FGM 0.0088).
 
+## Step sizes
+
+- GD uses `eta = 1.9` (t = 1.9/L, still < 2/L so convergent); tuned on the
+  sampled case over eta in {1, 1.25, 1.5, 1.75, 1.9}: monotone decrease on
+  all 50 tuning instances at every eta, mean gap at K=24 improves 0.119 ->
+  0.092. FGM keeps `eta = 1` as required by its analysis. Set via the
+  runner param tables (config default stays eta: 1).
+
 ## Cluster profiles (observed usage on della)
 
 - dro: 8 cpu x 14G, 6 h (peak 87 GB, 21-28 min per full-K task)
