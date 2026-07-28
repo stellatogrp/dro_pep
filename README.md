@@ -37,7 +37,7 @@ and ```<experiment_name>``` is one of the following:
 Quad
 PDLP
 Lasso
-PDLP
+LogReg
 ```
 
 ### Results
