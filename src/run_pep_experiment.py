@@ -48,7 +48,7 @@ Lasso_params = [
 ]
 
 LogReg_params = [
-    ['alg=grad_desc'],
+    ['alg=grad_desc', 'eta=1.9'],
     ['alg=nesterov_fgm'],
 ]
 
