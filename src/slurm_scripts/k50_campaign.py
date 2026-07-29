@@ -94,12 +94,9 @@ def build_units():
         for K in range(33, 41):
             generic('lasso', alg, 'expectation', K, K, '', 13, '40G', A, 0,
                     env=MKL)
-        for K in range(41, 46):
-            generic('lasso', alg, 'expectation', K, K, '', 7, '60G',
-                    A + ' eps.space_count=7', 0, env=MKL)
-        for K in range(46, 51):
-            generic('lasso', alg, 'expectation', K, K, '', 4, '60G',
-                    A + ' eps.space_count=4', 0, env=MKL)
+        # lasso caps at K=40: on a log axis K=50 adds ~0.1 decade for the
+        # campaign's most fragile jobs (K>=45 cvar sits at the MKL LP64
+        # int32 factor ceiling). logreg/quad run to K=50.
         generic('lasso', alg, 'cvar', 1, 16, '', 39, '12G', A, 0)
         for a, b in [(17, 20), (21, 24)]:
             generic('lasso', alg, 'cvar', a, b, '_trim', 14, '16G', A, 1)
@@ -114,16 +111,7 @@ def build_units():
             generic('lasso', f'{alg}_e4', 'cvar', K, K, '', 4, '90G',
                     A + ' eps.space_count=4 alpha_vals=[0.01]', 0,
                     time='35:59:59', env=MKL)
-        # anchors: one eps per job. K=45 is near the MKL LP64 int32 factor
-        # ceiling (~2^31 nnz); K=50 is likely beyond it -- the 190G/cpu
-        # submission doubles as the falsification test (segfault in
-        # minutes = overflow, not memory).
-        for K, mem in [(45, '120G'), (50, '190G')]:
-            for e in EPS4:
-                generic('lasso', f'{alg}_eps{e}', 'cvar', K, K, '', 1, mem,
-                        f'{A} eps.log_min={e} eps.log_max={e} '
-                        f'eps.space_count=1 alpha_vals=[0.01]', 0,
-                        time='47:59:59', env=MKL)
+
     return units
 
 
