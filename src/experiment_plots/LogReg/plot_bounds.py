@@ -1,9 +1,9 @@
 """Paper figures for the real-data logistic regression certification experiment.
 
 Data layout (symlink or copy run outputs here, relative to this script):
-    data/samples/{GD,FGM}_1_24/{samples.csv, sample_summary_dist.csv}
-    data/pep/{GD,FGM}_1_24/pep.csv
-    data/dro/{GD,FGM}_{exp,cvar}_1_24/dro.csv
+    data/samples/{GD,FGM}_1_50/{samples.csv, sample_summary_dist.csv}
+    data/pep/{GD,FGM}_1_50/pep.csv
+    data/dro/{GD,FGM}_{exp,cvar}_1_50/dro.csv
 
 Outputs: logreg_obj_val.pdf (+ .csv) and logreg_eps_sweep.pdf (+ .csv).
 
@@ -23,17 +23,17 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-K_MAX = 24
+K_MAX = 50
 ALPHA_VALS = [0.01, 0.05, 0.10]
 DEFAULT_ALPHA = 0.01
 COVERAGE_QUANTILE = 0.95
-X_TICKS = [1, 3, 6, 12, 24]
+X_TICKS = [1, 3, 6, 12, 24, 50]
 
 WORST_COLOR = '#FFAA1C'
 EXP_COLOR = '#D81B60'
 CVAR_COLOR = 'tab:blue'
 MARKERS = {'worst': 'o', 'cvar': 's', 'exp': '^'}
-MARKEVERY = [0, 1, 2, 4, 7, 11, 17, 23]   # log-spaced marker positions
+MARKEVERY = [0, 1, 2, 4, 7, 11, 17, 26, 38, 49]   # log-spaced marker positions
 
 
 def set_log_xaxis(axi):
@@ -57,6 +57,10 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
     bounds, chosen_eps = [], []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
+        if rows.empty:   # K not yet computed (partial pull): break the line
+            bounds.append(np.nan)
+            chosen_eps.append(np.nan)
+            continue
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
@@ -79,11 +83,11 @@ def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
 def _load(alg):
     """alg in {'GD', 'FGM'} -> dict of dataframes."""
     return {
-        'samples': pd.read_csv(f'data/samples/{alg}_1_24/samples.csv'),
-        'dist': pd.read_csv(f'data/samples/{alg}_1_24/sample_summary_dist.csv'),
-        'pep': pd.read_csv(f'data/pep/{alg}_1_24/pep.csv'),
-        'exp_dro': pd.read_csv(f'data/dro/{alg}_exp_1_24/dro.csv'),
-        'cvar_dro': pd.read_csv(f'data/dro/{alg}_cvar_1_24/dro.csv'),
+        'samples': pd.read_csv(f'data/samples/{alg}_1_50/samples.csv'),
+        'dist': pd.read_csv(f'data/samples/{alg}_1_50/sample_summary_dist.csv'),
+        'pep': pd.read_csv(f'data/pep/{alg}_1_50/pep.csv'),
+        'exp_dro': pd.read_csv(f'data/dro/{alg}_exp_1_50/dro.csv'),
+        'cvar_dro': pd.read_csv(f'data/dro/{alg}_cvar_1_50/dro.csv'),
     }
 
 
@@ -159,7 +163,7 @@ def main_eps_sweep(k_fixed=12, alpha=DEFAULT_ALPHA, out_path='logreg_eps_sweep.p
     for axi, alg, title in [(ax[0], 'GD', 'Gradient Descent (GD)'),
                             (ax[1], 'FGM', 'Fast Gradient Method (FGM)')]:
         dro = pd.read_csv(f'data/dro/{alg}_sweep_K{k_fixed}/dro.csv')
-        pep = pd.read_csv(f'data/pep/{alg}_1_24/pep.csv')
+        pep = pd.read_csv(f'data/pep/{alg}_1_50/pep.csv')
         pep_val = float(pep[pep['K'] == k_fixed]['val'].iloc[0])
         rows = dro[(dro['K'] == k_fixed) & np.isclose(dro.get('alpha', alpha), alpha)] \
             if 'alpha' in dro.columns else dro[dro['K'] == k_fixed]

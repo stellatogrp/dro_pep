@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter, NullFormatter, NullLocator
 
 # Log-scale x-axis ticks (plain integer labels) for the iteration axis.
-X_LOG_TICKS = [1, 2, 5, 10, 20, 40]
+X_LOG_TICKS = [1, 2, 5, 10, 20, 50]
 
 
 def set_log_xaxis(axi):
@@ -65,8 +65,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-exp_K_max = 40
-cvar_K_max = 40
+exp_K_max = 50
+cvar_K_max = 50
 
 num_eps_vals = 5
 
@@ -157,28 +157,28 @@ def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
 
 # precond = 'precond_avg'
 
-GD_samples = pd.read_csv('data/samples/grad_desc_1_40/samples.csv')
-NGD_samples = pd.read_csv('data/samples/nesterov_fgm_1_40/samples.csv')
+GD_samples = pd.read_csv('data/samples/grad_desc_1_50/samples.csv')
+NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_50/samples.csv')
 
-# GD_samples = pd.read_csv('data/dro/grad_desc_exp_1_40/samples.csv')
-# NGD_samples = pd.read_csv('data/dro/nesterov_fgm_exp_1_40/samples.csv')
+# GD_samples = pd.read_csv('data/dro/grad_desc_exp_1_50/samples.csv')
+# NGD_samples = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_50/samples.csv')
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_fgm_1_40/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_50/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_50/pep.csv')
 
-# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_40/dro.csv')
-# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_40/dro.csv')
-# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_fgm_exp_1_40/dro.csv')
-# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_fgm_cvar_1_40/dro.csv')
+# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_50/dro.csv')
+# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_50/dro.csv')
+# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_exp_1_50/dro.csv')
+# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_cvar_1_50/dro.csv')
 
-GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_40/dro.csv')
-GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_40/dro.csv')
-NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_fgm_exp_1_40/dro.csv')
-NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_fgm_cvar_1_40/dro.csv')
+GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_50/dro.csv')
+GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_50/dro.csv')
+NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_exp_1_50/dro.csv')
+NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_cvar_1_50/dro.csv')
 
 # Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
-GD_dist = pd.read_csv('data/samples/grad_desc_1_40/sample_summary_dist.csv')
-NGD_dist = pd.read_csv('data/samples/nesterov_fgm_1_40/sample_summary_dist.csv')
+GD_dist = pd.read_csv('data/samples/grad_desc_1_50/sample_summary_dist.csv')
+NGD_dist = pd.read_csv('data/samples/nesterov_grad_desc_1_50/sample_summary_dist.csv')
 
 # GD_exp_fit_params = pd.read_csv(f'gd_exp_fit_params.csv')
 # GD_cvar_fit_params = pd.read_csv(f'gd_cvar_fit_params.csv')
