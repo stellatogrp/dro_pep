@@ -93,8 +93,29 @@ class MosekCanonicalizer(ClarabelCanonicalizer):
 
         row_order, domains = self._row_order_and_domains(cones)
         assert row_order.shape[0] == A.shape[0]
-        F = (-A).tocsr()[row_order, :].tocoo()
-        g = np.asarray(b)[row_order]
+        F_csr = (-A).tocsr()[row_order, :]
+        g = np.asarray(b)[row_order].copy()
+
+        # Row equilibration: our rows mix scales across ~8 orders (sample
+        # Gram entries ~R^2 vs bounds ~1e-3), so MOSEK's relative
+        # feasibility test can pass while the absolute epigraph violation
+        # swamps the objective (Clarabel equilibrates internally).
+        # Componentwise cones (nonneg/zero) allow per-row scaling; SOC and
+        # PSD blocks get one scalar per block to stay cone-invariant.
+        row_norms = np.maximum(
+            np.abs(F_csr).max(axis=1).toarray().ravel(), np.abs(g))
+        d = np.ones(F_csr.shape[0])
+        off = 0
+        for kind, n in domains:
+            blk = slice(off, off + n)
+            if kind in ('rplus', 'rzero'):
+                d[blk] = np.maximum(row_norms[blk], 1e-12)
+            else:
+                d[blk] = max(float(row_norms[blk].max()), 1e-12)
+            off += n
+        D_inv = spa.diags(1.0 / d)
+        F = (D_inv @ F_csr).tocoo()
+        g = g / d
 
         x_dim = q.shape[0]
         n_rows = g.shape[0]
@@ -110,6 +131,13 @@ class MosekCanonicalizer(ClarabelCanonicalizer):
                     threads = int(os.environ.get('SLURM_CPUS_PER_TASK', 0))
                 if threads:
                     task.putintparam(mosek.iparam.num_threads, int(threads))
+                # defaults (1e-8) stop early on the ill-conditioned tail of
+                # these problems (~5% above the true optimum at K=24);
+                # tighter tolerances cost only a few extra IPM iterations
+                task.putdouparam(mosek.dparam.intpnt_co_tol_pfeas, 1e-10)
+                task.putdouparam(mosek.dparam.intpnt_co_tol_dfeas, 1e-10)
+                task.putdouparam(mosek.dparam.intpnt_co_tol_rel_gap, 1e-9)
+                task.putdouparam(mosek.dparam.intpnt_co_tol_mu_red, 1e-10)
                 for key, val in getattr(self, 'mosek_params', {}).items():
                     task.putparam(key, str(val))
 

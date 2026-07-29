@@ -8,6 +8,56 @@ from .custom_interp_canonicalizer import CustomInterpCanonicalizer
 log = logging.getLogger(__name__)
 
 
+class _SparseRows:
+    """Drop-in replacement for a dense np.zeros((nrows, ncols)) scratch
+    block: slice assignment collects COO triplets instead of materializing
+    the matrix. The dense scratch dominated memory at large K (the y >= 0
+    identity block alone was ~200GB at K=24)."""
+
+    def __init__(self, nrows, ncols):
+        self.shape = (int(nrows), int(ncols))
+        self._rows = []
+        self._cols = []
+        self._vals = []
+
+    def _indices(self, key, axis):
+        n = self.shape[axis]
+        if isinstance(key, slice):
+            return np.arange(*key.indices(n))
+        return np.array([int(key)])
+
+    def __setitem__(self, key, value):
+        rr = self._indices(key[0], 0)
+        cc = self._indices(key[1], 1)
+        if spa.issparse(value):
+            coo = value.tocoo()
+            self._rows.append(rr[coo.row])
+            self._cols.append(cc[coo.col])
+            self._vals.append(np.asarray(coo.data, dtype=float))
+            return
+        value = np.asarray(value, dtype=float)
+        if value.ndim == 0:
+            block = np.full((rr.size, cc.size), float(value))
+        elif value.ndim == 1:
+            block = value.reshape(rr.size, cc.size)
+        else:
+            block = value
+        assert block.shape == (rr.size, cc.size)
+        nz_r, nz_c = np.nonzero(block)
+        self._rows.append(rr[nz_r])
+        self._cols.append(cc[nz_c])
+        self._vals.append(block[nz_r, nz_c])
+
+    def tocsc(self):
+        if self._rows:
+            r = np.concatenate(self._rows)
+            c = np.concatenate(self._cols)
+            v = np.concatenate(self._vals)
+        else:
+            r = c = v = np.array([])
+        return spa.coo_matrix((v, (r, c)), shape=self.shape).tocsc()
+
+
 class ClarabelCanonicalizer(CustomInterpCanonicalizer):
 
     def __init__(self, pep_data, samples, measure, wrapper, precond=True, precond_type='average', mro_clusters=None):
@@ -112,7 +162,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         b = []
         cones = []
         # constraints: -c^T yi - Tr(G_sample @ Gz_i) - F_sample @ Fz_i - s_i <= 0
-        epi_constr = np.zeros((N, x_dim))
+        epi_constr = _SparseRows(N, x_dim)
         for i in range(N):
             G_sample, F_sample = samples_to_use[i]
             y_start, y_end = y_idx(i, 0), y_idx(i, M)
@@ -125,17 +175,17 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             Gz_start, Gz_end = Gz_idx(i, 0), Gz_idx(i, S_vec)
             epi_constr[i, Gz_start: Gz_end] = -symm_vectorize(G_sample, 2)
 
-        A.append(spa.csc_matrix(epi_constr))
+        A.append(epi_constr.tocsc())
         b.append(np.zeros(N))
         # cones.append(clarabel.NonnegativeConeT(N)) # coalescing with next nonneg cone
 
         # constraints: yi >= 0
-        y_nonneg = np.zeros((N * M, x_dim))
+        y_nonneg = _SparseRows(N * M, x_dim)
         y_start = y_idx(0, 0)
         y_end = y_idx(N-1, M)
-        y_nonneg[0: N*M, y_start: y_end] = -np.eye(N * M)
+        y_nonneg[0: N*M, y_start: y_end] = -spa.identity(N * M)
 
-        A.append(spa.csc_matrix(y_nonneg))
+        A.append(y_nonneg.tocsc())
         b.append(np.zeros(N * M))
         # cones.append(clarabel.NonnegativeConeT(N * M))
         cones.append(clarabel.NonnegativeConeT(N + N * M)) # coalesce from above ineq constraints
@@ -146,11 +196,11 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             H_vec = H_vec_dims[m_psd]
             for i in range(N):
                 H_start, H_end = H_idx(m_psd, i, 0), H_idx(m_psd, i, H_vec)
-                H_psd_constr = np.zeros((H_vec, x_dim))
+                H_psd_constr = _SparseRows(H_vec, x_dim)
                 scaledI = scaled_off_triangles(np.ones((H_mat, H_mat)), np.sqrt(2.))
                 H_psd_constr[:, H_start: H_end] = -scaledI
 
-                A.append(spa.csc_matrix(H_psd_constr))
+                A.append(H_psd_constr.tocsc())
                 b.append(np.zeros(H_vec))
             cones += [clarabel.PSDTriangleConeT(H_mat) for _ in range(N)]
 
@@ -161,7 +211,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         yB_lhs = []
         yB_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((V, x_dim))
+            curr_lhs = _SparseRows(V, x_dim)
             y_start, y_end = y_idx(i, 0), y_idx(i, M)
             curr_lhs[:, y_start: y_end] = -Bm_T
 
@@ -173,7 +223,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             Fz_start, Fz_end = Fz_idx(i, 0), Fz_idx(i, V)
             curr_lhs[:, Fz_start: Fz_end] = np.eye(V)
 
-            yB_lhs.append(spa.csc_matrix(curr_lhs))
+            yB_lhs.append(curr_lhs.tocsc())
             yB_rhs.append(-self.b_obj)
         
         yB_lhs = spa.vstack(yB_lhs)
@@ -192,7 +242,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         yA_lhs = []
         yA_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((S_vec, x_dim))
+            curr_lhs = _SparseRows(S_vec, x_dim)
             y_start, y_end = y_idx(i, 0), y_idx(i, M)
             curr_lhs[:, y_start: y_end] = -Am_T
 
@@ -205,7 +255,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
             curr_lhs[:, Gz_start: Gz_end] = scaledI # need to scale the off-triangles
 
-            yA_lhs.append(spa.csc_matrix(curr_lhs))
+            yA_lhs.append(curr_lhs.tocsc())
             yA_rhs.append(-Aobj_svec)
 
         yA_lhs = spa.vstack(yA_lhs)
@@ -229,7 +279,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         socp_lhs = []
         socp_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((1 + V + S_vec, x_dim))
+            curr_lhs = _SparseRows(1 + V + S_vec, x_dim)
             Fz_start, Fz_end = Fz_idx(i, 0), Fz_idx(i, V)
             Gz_start, Gz_end = Gz_idx(i, 0), Gz_idx(i, S_vec)
 
@@ -242,7 +292,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             curr_lhs[1: V + 1, Fz_start: Fz_end] = -np.diag(F_precond_sq)
             curr_lhs[V + 1:, Gz_start: Gz_end] = -scaledG_mult
 
-            socp_lhs.append(spa.csc_matrix(curr_lhs))
+            socp_lhs.append(curr_lhs.tocsc())
             socp_rhs.append(np.zeros(1 + V + S_vec))
         
         socp_lhs = spa.vstack(socp_lhs)
@@ -390,17 +440,17 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         cones = []
 
         # constraints: y1 >= 0, y2 >= 0
-        y1_nonneg = np.zeros((N * M, x_dim))
+        y1_nonneg = _SparseRows(N * M, x_dim)
         y1_idx_start = y1_idx(0, 0)
         y1_idx_end = y1_idx(N-1, M)
-        y1_nonneg[0: N*M, y1_idx_start: y1_idx_end] = -np.eye(N * M)
+        y1_nonneg[0: N*M, y1_idx_start: y1_idx_end] = -spa.identity(N * M)
 
-        y2_nonneg = np.zeros((N * M, x_dim))
+        y2_nonneg = _SparseRows(N * M, x_dim)
         y2_idx_start = y2_idx(0, 0)
         y2_idx_end = y2_idx(N-1, M)
-        y2_nonneg[0: N*M, y2_idx_start: y2_idx_end] = -np.eye(N * M)
+        y2_nonneg[0: N*M, y2_idx_start: y2_idx_end] = -spa.identity(N * M)
 
-        A += [spa.csc_matrix(y1_nonneg), spa.csc_matrix(y2_nonneg)]
+        A += [y1_nonneg.tocsc(), y2_nonneg.tocsc()]
         b += [np.zeros(2 * N * M)]
         cones += [clarabel.NonnegativeConeT(2 * N * M)]
 
@@ -410,15 +460,15 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             H_vec = H_vec_dims[m_psd]
             for i in range(N):
                 H1_start, H1_end = H1_idx(m_psd, i, 0), H1_idx(m_psd, i, H_vec)
-                H1_psd_constr = np.zeros((H_vec, x_dim))
+                H1_psd_constr = _SparseRows(H_vec, x_dim)
                 scaledI = scaled_off_triangles(np.ones((H_mat, H_mat)), np.sqrt(2.))
                 H1_psd_constr[:, H1_start: H1_end] = -scaledI
 
                 H2_start, H2_end = H2_idx(m_psd, i, 0), H2_idx(m_psd, i, H_vec)
-                H2_psd_constr = np.zeros((H_vec, x_dim))
+                H2_psd_constr = _SparseRows(H_vec, x_dim)
                 H2_psd_constr[:, H2_start: H2_end] = -scaledI
 
-                A += [spa.csc_matrix(H1_psd_constr), spa.csc_matrix(H2_psd_constr)]
+                A += [H1_psd_constr.tocsc(), H2_psd_constr.tocsc()]
                 b.append(np.zeros(2 * H_vec))
             cones += [clarabel.PSDTriangleConeT(H_mat) for _ in range(2 * N)]
 
@@ -438,7 +488,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         scaledI = scaled_off_triangles(np.ones((S_mat, S_mat)), np.sqrt(2.))
         for i in range(N):
             # Gz1, fz1
-            curr_lhs = np.zeros((1 + V + S_vec, x_dim))
+            curr_lhs = _SparseRows(1 + V + S_vec, x_dim)
             fz1_idx_start, fz1_idx_end = fz1_idx(i, 0), fz1_idx(i, V)
             Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
 
@@ -449,11 +499,11 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             curr_lhs[1: V+1, fz1_idx_start: fz1_idx_end] = -np.diag(F_precond_sq)
             curr_lhs[V+1:, Gz1_idx_start: Gz1_idx_end] = -scaledG_mult
 
-            socp_lhs.append(spa.csc_matrix(curr_lhs))
+            socp_lhs.append(curr_lhs.tocsc())
             socp_rhs.append(np.zeros(1 + V + S_vec))
 
             # Gz2, fz2
-            curr_lhs = np.zeros((1 + V + S_vec, x_dim))
+            curr_lhs = _SparseRows(1 + V + S_vec, x_dim)
             fz2_idx_start, fz2_idx_end = fz2_idx(i, 0), fz2_idx(i, V)
             Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
 
@@ -463,7 +513,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             curr_lhs[1:V+1, fz2_idx_start: fz2_idx_end] = -np.diag(F_precond_sq)
             curr_lhs[V+1:, Gz2_idx_start: Gz2_idx_end] = -scaledG_mult
 
-            socp_lhs.append(spa.csc_matrix(curr_lhs))
+            socp_lhs.append(curr_lhs.tocsc())
             socp_rhs.append(np.zeros(1 + V + S_vec))
 
         socp_lhs = spa.vstack(socp_lhs)
@@ -480,7 +530,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         yB_lhs = []
         yB_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((V, x_dim))
+            curr_lhs = _SparseRows(V, x_dim)
             y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
             curr_lhs[:, y1_idx_start: y1_idx_end] = -Bm_T
 
@@ -492,7 +542,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             fz1_idx_start, fz1_idx_end = fz1_idx(i, 0), fz1_idx(i, V)
             curr_lhs[:, fz1_idx_start: fz1_idx_end] = np.eye(V)
 
-            yB_lhs.append(spa.csc_matrix(curr_lhs))
+            yB_lhs.append(curr_lhs.tocsc())
             yB_rhs.append(np.zeros(V))
         
         yB_lhs = spa.vstack(yB_lhs)
@@ -510,7 +560,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         yA_lhs = []
         yA_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((S_vec, x_dim))
+            curr_lhs = _SparseRows(S_vec, x_dim)
             y1_idx_start, y1_idx_end = y1_idx(i, 0), y1_idx(i, M)
             curr_lhs[:, y1_idx_start: y1_idx_end] = -Am_T
 
@@ -522,7 +572,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
             curr_lhs[:, Gz1_idx_start: Gz1_idx_end] = scaledI
 
-            yA_lhs.append(spa.csc_matrix(curr_lhs))
+            yA_lhs.append(curr_lhs.tocsc())
             yA_rhs.append(np.zeros(S_vec))
 
         yA_lhs = spa.vstack(yA_lhs)
@@ -533,7 +583,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         cones += [clarabel.PSDTriangleConeT(S_mat) for _ in range(N)]
 
         # constraints: t - c^T y1 - Tr(G_sample @ Gz1_i) - F_sample @ Fz1_i - s_i <= 0
-        epi1_constr = np.zeros((N, x_dim))
+        epi1_constr = _SparseRows(N, x_dim)
         for i in range(N):
             G_sample, F_sample = samples_to_use[i]
             epi1_constr[i, t_idx] = 1
@@ -547,7 +597,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             Gz1_idx_start, Gz1_idx_end = Gz1_idx(i, 0), Gz1_idx(i, S_vec)
             epi1_constr[i, Gz1_idx_start: Gz1_idx_end] = -symm_vectorize(G_sample, 2)
 
-        A.append(spa.csc_matrix(epi1_constr))
+        A.append(epi1_constr.tocsc())
         b.append(np.zeros(N))
         cones.append(clarabel.NonnegativeConeT(N))
 
@@ -644,7 +694,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
 
         # everything from here on out depends on alpha
         # constraints: -(alpha_inv - 1) t - c^T y2 - Tr(G_sample @ Gz2_i) - F_sample @ Fz2_i - s_i <= 0
-        epi2_constr = np.zeros((N, x_dim))
+        epi2_constr = _SparseRows(N, x_dim)
         for i in range(N):
             G_sample, F_sample = samples_to_use[i]
             epi2_constr[i, t_idx] = -(alpha_inv - 1)
@@ -658,7 +708,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
             epi2_constr[i, Gz2_idx_start: Gz2_idx_end] = -symm_vectorize(G_sample, 2)
 
-        A.append(spa.csc_matrix(epi2_constr))
+        A.append(epi2_constr.tocsc())
         b.append(np.zeros(N))
         cones.append(clarabel.NonnegativeConeT(N))
 
@@ -666,7 +716,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         yB_lhs = []
         yB_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((V, x_dim))
+            curr_lhs = _SparseRows(V, x_dim)
             y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
             curr_lhs[:, y2_idx_start: y2_idx_end] = -Bm_T
 
@@ -678,7 +728,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             fz2_idx_start, fz2_idx_end = fz2_idx(i, 0), fz2_idx(i, V)
             curr_lhs[:, fz2_idx_start: fz2_idx_end] = np.eye(V)
 
-            yB_lhs.append(spa.csc_matrix(curr_lhs))
+            yB_lhs.append(curr_lhs.tocsc())
             yB_rhs.append(-alpha_inv * self.b_obj)
         
         yB_lhs = spa.vstack(yB_lhs)
@@ -694,7 +744,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         yA_lhs = []
         yA_rhs = []
         for i in range(N):
-            curr_lhs = np.zeros((S_vec, x_dim))
+            curr_lhs = _SparseRows(S_vec, x_dim)
             y2_idx_start, y2_idx_end = y2_idx(i, 0), y2_idx(i, M)
             curr_lhs[:, y2_idx_start: y2_idx_end] = -Am_T
 
@@ -706,7 +756,7 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             Gz2_idx_start, Gz2_idx_end = Gz2_idx(i, 0), Gz2_idx(i, S_vec)
             curr_lhs[:, Gz2_idx_start: Gz2_idx_end] = scaledI
 
-            yA_lhs.append(spa.csc_matrix(curr_lhs))
+            yA_lhs.append(curr_lhs.tocsc())
             yA_rhs.append(-alpha_inv * Aobj_svec)
 
         yA_lhs = spa.vstack(yA_lhs)

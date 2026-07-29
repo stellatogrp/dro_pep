@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=60G
+#SBATCH --mem-per-cpu=3G
 #SBATCH --time=00-05:59:59
 #SBATCH -o /scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out/LogReg/runs/%j_bench.txt
 #SBATCH --mail-type=END,FAIL,TIME_LIMIT

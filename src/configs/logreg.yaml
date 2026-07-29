@@ -15,7 +15,7 @@ L: 1.0              # placeholder, overwritten by compute_L_R
 R: 1.0              # placeholder, overwritten by compute_L_R (max ||x*||)
 
 K_min: 1
-K_max: 24
+K_max: 40
 
 seed:
   out_of_sample: 10
@@ -44,7 +44,7 @@ dro_fname: dro.csv
 
 eps:
   space_type: logspace   # logspace or linspace
-  log_min: -4
+  log_min: -5            # one decade below the smallest cross-val selection
   log_max: -0.5
-  space_count: 10
+  space_count: 13
 alpha_vals: [0.01, 0.05, 0.10]
