@@ -25,7 +25,7 @@ plt.rcParams.update({
 
 K_MAX = 24
 ALPHA_VALS = [0.01, 0.05, 0.10]
-DEFAULT_ALPHA = 0.05
+DEFAULT_ALPHA = 0.01
 COVERAGE_QUANTILE = 0.95
 X_TICKS = [1, 3, 6, 12, 24]
 
