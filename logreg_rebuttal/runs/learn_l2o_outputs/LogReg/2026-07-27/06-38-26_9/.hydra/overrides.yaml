@@ -1,8 +1,0 @@
-- learning_framework=l2o
-- pep_obj=obj_val
-- dro_obj=expectation
-- N=20
-- sgd_iters=500
-- alg=nesterov_fgm
-- eta_t=1e-4
-- K_max=[5]

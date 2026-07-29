@@ -1,6 +1,0 @@
-- learning_framework=lpep
-- pep_obj=obj_val
-- sgd_iters=500
-- alg=nesterov_fgm
-- eta_t=1e-4
-- K_max=[10]
