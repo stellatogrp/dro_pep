@@ -32,8 +32,8 @@ export DRO_PEP_DATA=/scratch/gpfs/BSTELLATO/bs37/dro_pep_data
 
 CEXP=${CEXP:?} ; CMEASURE=${CMEASURE:?}
 CKMIN=${CKMIN:?} ; CKMAX=${CKMAX:?}
-CARGS=${CARGS:-} ; CTAG=${CTAG:-run}
-export CEXP CMEASURE CKMIN CKMAX CARGS CTAG
+CARGS=${CARGS:-} ; CTAG=${CTAG:-run} ; CTRIM=${CTRIM:-0}
+export CEXP CMEASURE CKMIN CKMAX CARGS CTAG CTRIM
 
 mkdir -p /scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out/runs
 
@@ -54,6 +54,15 @@ driver = getattr(importlib.import_module(f'experiment_classes.{exp}'),
                  f'{exp}_dro')
 
 overrides = [f'dro_obj={measure}', f'K_min={kmin}', f'K_max={kmax}'] + extra
+# CTRIM levels avoid commas in --export values (sbatch splits on them):
+# 1 -> coarser eps grid + two alphas; 2 -> coarser grid, figure alpha only
+trim = os.environ.get('CTRIM', '0')
+if trim == '1':
+    overrides += ['eps.space_count=7', 'alpha_vals=[0.01,0.05]']
+    tag += '_trim'
+elif trim == '2':
+    overrides += ['eps.space_count=7', 'alpha_vals=[0.01]']
+    tag += '_trim2'
 cfg_dir = os.path.abspath('configs')
 out = (f"/scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out/dro_outputs/{dir_name}/"
        f"chunk_{tag}_{measure}_K{kmin}_{kmax}")
