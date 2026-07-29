@@ -19,6 +19,7 @@ VALID_MEASURES = [
 VALID_WRAPPERS = [
     'cvxpy',
     'clarabel',
+    'mosek',
 ]
 
 
@@ -51,6 +52,9 @@ class DROReformulator(object):
             self.canon = CvxpyCanonicalizer(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
         elif wrapper == 'clarabel':
             self.canon = ClarabelCanonicalizer(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
+        elif wrapper == 'mosek':
+            from .canonicalizers.mosek_canonicalizer import MosekCanonicalizer
+            self.canon = MosekCanonicalizer(pep_data, samples, measure, wrapper, precond=precond, precond_type=precond_type, mro_clusters=mro_clusters)
         else:
             raise NotImplementedError(f'wrapper {wrapper} not implemented')
 
