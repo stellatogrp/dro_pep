@@ -101,7 +101,7 @@ class MosekCanonicalizer(ClarabelCanonicalizer):
 
         with mosek.Env() as env:
             with env.Task() as task:
-                if self.mosek_verbose:
+                if getattr(self, 'mosek_verbose', False):
                     task.set_Stream(mosek.streamtype.log,
                                     lambda s: sys.stdout.write(s))
 
