@@ -50,6 +50,10 @@ if trim == '1':
     overrides += ['eps.log_max=-3', 'eps.space_count=7',
                   'alpha_vals=[0.01,0.05]']
     suffix = '_trim'
+elif trim == '2':   # deepest trim for the largest K: figure alpha only
+    overrides += ['eps.log_max=-3', 'eps.space_count=7',
+                  'alpha_vals=[0.01]']
+    suffix = '_trim2'
 cfg_dir = os.path.abspath('configs')
 out = (f"/scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out/dro_outputs/LogReg/"
        f"chunk_{alg}_eta{eta}_{measure}_K{kmin}_{kmax}{suffix}")
