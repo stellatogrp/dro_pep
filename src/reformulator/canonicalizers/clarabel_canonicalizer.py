@@ -805,10 +805,13 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
             settings.direct_solve_method = 'mkl'
             solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
             log.info('solver switched to mkl correctly')
-        except Exception as e:
+        except BaseException as e:
+            # BaseException on purpose: clarabel's rust panics (e.g.
+            # MKL(NotEnoughMemory) on large problems) surface as
+            # pyo3 PanicException, which 'except Exception' misses
             settings.direct_solve_method = 'qdldl'
             solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
-            log.info('solver did not switch to mkl')
+            log.info(f'solver did not switch to mkl ({type(e).__name__})')
         solution = solver.solve()
         out = {
             'obj': solution.obj_val,
