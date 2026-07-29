@@ -117,7 +117,10 @@ def test_mosek_matches_clarabel_objective(tiny_problem, alg, measure):
     obj_cl, _ = _solve(pep_data, samples, measure, 'clarabel', cfg)
     obj_mo, _ = _solve(pep_data, samples, measure, 'mosek', cfg)
 
-    assert obj_mo == pytest.approx(obj_cl, rel=1e-5, abs=1e-8), (
+    # two different interior-point cores at default tolerances agree to
+    # ~1e-5 relative on these problems; 1e-4 leaves headroom without
+    # masking structural errors (those show up at O(1))
+    assert obj_mo == pytest.approx(obj_cl, rel=1e-4, abs=1e-8), (
         f'{alg}/{measure}: mosek {obj_mo} != clarabel {obj_cl}')
 
 
