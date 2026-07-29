@@ -32,6 +32,7 @@ export DRO_PEP_DATA=/scratch/gpfs/BSTELLATO/bs37/dro_pep_data
 
 CALG=${CALG:?} ; CETA=${CETA:?} ; CMEASURE=${CMEASURE:?}
 CKMIN=${CKMIN:?} ; CKMAX=${CKMAX:?} ; CTRIM=${CTRIM:-0}
+export CALG CETA CMEASURE CKMIN CKMAX CTRIM
 
 cd "$REPO/src"
 python - <<'PY'
