@@ -11,8 +11,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-exp_K_max = 25
-cvar_K_max = 25
+exp_K_max = 40
+cvar_K_max = 40
 
 # num_eps_vals = 7
 
@@ -28,7 +28,7 @@ DEFAULT_ALPHA = 0.05
 COVERAGE_QUANTILE = 0.95
 
 # Log-scale x-axis ticks (plain integer labels) for the iteration axis (data goes to 25).
-X_TICKS = [1, 3, 6, 12, 24]
+X_TICKS = [1, 3, 6, 12, 24, 40]
 
 
 def set_log_xaxis(axi):
@@ -111,28 +111,28 @@ def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
     return tail_loss['obj_val'].mean()
 
 
-ISTA_samples = pd.read_csv('data/samples/ISTA_1_25/samples.csv')
-FISTA_samples = pd.read_csv('data/samples/FISTA_1_25/samples.csv')
+ISTA_samples = pd.read_csv('data/samples/ISTA_1_50/samples.csv')
+FISTA_samples = pd.read_csv('data/samples/FISTA_1_50/samples.csv')
 ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
 FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_25/samples.csv')
-# ISTA_samples = pd.read_csv('data/dro/ISTA_exp_1_25/samples.csv')
-# FISTA_samples = pd.read_csv('data/dro/FISTA_exp_1_25/samples.csv')
+# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_50/samples.csv')
+# ISTA_samples = pd.read_csv('data/dro/ISTA_exp_1_50/samples.csv')
+# FISTA_samples = pd.read_csv('data/dro/FISTA_exp_1_50/samples.csv')
 
 # Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
-ISTA_dist = pd.read_csv('data/samples/ISTA_1_25/sample_summary_dist.csv')
-FISTA_dist = pd.read_csv('data/samples/FISTA_1_25/sample_summary_dist.csv')
+ISTA_dist = pd.read_csv('data/samples/ISTA_1_50/sample_summary_dist.csv')
+FISTA_dist = pd.read_csv('data/samples/FISTA_1_50/sample_summary_dist.csv')
 
-ISTA_pep = pd.read_csv('data/pep/ISTA_1_25/pep.csv')
-FISTA_pep = pd.read_csv('data/pep/FISTA_1_25/pep.csv')
-# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_25/pep.csv')
+ISTA_pep = pd.read_csv('data/pep/ISTA_1_50/pep.csv')
+FISTA_pep = pd.read_csv('data/pep/FISTA_1_50/pep.csv')
+# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_50/pep.csv')
 
-ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_25/dro.csv')
-ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_25/dro.csv')
-FISTA_exp_dro = pd.read_csv('data/dro/FISTA_exp_1_25/dro.csv')
-FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_25/dro.csv')
-# OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_25/dro.csv')
-# OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
+ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_50/dro.csv')
+ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_50/dro.csv')
+FISTA_exp_dro = pd.read_csv('data/dro/FISTA_exp_1_50/dro.csv')
+FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_50/dro.csv')
+# OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_50/dro.csv')
+# OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_50/dro.csv')
 
 
 def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='Lasso_all.pdf'):
