@@ -105,11 +105,19 @@ def build_units():
         for K in range(33, 41):
             generic('lasso', f'{alg}_e4', 'cvar', K, K, '', 4, '45G',
                     A + ' eps.space_count=4 alpha_vals=[0.01]', 0)
-        for K, mem in [(45, '60G'), (50, '90G')]:
+        for K, mem in [(45, '60G'), (50, '60G')]:
             for e in EPS4:
+                # K=50 forces qdldl: MKL Pardiso SEGFAULTS (not a clean
+                # panic) at this size, killing the process before any
+                # fallback. 48h wall since qdldl is single-threaded.
+                extra = 'DRO_PEP_DIRECT_SOLVER=qdldl,' if K == 50 else ''
                 generic('lasso', f'{alg}_eps{e}', 'cvar', K, K, '', 1, mem,
-                        f'{A} eps.log_min={e} eps.log_max={e} '
-                        f'eps.space_count=1 alpha_vals=[0.01]', 0)
+                            f'{A} eps.log_min={e} eps.log_max={e} '
+                            f'eps.space_count=1 alpha_vals=[0.01]', 0)
+                if K == 50:
+                    units[-1]['cmd'] = units[-1]['cmd'].replace(
+                        '--time=23:59:59', '--time=47:59:59').replace(
+                        '--export=ALL,', f'--export=ALL,{extra}')
     return units
 
 

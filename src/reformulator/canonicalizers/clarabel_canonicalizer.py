@@ -1,6 +1,7 @@
 import clarabel
 import numpy as np
 import logging
+import os
 import scipy.sparse as spa
 
 from .custom_interp_canonicalizer import CustomInterpCanonicalizer
@@ -800,6 +801,18 @@ class ClarabelCanonicalizer(CustomInterpCanonicalizer):
         # settings.verbose = True
         # settings.direct_solve_method = 'mkl'
         # solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+
+        forced = os.environ.get('DRO_PEP_DIRECT_SOLVER', '')
+        if forced:
+            # e.g. DRO_PEP_DIRECT_SOLVER=qdldl: skip MKL entirely (its
+            # allocation failure SEGFAULTS at the largest problem sizes,
+            # which no python-level fallback can survive)
+            settings.direct_solve_method = forced
+            solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+            log.info(f'solver forced to {forced}')
+            solution = solver.solve()
+            self.x_sol = solution.x
+            return {'obj': solution.obj_val, 'solvetime': solution.solve_time}
 
         try:
             settings.direct_solve_method = 'mkl'
