@@ -23,17 +23,17 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-K_MAX = 50
+K_MAX = 30
 ALPHA_VALS = [0.01, 0.05, 0.10]
 DEFAULT_ALPHA = 0.01
 COVERAGE_QUANTILE = 0.95
-X_TICKS = [1, 3, 6, 12, 24, 50]
+X_TICKS = [1, 3, 6, 12, 30]
 
 WORST_COLOR = '#FFAA1C'
 EXP_COLOR = '#D81B60'
 CVAR_COLOR = 'tab:blue'
 MARKERS = {'worst': 'o', 'cvar': 's', 'exp': '^'}
-MARKEVERY = [0, 1, 2, 4, 7, 11, 17, 26, 38, 49]   # log-spaced marker positions
+MARKEVERY = [0, 1, 2, 4, 7, 11, 17, 23, 29]   # log-spaced marker positions
 
 
 def set_log_xaxis(axi):
