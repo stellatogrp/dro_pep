@@ -135,7 +135,7 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='logreg_obj_val.pdf'):
         axi.set_position([box.x0, box.y0 + 0.16, box.width, box.height - 0.2])
     handles, labels = ax[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='lower center', ncols=3)
-    plt.suptitle('Logistic Regression (a9a)')
+    plt.suptitle('Logistic Regression (german.numer)')
 
     Ks = list(range(1, K_MAX + 1))
     gd_worst = gd['samples'][['K', 'obj_val']].groupby(['K']).max()
