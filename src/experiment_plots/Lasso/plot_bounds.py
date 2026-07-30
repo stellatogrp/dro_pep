@@ -214,30 +214,30 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='Lasso_all.pdf'):
     ax[0].set_title('ISTA')
 
     # Worst-case
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color, marker=worst_case_marker, **marker_kw)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case', color=worst_case_color, marker=worst_case_marker, **marker_kw)
     # ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color, marker=cvar_marker, **marker_kw)
+    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound, label='CVaR', color=cvar_color, marker=cvar_marker, **marker_kw)
     # ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Expectation
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_bound, label='Expectation (Bound)', color=exp_color, marker=exp_marker, **marker_kw)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_bound, label='Expectation', color=exp_color, marker=exp_marker, **marker_kw)
     # ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # --- Subplot 1: FISTA ---
     ax[1].set_title('FISTA')
 
     # Worst-case
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color, marker=worst_case_marker, **marker_kw)
+    ax[1].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case', color=worst_case_color, marker=worst_case_marker, **marker_kw)
     # ax[1].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_bound, label='Expectation (Bound)', color=exp_color, marker=exp_marker, **marker_kw)
+    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_bound, label='Expectation', color=exp_color, marker=exp_marker, **marker_kw)
     # ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color, marker=cvar_marker, **marker_kw)
+    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound, label='CVaR', color=cvar_color, marker=cvar_marker, **marker_kw)
     # ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
 
@@ -309,11 +309,11 @@ def main_bounds_all_alpha(out_path='Lasso_all_alpha.pdf'):
                             'cvar_eps': FISTA_cvar_eps[idx], 'cvar_sample': FISTA_cvar_k[idx]})
 
         ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound,
-                   label=rf'CVaR $\alpha={alpha}$ (Bound)', color=color)
+                   label=rf'CVaR $\alpha={alpha}$', color=color)
         ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k,
                    label=rf'CVaR $\alpha={alpha}$ (Sample)', linestyle='--', color=color)
         ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound,
-                   label=rf'CVaR $\alpha={alpha}$ (Bound)', color=color)
+                   label=rf'CVaR $\alpha={alpha}$', color=color)
         ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k,
                    label=rf'CVaR $\alpha={alpha}$ (Sample)', linestyle='--', color=color)
 
