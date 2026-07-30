@@ -63,7 +63,14 @@ if trim == '1':
 elif trim == '2':
     overrides += ['eps.space_count=7', 'alpha_vals=[0.01]']
     tag += '_trim2'
+elif trim == '3':   # alphas only; eps range comes from CARGS (eps extension)
+    overrides += ['alpha_vals=[0.01,0.05]']
+    tag += '_trimA'
+elif trim == '4':
+    overrides += ['alpha_vals=[0.01]']
+    tag += '_trimB'
 cfg_dir = os.path.abspath('configs')
+tag += os.environ.get('CSUFFIX', '')
 out = (f"/scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out/dro_outputs/{dir_name}/"
        f"chunk_{tag}_{measure}_K{kmin}_{kmax}")
 os.makedirs(out, exist_ok=True)

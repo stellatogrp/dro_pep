@@ -55,6 +55,7 @@ elif trim == '2':   # deepest trim for the largest K: figure alpha only
                   'alpha_vals=[0.01]']
     suffix = '_trim2'
 cfg_dir = os.path.abspath('configs')
+suffix += os.environ.get('CSUFFIX', '')
 out = (f"/scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out/dro_outputs/LogReg/"
        f"chunk_{alg}_eta{eta}_{measure}_K{kmin}_{kmax}{suffix}")
 os.makedirs(out, exist_ok=True)

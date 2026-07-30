@@ -42,25 +42,25 @@ PEP_MAP = {
 # dro data dir -> chunk glob(s) relative to dro_outputs/<Exp>/
 DRO_MAP = {
     'LogReg': {
-        'GD_exp_1_50':    ['chunk_grad_desc_eta1.9_expectation_*'],
-        'GD_cvar_1_50':   ['chunk_grad_desc_eta1.9_cvar_*'],
-        'FGM_exp_1_50':   ['chunk_nesterov_fgm_eta1_expectation_*'],
-        'FGM_cvar_1_50':  ['chunk_nesterov_fgm_eta1_cvar_*'],
-        'FGM19_exp_1_50': ['chunk_nesterov_fgm_eta1.9_expectation_*'],
+        'GD_exp_1_50':    ['chunk_grad_desc_eta1.9_expectation_*', 'chunk_gd19epsx_expectation_*'],
+        'GD_cvar_1_50':   ['chunk_grad_desc_eta1.9_cvar_*', 'chunk_gd19epsx_*cvar_*'],
+        'FGM_exp_1_50':   ['chunk_nesterov_fgm_eta1_expectation_*', 'chunk_fgm1epsx_expectation_*'],
+        'FGM_cvar_1_50':  ['chunk_nesterov_fgm_eta1_cvar_*', 'chunk_fgm1epsx_*cvar_*'],
+        'FGM19_exp_1_50': ['chunk_nesterov_fgm_eta1.9_expectation_*', 'chunk_fgm19epsx_expectation_*'],
     },
     'Quad': {
-        'grad_desc_exp_1_50':           ['chunk_gd_mu0_expectation_*'],
-        'grad_desc_cvar_1_50':          ['chunk_gd_mu0_cvar_*', 'chunk_gd_mu0_trim*_cvar_*'],
-        'nesterov_grad_desc_exp_1_50':  ['chunk_ngd_mu0_expectation_*'],
-        'nesterov_grad_desc_cvar_1_50': ['chunk_ngd_mu0_cvar_*', 'chunk_ngd_mu0_trim*_cvar_*'],
+        'grad_desc_exp_1_50':           ['chunk_gd_mu0_expectation_*', 'chunk_gdmu0epsx_expectation_*'],
+        'grad_desc_cvar_1_50':          ['chunk_gd_mu0_cvar_*', 'chunk_gd_mu0_trim*_cvar_*', 'chunk_gdmu0epsx_*cvar_*'],
+        'nesterov_grad_desc_exp_1_50':  ['chunk_ngd_mu0_expectation_*', 'chunk_ngdmu0epsx_expectation_*'],
+        'nesterov_grad_desc_cvar_1_50': ['chunk_ngd_mu0_cvar_*', 'chunk_ngd_mu0_trim*_cvar_*', 'chunk_ngdmu0epsx_*cvar_*'],
     },
     'Lasso': {
-        'ISTA_exp_1_50':   ['chunk_ista_expectation_*'],
+        'ISTA_exp_1_50':   ['chunk_ista_expectation_*', 'chunk_istaepsx_expectation_*'],
         'ISTA_cvar_1_50':  ['chunk_ista_cvar_*', 'chunk_ista_trim*_cvar_*',
-                            'chunk_ista_e4_cvar_*', 'chunk_ista_eps*_cvar_*'],
-        'FISTA_exp_1_50':  ['chunk_fista_expectation_*'],
+                            'chunk_ista_e4_cvar_*', 'chunk_ista_eps*_cvar_*', 'chunk_istaepsx_*cvar_*'],
+        'FISTA_exp_1_50':  ['chunk_fista_expectation_*', 'chunk_fistaepsx_expectation_*'],
         'FISTA_cvar_1_50': ['chunk_fista_cvar_*', 'chunk_fista_trim*_cvar_*',
-                            'chunk_fista_e4_cvar_*', 'chunk_fista_eps*_cvar_*'],
+                            'chunk_fista_e4_cvar_*', 'chunk_fista_eps*_cvar_*', 'chunk_fistaepsx_*cvar_*'],
     },
 }
 

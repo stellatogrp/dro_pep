@@ -48,7 +48,7 @@ def build_units():
 
     def generic(exp, tag, measure, a, b, sfx, rows, mem, cargs, trim,
                 time='23:59:59', env=''):
-        top = {'quad': 'Quad', 'lasso': 'Lasso'}[exp]
+        top = {'quad': 'Quad', 'lasso': 'Lasso', 'logreg': 'LogReg'}[exp]
         d = f'{BASE}/{top}/chunk_{tag}{sfx}_{measure}_K{a}_{b}'
         tflag = f',CTRIM={trim}' if trim else ''
         envflag = f'{env},' if env else ''
@@ -112,6 +112,52 @@ def build_units():
                     A + ' eps.space_count=4 alpha_vals=[0.01]', 0,
                     time='35:59:59', env=MKL)
 
+
+    # ---- eps-grid extension (two decades below each grid bottom) ----
+    # Cross-val pinned at the old bottoms; measured at logreg K=32:
+    # bound(1e-8) = in-sample cvar exactly, bound(1e-5) 4x higher
+    # (lambda ~ 80). Four bridge points per experiment; rows merge with
+    # the base grids via the collector's (K, eps, alpha) dedup.
+    LR_EPSX = 'eps.log_min=-7 eps.log_max=-5.4 eps.space_count=4'
+    for tag, cargs in [('gd19epsx', f'alg=grad_desc eta=1.9 {LR_EPSX}'),
+                       ('fgm1epsx', f'alg=nesterov_fgm {LR_EPSX}'),
+                       ('fgm19epsx', f'alg=nesterov_fgm eta=1.9 {LR_EPSX}')]:
+        for a, b in [(1, 32), (33, 50)]:
+            generic('logreg', tag, 'expectation', a, b, '', 4, '6G', cargs, 0)
+    for tag, cargs in [('gd19epsx', f'alg=grad_desc eta=1.9 {LR_EPSX}'),
+                       ('fgm1epsx', f'alg=nesterov_fgm {LR_EPSX}')]:
+        for a, b in [(1, 24), (25, 32), (33, 38), (39, 42), (43, 45)]:
+            generic('logreg', tag, 'cvar', a, b, '_trimA', 8, '6G', cargs, 3)
+        for K in range(46, 51):
+            generic('logreg', tag, 'cvar', K, K, '_trimB', 4, '6G', cargs, 4)
+
+    Q_EPSX = 'mu=0 eps.log_min=-3 eps.log_max=-1.3 eps.space_count=4'
+    for tag, alg in [('gdmu0epsx', 'grad_desc'), ('ngdmu0epsx', 'nesterov_grad_desc')]:
+        cargs = f'alg={alg} {Q_EPSX}'
+        for a, b in [(1, 32), (33, 50)]:
+            generic('quad', tag, 'expectation', a, b, '', 4, '6G', cargs, 0)
+        for a, b in [(1, 24), (25, 32), (33, 38), (39, 42), (43, 45)]:
+            generic('quad', tag, 'cvar', a, b, '_trimA', 8, '6G', cargs, 3)
+        for K in range(46, 51):
+            generic('quad', tag, 'cvar', K, K, '_trimB', 4, '6G', cargs, 4)
+
+    L_EPSX = 'eps.space_type=logspace eps.log_min=-5 eps.log_max=-3.2 eps.space_count=4'
+    for alg in ['ista', 'fista']:
+        tag = f'{alg}epsx'
+        cargs = f'alg={alg} {L_EPSX}'
+        MKL = 'DRO_PEP_DIRECT_SOLVER=mkl'
+        generic('lasso', tag, 'expectation', 1, 32, '', 4, '24G', cargs, 0)
+        for K in range(33, 41):
+            generic('lasso', tag, 'expectation', K, K, '', 4, '40G', cargs, 0,
+                    env=MKL)
+        generic('lasso', tag, 'cvar', 1, 24, '_trimA', 8, '16G', cargs, 3)
+        for K in range(25, 29):
+            generic('lasso', tag, 'cvar', K, K, '_trimA', 8, '24G', cargs, 3)
+        for K in range(29, 33):
+            generic('lasso', tag, 'cvar', K, K, '_trimA', 8, '32G', cargs, 3)
+        for K in range(33, 41):
+            generic('lasso', tag, 'cvar', K, K, '_trimB', 4, '90G', cargs, 4,
+                    time='35:59:59', env=MKL)
     return units
 
 
