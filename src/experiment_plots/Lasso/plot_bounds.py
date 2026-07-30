@@ -11,8 +11,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-exp_K_max = 40
-cvar_K_max = 40
+exp_K_max = 30   # data to 40 landing; bump when complete
+cvar_K_max = 30
 
 # num_eps_vals = 7
 
@@ -21,14 +21,14 @@ groups = 100
 
 # CVaR confidence levels (must match cfg.alpha_vals used to generate dro.csv).
 ALPHA_VALS = [0.01, 0.05, 0.10]
-DEFAULT_ALPHA = 0.05
+DEFAULT_ALPHA = 0.01
 
 # Across-repeat coverage level used to cross-validate the eps choice. Independent of alpha
 # (the within-experiment CVaR tail level) -- it is NOT 1 - alpha.
 COVERAGE_QUANTILE = 0.95
 
 # Log-scale x-axis ticks (plain integer labels) for the iteration axis (data goes to 25).
-X_TICKS = [1, 3, 6, 12, 24, 40]
+X_TICKS = [1, 3, 6, 12, 24, 30]
 
 
 def set_log_xaxis(axi):
@@ -56,6 +56,10 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
     chosen_eps = []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
+        if rows.empty:
+            bounds.append(np.nan)
+            chosen_eps.append(np.nan)
+            continue
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
