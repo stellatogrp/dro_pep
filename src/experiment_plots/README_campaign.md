@@ -16,6 +16,12 @@ distribution, K = 1..30, N = 100 in-sample).
 
 On the cluster clone (`git pull` first):
 
+- **Datasets first**: compute nodes have NO internet. Before submitting
+  anything for a new dataset, download it on the login node into the
+  cache, e.g.
+  `cd /scratch/gpfs/BSTELLATO/bs37/dro_pep_data && curl -sO https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary/<name>`
+  (a missing file kills every job in seconds with a urllib DNS error).
+
 - samples stage: `sbatch --array=0-2 slurm_scripts/run_logreg_cert_samples.sh`
   (0 = GD at eta=1.9, 1 = FGM, 2 = FGM at eta=1.9, the step-size bonus)
 - worst-case PEP: `sbatch --array=0-1 slurm_scripts/run_logreg_cert_pep.sh`
