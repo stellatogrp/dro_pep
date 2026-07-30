@@ -5,18 +5,12 @@ times one solve at a fixed (eps, alpha), reporting build time, solve time,
 objective, and peak RSS. Modes:
 
   clarabel        production path (ClarabelCanonicalizer, direct conic build)
-  mosek           same conic data through the MOSEK Optimizer API directly
-                  (threads set from --threads / SLURM_CPUS_PER_TASK)
   cvxpy-clarabel  same reformulation through CVXPY, Clarabel core
-  cvxpy-mosek     same reformulation through CVXPY, MOSEK core
 
 Run each mode as its own process so peak RSS is attributable:
 
-  python bench_dro_solver.py --mode cvxpy-mosek --alg nesterov_fgm \
+  python bench_dro_solver.py --mode clarabel --alg nesterov_fgm \
       --K 24 --measure cvar --eps 1e-4 --alpha 0.01
-
-Extra MOSEK parameters pass through as repeatable
---mosek-param MSK_IPAR_XXX=value pairs.
 """
 import argparse
 import json
@@ -39,20 +33,10 @@ def peak_rss_gb():
     return rss / scale
 
 
-def parse_mosek_param(kv):
-    key, val = kv.split('=', 1)
-    for cast in (int, float):
-        try:
-            return key, cast(val)
-        except ValueError:
-            continue
-    return key, val
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--mode', required=True,
-                   choices=['clarabel', 'mosek', 'cvxpy-clarabel', 'cvxpy-mosek'])
+                   choices=['clarabel', 'cvxpy-clarabel'])
     p.add_argument('--alg', default='nesterov_fgm',
                    choices=['grad_desc', 'nesterov_fgm'])
     p.add_argument('--K', type=int, default=24)
@@ -64,8 +48,6 @@ def main():
                    help='step-size multiplier override (default: config)')
     p.add_argument('--threads', type=int, default=None,
                    help='solver threads (default: SLURM_CPUS_PER_TASK or all cores)')
-    p.add_argument('--mosek-param', action='append', default=[],
-                   metavar='KEY=VALUE')
     p.add_argument('--out', default=None, help='JSON output path')
     args = p.parse_args()
 
@@ -122,10 +104,7 @@ def main():
         samples.append((np.asarray(G), np.asarray(F)))
     data_s = time.perf_counter() - t0
 
-    if args.mode in ('clarabel', 'mosek'):
-        wrapper = args.mode
-    else:
-        wrapper = 'cvxpy'
+    wrapper = 'clarabel' if args.mode == 'clarabel' else 'cvxpy'
     t0 = time.perf_counter()
     DR = DROReformulator(
         pep_data, samples, args.measure, wrapper,
@@ -133,21 +112,9 @@ def main():
         mro_clusters=None)
     build_s = time.perf_counter() - t0
 
-    if args.mode == 'mosek':
-        DR.canon.set_mosek_opts(
-            threads=threads,
-            params=dict(parse_mosek_param(kv) for kv in args.mosek_param),
-            verbose=True)
-    elif args.mode == 'cvxpy-clarabel':
+    if args.mode == 'cvxpy-clarabel':
         import cvxpy as cp
         DR.canon.set_solver(cp.CLARABEL, verbose=True)
-    elif args.mode == 'cvxpy-mosek':
-        import cvxpy as cp
-        mosek_params = {'MSK_IPAR_NUM_THREADS': threads}
-        mosek_params.update(dict(parse_mosek_param(kv)
-                                 for kv in args.mosek_param))
-        DR.canon.set_solver(cp.MOSEK, mosek_params=mosek_params,
-                            verbose=True, ignore_dpp=True)
 
     DR.set_params(eps=args.eps, alpha=args.alpha)
     t0 = time.perf_counter()

@@ -11,7 +11,7 @@
 #SBATCH --mail-user=bs37@princeton.edu
 
 # Experiment-agnostic per-K-range DRO runner. Pass via --export:
-#   CEXP      logreg | lasso | quad   (config name and driver module)
+#   CEXP      experiment config/driver name (currently: logreg)
 #   CMEASURE  expectation | cvar
 #   CKMIN, CKMAX  K range
 #   CARGS     extra hydra overrides, space-separated

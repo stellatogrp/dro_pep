@@ -15,7 +15,7 @@ L: 1.0              # placeholder, overwritten by compute_L_R
 R: 1.0              # placeholder, overwritten by compute_L_R (max ||x*||)
 
 K_min: 1
-K_max: 50
+K_max: 30
 
 seed:
   out_of_sample: 10

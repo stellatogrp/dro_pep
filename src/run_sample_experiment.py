@@ -34,17 +34,12 @@ def simple_lstsq_driver(cfg):
 
 
 Quad_params = [
-    ['alg=grad_desc'],
-    ['alg=nesterov_grad_desc'],
 ]
 
 Huber_params = [
 ]
 
 Lasso_params = [
-    ['alg=ista'],
-    ['alg=fista'],
-    ['alg=optista'],
 ]
 
 LogReg_params = [

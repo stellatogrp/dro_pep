@@ -14,7 +14,7 @@ lambd: 0.0001      # placeholder, overwritten by compute_lambda_R
 R: 1.0             # placeholder, overwritten by compute_lambda_R (max ||x*||)
 
 K_min: 1
-K_max: 50
+K_max: 25
 
 seed:
   A: 0
@@ -34,8 +34,8 @@ precond: false # true = apply preconditioning; false = identity (no precondition
 precond_type: average # 'average' or 'max' or 'min' (only used when precond: true)
 
 training:
-  expectation_N: 100
-  cvar_N: 100
+  expectation_N: 1
+  cvar_N: 1
 num_clusters:
   expectation: null
   cvar: null

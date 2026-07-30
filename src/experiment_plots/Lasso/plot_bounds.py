@@ -11,8 +11,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-exp_K_max = 30   # data to 40 landing; bump when complete
-cvar_K_max = 30
+exp_K_max = 25
+cvar_K_max = 25
 
 # num_eps_vals = 7
 
@@ -21,14 +21,14 @@ groups = 100
 
 # CVaR confidence levels (must match cfg.alpha_vals used to generate dro.csv).
 ALPHA_VALS = [0.01, 0.05, 0.10]
-DEFAULT_ALPHA = 0.01
+DEFAULT_ALPHA = 0.05
 
 # Across-repeat coverage level used to cross-validate the eps choice. Independent of alpha
 # (the within-experiment CVaR tail level) -- it is NOT 1 - alpha.
 COVERAGE_QUANTILE = 0.95
 
 # Log-scale x-axis ticks (plain integer labels) for the iteration axis (data goes to 25).
-X_TICKS = [1, 3, 6, 12, 24, 30]
+X_TICKS = [1, 3, 6, 12, 24]
 
 
 def set_log_xaxis(axi):
@@ -56,10 +56,6 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
     chosen_eps = []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
-        if rows.empty:
-            bounds.append(np.nan)
-            chosen_eps.append(np.nan)
-            continue
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
@@ -115,28 +111,28 @@ def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
     return tail_loss['obj_val'].mean()
 
 
-ISTA_samples = pd.read_csv('data/samples/ISTA_1_50/samples.csv')
-FISTA_samples = pd.read_csv('data/samples/FISTA_1_50/samples.csv')
+ISTA_samples = pd.read_csv('data/samples/ISTA_1_25/samples.csv')
+FISTA_samples = pd.read_csv('data/samples/FISTA_1_25/samples.csv')
 ISTA_worst_cases = ISTA_samples[['K', 'obj_val']].groupby(['K']).max()
 FISTA_worst_cases = FISTA_samples[['K', 'obj_val']].groupby(['K']).max()
-# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_50/samples.csv')
-# ISTA_samples = pd.read_csv('data/dro/ISTA_exp_1_50/samples.csv')
-# FISTA_samples = pd.read_csv('data/dro/FISTA_exp_1_50/samples.csv')
+# OptISTA_samples = pd.read_csv('data/samples/OptISTA_1_25/samples.csv')
+# ISTA_samples = pd.read_csv('data/dro/ISTA_exp_1_25/samples.csv')
+# FISTA_samples = pd.read_csv('data/dro/FISTA_exp_1_25/samples.csv')
 
 # Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
-ISTA_dist = pd.read_csv('data/samples/ISTA_1_50/sample_summary_dist.csv')
-FISTA_dist = pd.read_csv('data/samples/FISTA_1_50/sample_summary_dist.csv')
+ISTA_dist = pd.read_csv('data/samples/ISTA_1_25/sample_summary_dist.csv')
+FISTA_dist = pd.read_csv('data/samples/FISTA_1_25/sample_summary_dist.csv')
 
-ISTA_pep = pd.read_csv('data/pep/ISTA_1_50/pep.csv')
-FISTA_pep = pd.read_csv('data/pep/FISTA_1_50/pep.csv')
-# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_50/pep.csv')
+ISTA_pep = pd.read_csv('data/pep/ISTA_1_25/pep.csv')
+FISTA_pep = pd.read_csv('data/pep/FISTA_1_25/pep.csv')
+# OptISTA_pep = pd.read_csv('data/pep/OptISTA_1_25/pep.csv')
 
-ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_50/dro.csv')
-ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_50/dro.csv')
-FISTA_exp_dro = pd.read_csv('data/dro/FISTA_exp_1_50/dro.csv')
-FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_50/dro.csv')
-# OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_50/dro.csv')
-# OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_50/dro.csv')
+ISTA_exp_dro = pd.read_csv('data/dro/ISTA_exp_1_25/dro.csv')
+ISTA_cvar_dro = pd.read_csv('data/dro/ISTA_cvar_1_25/dro.csv')
+FISTA_exp_dro = pd.read_csv('data/dro/FISTA_exp_1_25/dro.csv')
+FISTA_cvar_dro = pd.read_csv('data/dro/FISTA_cvar_1_25/dro.csv')
+# OptISTA_exp_dro = pd.read_csv('data/dro/OptISTA_exp_1_25/dro.csv')
+# OptISTA_cvar_dro = pd.read_csv('data/dro/OptISTA_cvar_1_25/dro.csv')
 
 
 def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='Lasso_all.pdf'):
@@ -200,30 +196,30 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='Lasso_all.pdf'):
     ax[0].set_title('ISTA')
 
     # Worst-case
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 17, 24, 29], markersize=5, color=worst_case_color)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_pep[ISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
     # ax[0].plot(range(1, exp_K_max + 1), ISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
         
     # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 17, 24, 29], markersize=5, color=cvar_color)
+    ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color)
     # ax[0].plot(range(1, cvar_K_max + 1), ISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Expectation
-    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 17, 24, 29], markersize=5, color=exp_color)
+    ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_bound, label='Expectation (Bound)', color=exp_color)
     # ax[0].plot(range(1, exp_K_max + 1), ISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # --- Subplot 1: FISTA ---
     ax[1].set_title('FISTA')
 
     # Worst-case
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 17, 24, 29], markersize=5, color=worst_case_color)
+    ax[1].plot(range(1, exp_K_max + 1), FISTA_pep[FISTA_pep['obj'] == 'obj_val']['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
     # ax[1].plot(range(1, exp_K_max + 1), FISTA_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
-    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 17, 24, 29], markersize=5, color=exp_color)
+    ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_bound, label='Expectation (Bound)', color=exp_color)
     # ax[1].plot(range(1, exp_K_max + 1), FISTA_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
-    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 17, 24, 29], markersize=5, color=cvar_color)
+    ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_bound, label='CVaR (Bound)', color=cvar_color)
     # ax[1].plot(range(1, cvar_K_max + 1), FISTA_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
 

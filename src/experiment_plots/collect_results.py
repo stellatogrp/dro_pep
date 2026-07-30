@@ -1,9 +1,9 @@
-"""Collect K=50 campaign results from the cluster into the plot layouts.
+"""Collect logreg campaign results from the cluster into the plot layout.
 
 Run LOCALLY from src/experiment_plots/:
 
   python collect_results.py --pull            # ssh+tar the CSVs into _mirror/
-  python collect_results.py --merge           # _mirror/ -> {LogReg,Quad,Lasso}/data/
+  python collect_results.py --merge           # _mirror/ -> LogReg/data/
   python collect_results.py --pull --merge    # both
 
 Pull grabs only CSVs (small). Merge concatenates the per-K-range chunk
@@ -13,8 +13,8 @@ results from timed-out jobs), and copies the newest samples/pep outputs
 per SLURM array task. Everything the figures need is then under
 <Exp>/data/, and each plot_bounds.py runs on it directly.
 
-The chunk-dir naming matches slurm_scripts/k50_campaign.py (the campaign
-manifest); see that file for the submission side.
+The chunk-dir naming matches slurm_scripts/logreg_campaign.py (the
+campaign manifest); see that file for the submission side.
 """
 import argparse
 import csv
@@ -31,13 +31,9 @@ MIRROR = os.path.join(HERE, '_mirror')
 # samples/pep SLURM array task id -> data dir name
 SAMPLES_MAP = {
     'LogReg': {'0': 'GD_1_50', '1': 'FGM_1_50', '2': 'FGM19_bonus_1_50'},
-    'Quad':   {'0': 'grad_desc_1_50', '1': 'nesterov_grad_desc_1_50'},
-    'Lasso':  {'0': 'ISTA_1_50', '1': 'FISTA_1_50', '2': 'OptISTA_1_50'},
 }
 PEP_MAP = {
     'LogReg': {'0': 'GD_1_50', '1': 'FGM_1_50'},
-    'Quad':   {'0': 'grad_desc_1_50', '1': 'nesterov_grad_desc_1_50'},
-    'Lasso':  {'0': 'ISTA_1_50', '1': 'FISTA_1_50', '2': 'OptISTA_1_50'},
 }
 # dro data dir -> chunk glob(s) relative to dro_outputs/<Exp>/
 DRO_MAP = {
@@ -47,20 +43,6 @@ DRO_MAP = {
         'FGM_exp_1_50':   ['chunk_nesterov_fgm_eta1_expectation_*', 'chunk_fgm1epsx_expectation_*'],
         'FGM_cvar_1_50':  ['chunk_nesterov_fgm_eta1_cvar_*', 'chunk_fgm1epsx_*cvar_*'],
         'FGM19_exp_1_50': ['chunk_nesterov_fgm_eta1.9_expectation_*', 'chunk_fgm19epsx_expectation_*'],
-    },
-    'Quad': {
-        'grad_desc_exp_1_50':           ['chunk_gd_mu0_expectation_*', 'chunk_gdmu0epsx_expectation_*'],
-        'grad_desc_cvar_1_50':          ['chunk_gd_mu0_cvar_*', 'chunk_gd_mu0_trim*_cvar_*', 'chunk_gdmu0epsx_*cvar_*'],
-        'nesterov_grad_desc_exp_1_50':  ['chunk_ngd_mu0_expectation_*', 'chunk_ngdmu0epsx_expectation_*'],
-        'nesterov_grad_desc_cvar_1_50': ['chunk_ngd_mu0_cvar_*', 'chunk_ngd_mu0_trim*_cvar_*', 'chunk_ngdmu0epsx_*cvar_*'],
-    },
-    'Lasso': {
-        'ISTA_exp_1_50':   ['chunk_ista_expectation_*', 'chunk_istaeps[xm]*_expectation_*'],
-        'ISTA_cvar_1_50':  ['chunk_ista_cvar_*', 'chunk_ista_trim*_cvar_*',
-                            'chunk_ista_e4_cvar_*', 'chunk_ista_eps*_cvar_*', 'chunk_istaeps[xm]*_cvar_*'],
-        'FISTA_exp_1_50':  ['chunk_fista_expectation_*', 'chunk_fistaeps[xm]*_expectation_*'],
-        'FISTA_cvar_1_50': ['chunk_fista_cvar_*', 'chunk_fista_trim*_cvar_*',
-                            'chunk_fista_e4_cvar_*', 'chunk_fista_eps*_cvar_*', 'chunk_fistaeps[xm]*_cvar_*'],
     },
 }
 
@@ -90,7 +72,7 @@ def newest_task_dirs(stage, exp):
 
 
 def merge():
-    for exp in ['LogReg', 'Quad', 'Lasso']:
+    for exp in ['LogReg']:
         data = os.path.join(HERE, exp, 'data')
         # samples + pep
         for stage, mapping in [('sample', SAMPLES_MAP[exp]), ('pep', PEP_MAP[exp])]:

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter, NullFormatter, NullLocator
 
 # Log-scale x-axis ticks (plain integer labels) for the iteration axis.
-X_LOG_TICKS = [1, 2, 5, 10, 20, 50]
+X_LOG_TICKS = [1, 2, 5, 10, 20, 40]
 
 
 def set_log_xaxis(axi):
@@ -65,8 +65,8 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-exp_K_max = 50
-cvar_K_max = 50
+exp_K_max = 40
+cvar_K_max = 40
 
 num_eps_vals = 5
 
@@ -77,7 +77,7 @@ METRIC = 'obj_val'
 
 # CVaR confidence levels (must match cfg.alpha_vals used to generate dro.csv).
 ALPHA_VALS = [0.01, 0.05, 0.10]
-DEFAULT_ALPHA = 0.01
+DEFAULT_ALPHA = 0.05
 
 # Across-repeat coverage level used to cross-validate the eps choice. Independent of alpha
 # (the within-experiment CVaR tail level) -- it is NOT 1 - alpha.
@@ -100,10 +100,6 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
     chosen_eps = []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
-        if rows.empty:   # K not yet computed (partial pull): break the line
-            bounds.append(np.nan)
-            chosen_eps.append(np.nan)
-            continue
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
@@ -161,28 +157,28 @@ def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
 
 # precond = 'precond_avg'
 
-GD_samples = pd.read_csv('data/samples/grad_desc_1_50/samples.csv')
-NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_50/samples.csv')
+GD_samples = pd.read_csv('data/samples/grad_desc_1_40/samples.csv')
+NGD_samples = pd.read_csv('data/samples/nesterov_fgm_1_40/samples.csv')
 
-# GD_samples = pd.read_csv('data/dro/grad_desc_exp_1_50/samples.csv')
-# NGD_samples = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_50/samples.csv')
+# GD_samples = pd.read_csv('data/dro/grad_desc_exp_1_40/samples.csv')
+# NGD_samples = pd.read_csv('data/dro/nesterov_fgm_exp_1_40/samples.csv')
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_50/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_50/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_fgm_1_40/pep.csv')
 
-# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_50/dro.csv')
-# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_50/dro.csv')
-# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_exp_1_50/dro.csv')
-# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_cvar_1_50/dro.csv')
+# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_40/dro.csv')
+# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_40/dro.csv')
+# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_fgm_exp_1_40/dro.csv')
+# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_fgm_cvar_1_40/dro.csv')
 
-GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_50/dro.csv')
-GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_50/dro.csv')
-NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_exp_1_50/dro.csv')
-NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_cvar_1_50/dro.csv')
+GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_40/dro.csv')
+GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_40/dro.csv')
+NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_fgm_exp_1_40/dro.csv')
+NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_fgm_cvar_1_40/dro.csv')
 
 # Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
-GD_dist = pd.read_csv('data/samples/grad_desc_1_50/sample_summary_dist.csv')
-NGD_dist = pd.read_csv('data/samples/nesterov_grad_desc_1_50/sample_summary_dist.csv')
+GD_dist = pd.read_csv('data/samples/grad_desc_1_40/sample_summary_dist.csv')
+NGD_dist = pd.read_csv('data/samples/nesterov_fgm_1_40/sample_summary_dist.csv')
 
 # GD_exp_fit_params = pd.read_csv(f'gd_exp_fit_params.csv')
 # GD_cvar_fit_params = pd.read_csv(f'gd_cvar_fit_params.csv')
@@ -251,15 +247,15 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='quad_nonstrongcvx.pdf'):
     ax[0].set_title('Gradient Descent (GD)')
 
     # Worst-case
-    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=worst_case_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
     # ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=cvar_color)
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_bound, label='CVaR (Bound)', color=cvar_color)
     # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Expectation
-    ax[0].plot(range(1, exp_K_max + 1), GD_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=exp_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_exp_bound, label='Expectation (Bound)', color=exp_color)
     # ax[0].plot(range(1, exp_K_max + 1), GD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # Theoretical asymptotic slope guides (GD only), over the tail and above each bound.
@@ -276,15 +272,15 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='quad_nonstrongcvx.pdf'):
     ax[1].set_title('Fast Gradient Method (FGM)')
 
     # Worst-case
-    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=worst_case_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
-    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=exp_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_bound, label='Expectation (Bound)', color=exp_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
-    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=cvar_color)
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_bound, label='CVaR (Bound)', color=cvar_color)
     # ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Theoretical asymptotic slope guides (FGM): O(K^-2), O(K^-3 log K), O(K^-2.5).

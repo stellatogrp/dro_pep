@@ -11,7 +11,7 @@
 #SBATCH --mail-user=bs37@princeton.edu
 
 # Solver benchmark on a single DRO subproblem. Pass BMODE (clarabel |
-# cvxpy-clarabel | cvxpy-mosek) and optionally BALG, BK, BMEASURE, BETA
+# cvxpy-clarabel) and optionally BALG, BK, BMEASURE, BETA
 # via --export. One mode per job so sacct MaxRSS is attributable.
 
 module purge 2>/dev/null || true
