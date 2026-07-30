@@ -1,8 +1,8 @@
 """LogReg certification campaign manifest: audit and (re)submission.
 
 Single source of truth for the DRO chunk jobs of the real-data logistic
-regression experiment (K = 1..30, N = 100 in-sample). Run ON THE CLUSTER
-from src/:
+regression experiment (german.numer standardized, K = 1..30,
+N = 100 in-sample). Run ON THE CLUSTER from src/:
 
   python slurm_scripts/logreg_campaign.py audit             # completeness report
   python slurm_scripts/logreg_campaign.py submit --dry-run  # print sbatch cmds
@@ -12,14 +12,11 @@ A unit is complete when its chunk dir has a dro.csv containing at least
 the expected number of rows (eps grid x alphas) for every K in its range.
 The audit skips units whose job is currently in the queue.
 
-Two eps grids per (algorithm, measure):
-  base grid  logspace 1e-5..10^-0.5, 13 points (config default)
-  extension  logspace 1e-7..4e-6, 4 points ('epsx' units) -- the base
-             bottom was too coarse: cross-validation pinned there while
-             the optimal radius sits near 1e-6 at large K (measured:
-             bound(eps->0) equals the in-sample statistic exactly).
-The collector (experiment_plots/collect_results.py) merges both grids by
-deduplicating rows on (K, eps, alpha).
+One wide eps grid per (algorithm, measure): logspace 1e-8..10^-0.5,
+16 points (config default). The bottom decade matters: the certificate is
+exact in the eps -> 0 limit but has nonzero radius sensitivity, so a grid
+that stops too high silently inflates the tail bounds (measured on the
+earlier a9a campaign).
 
 NOTE: never pass `-q` to sbatch (it means --qos and silently swallows
 the next flag).
@@ -41,44 +38,24 @@ def _unit(dirpath, a, b, rows, cmd):
 def build_units():
     units = []
 
-    def base(alg, eta, measure, a, b, sfx, rows, trim):
-        d = f'{BASE}/LogReg/chunk_{alg}_eta{eta}_{measure}_K{a}_{b}{sfx}'
-        tflag = f',CTRIM={trim}' if trim else ''
+    def base(alg, eta, measure, a, b, rows):
+        d = f'{BASE}/LogReg/chunk_{alg}_eta{eta}_{measure}_K{a}_{b}'
         cmd = (f'sbatch --time=23:59:59 --mem-per-cpu=6G '
                f'--export=ALL,CALG={alg},CETA={eta},CMEASURE={measure},'
-               f'CKMIN={a},CKMAX={b}{tflag} {S}/run_logreg_cert_dro_chunk.sh')
+               f'CKMIN={a},CKMAX={b} {S}/run_logreg_cert_dro_chunk.sh')
         units.append(_unit(d, a, b, rows, cmd))
 
-    def epsx(tag, cargs, measure, a, b, sfx, rows, trim):
-        d = f'{BASE}/LogReg/chunk_{tag}{sfx}_{measure}_K{a}_{b}'
-        tflag = f',CTRIM={trim}' if trim else ''
-        cmd = (f'sbatch --time=23:59:59 --mem-per-cpu=6G '
-               f'--export=ALL,CEXP=logreg,CTAG={tag},CMEASURE={measure},'
-               f'CKMIN={a},CKMAX={b}{tflag},CARGS="{cargs}" '
-               f'{S}/run_cert_dro_chunk.sh')
-        units.append(_unit(d, a, b, rows, cmd))
-
-    # base grid: GD@1.9, FGM@1 (both measures), FGM@1.9 (bonus, exp only)
+    # single grid (config: logspace 1e-8..10^-0.5, 16 points): exp = 16
+    # rows/K, cvar = 48 rows/K (3 alphas)
     for alg, eta in [('grad_desc', '1.9'), ('nesterov_fgm', '1'),
                      ('nesterov_fgm', '1.9')]:
-        for a, b in [(1, 24), (25, 32)]:
-            base(alg, eta, 'expectation', a, b, '', 13, 0)
+        for a, b in [(1, 16), (17, 30)]:
+            base(alg, eta, 'expectation', a, b, 16)
     for alg, eta in [('grad_desc', '1.9'), ('nesterov_fgm', '1')]:
-        for a, b in [(1, 16), (17, 24)]:
-            base(alg, eta, 'cvar', a, b, '', 39, 0)
+        for a, b in [(1, 12), (13, 20), (21, 24)]:
+            base(alg, eta, 'cvar', a, b, 48)
         for K in range(25, 31):
-            base(alg, eta, 'cvar', K, K, '', 39, 0)
-
-    # eps extension (see module docstring)
-    EPSX = 'eps.log_min=-7 eps.log_max=-5.4 eps.space_count=4'
-    for tag, cargs in [('gd19epsx', f'alg=grad_desc eta=1.9 {EPSX}'),
-                       ('fgm1epsx', f'alg=nesterov_fgm {EPSX}'),
-                       ('fgm19epsx', f'alg=nesterov_fgm eta=1.9 {EPSX}')]:
-        epsx(tag, cargs, 'expectation', 1, 32, '', 4, 0)
-    for tag, cargs in [('gd19epsx', f'alg=grad_desc eta=1.9 {EPSX}'),
-                       ('fgm1epsx', f'alg=nesterov_fgm {EPSX}')]:
-        epsx(tag, cargs, 'cvar', 1, 24, '_trimA', 8, 3)
-        epsx(tag, cargs, 'cvar', 25, 32, '_trimA', 8, 3)
+            base(alg, eta, 'cvar', K, K, 48)
     return units
 
 

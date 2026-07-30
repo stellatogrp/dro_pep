@@ -33,6 +33,7 @@ LIBSVM_URL = 'https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary'
 DATASETS = {
     'a9a': ('a9a', 123),
     'ijcnn1': ('ijcnn1.bz2', 22),
+    'german.numer': ('german.numer', 24),
 }
 
 
@@ -57,17 +58,27 @@ def fetch_dataset_file(name):
     return path
 
 
-def load_dataset(name, intercept=True):
+def load_dataset(name, intercept=True, standardize=False):
     """Load a LIBSVM binary dataset as (A, b) with b in {0, 1}.
 
     A is dense float64 (m_total, d); an intercept column of ones is appended
     when intercept=True (matching the synthetic LogReg convention).
+
+    standardize=True z-scores each feature over the FULL dataset before
+    subsampling (global reparametrization: subsample separability and f*
+    are unchanged, conditioning improves). The intercept is appended after
+    and left untouched.
     """
     fname, n_features = DATASETS[name]
     path = fetch_dataset_file(name)
     X, y = load_svmlight_file(str(path), n_features=n_features)
     A = np.asarray(X.todense(), dtype=np.float64)
     b = np.where(np.asarray(y) > 0, 1.0, 0.0)
+    if standardize:
+        mu = A.mean(axis=0)
+        sd = A.std(axis=0)
+        sd[sd == 0] = 1.0
+        A = (A - mu) / sd
     if intercept:
         A = np.hstack([A, np.ones((A.shape[0], 1))])
     log.info(f'{name}: loaded {A.shape[0]} rows, {A.shape[1]} features '

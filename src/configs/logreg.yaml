@@ -3,9 +3,10 @@
 # subsamples of the LIBSVM dataset; L and R are calibrated at runtime from
 # cfg.N reference instances (seed.in_sample) and overwrite the placeholders.
 
-dataset: a9a        # a9a or ijcnn1
+dataset: german.numer   # a9a, ijcnn1, or german.numer
 intercept: true
-m_sub: 600          # rows per instance; keep well above d to avoid separability
+standardize: true   # z-score features over the full dataset before subsampling
+m_sub: 300          # rows per instance; keep well above d to avoid separability
 delta: 0.0          # l2 regularization; 0 -> smooth convex (mu = 0)
 xopt_norm_max: 1.0e4   # separability guard: reject instances with ||x*|| above
 max_resample: 50
@@ -44,7 +45,7 @@ dro_fname: dro.csv
 
 eps:
   space_type: logspace   # logspace or linspace
-  log_min: -5            # one decade below the smallest cross-val selection
+  log_min: -8            # metric scale ~1e-6 at K=30; grid reaches the SAA limit
   log_max: -0.5
-  space_count: 13
+  space_count: 16
 alpha_vals: [0.01, 0.05, 0.10]

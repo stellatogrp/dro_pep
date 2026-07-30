@@ -120,7 +120,8 @@ def simulate_alg(cfg, A, b, x_opt, f_opt, t):
 
 def logreg_samples(cfg):
     log.info(cfg)
-    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept)
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
     compute_L_R(cfg, A_full, b_full)   # sets cfg.L, cfg.R (consistent across stages)
     t = cfg.eta / cfg.L
     log.info(f'L: {cfg.L}, R: {cfg.R}, step size: {t}')
@@ -163,7 +164,8 @@ def logreg_samples(cfg):
 
 def logreg_pep(cfg):
     log.info(cfg)
-    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept)
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
     compute_L_R(cfg, A_full, b_full)   # sets cfg.L, cfg.R (consistent across stages)
 
     res = []
@@ -236,7 +238,8 @@ def logreg_pep_subproblem(cfg, mu, L, k, obj, return_problem=False):
 
 def logreg_dro(cfg):
     log.info(cfg)
-    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept)
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
     L, R, ref_instances = compute_L_R(cfg, A_full, b_full)
     mu = float(cfg.delta)
     t = cfg.eta / L

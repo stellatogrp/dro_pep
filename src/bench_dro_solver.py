@@ -73,7 +73,8 @@ def main():
     from reformulator.dro_reformulator import DROReformulator
 
     t0 = time.perf_counter()
-    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept)
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
     L, R, ref_instances = compute_L_R(cfg, A_full, b_full)
     mu = float(cfg.delta)
     t = cfg.eta / L
