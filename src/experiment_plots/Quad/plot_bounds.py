@@ -251,15 +251,15 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='quad_nonstrongcvx.pdf'):
     ax[0].set_title('Gradient Descent (GD)')
 
     # Worst-case
-    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=worst_case_color)
     # ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_bound, label='CVaR (Bound)', color=cvar_color)
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=cvar_color)
     # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Expectation
-    ax[0].plot(range(1, exp_K_max + 1), GD_exp_bound, label='Expectation (Bound)', color=exp_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=exp_color)
     # ax[0].plot(range(1, exp_K_max + 1), GD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # Theoretical asymptotic slope guides (GD only), over the tail and above each bound.
@@ -276,15 +276,15 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='quad_nonstrongcvx.pdf'):
     ax[1].set_title('Fast Gradient Method (FGM)')
 
     # Worst-case
-    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=worst_case_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
-    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_bound, label='Expectation (Bound)', color=exp_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=exp_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
-    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_bound, label='CVaR (Bound)', color=cvar_color)
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 19, 30, 49], markersize=5, color=cvar_color)
     # ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Theoretical asymptotic slope guides (FGM): O(K^-2), O(K^-3 log K), O(K^-2.5).

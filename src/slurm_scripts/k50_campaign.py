@@ -158,6 +158,35 @@ def build_units():
         for K in range(33, 41):
             generic('lasso', tag, 'cvar', K, K, '_trimB', 4, '90G', cargs, 4,
                     time='35:59:59', env=MKL)
+
+    # ---- lasso mid-grid densification: the base linspace(1e-3, 1e-1, 7)
+    # is log-sparse exactly where cross-val selects (jumps of 17x between
+    # adjacent grid points caused visible bound discontinuities in K) ----
+    L_EPSM = ('eps.space_type=logspace eps.log_min=-3 eps.log_max=-1 '
+              'eps.space_count=7')
+    L_EPSM5 = ('eps.space_type=logspace eps.log_min=-3 eps.log_max=-1 '
+               'eps.space_count=5')
+    for alg in ['ista', 'fista']:
+        tag = f'{alg}epsm'
+        MKL = 'DRO_PEP_DIRECT_SOLVER=mkl'
+        generic('lasso', tag, 'expectation', 1, 32, '', 7, '24G',
+                f'alg={alg} {L_EPSM}', 0)
+        for K in range(33, 41):
+            generic('lasso', tag, 'expectation', K, K, '', 5, '40G',
+                    f'alg={alg} {L_EPSM5}', 0, env=MKL)
+        generic('lasso', tag, 'cvar', 1, 16, '_trimA', 14, '16G',
+                f'alg={alg} {L_EPSM}', 3)
+        generic('lasso', tag, 'cvar', 17, 24, '_trimA', 14, '16G',
+                f'alg={alg} {L_EPSM}', 3)
+        for K in range(25, 29):
+            generic('lasso', tag, 'cvar', K, K, '_trimA', 14, '24G',
+                    f'alg={alg} {L_EPSM}', 3)
+        for K in range(29, 33):
+            generic('lasso', tag, 'cvar', K, K, '_trimB', 7, '32G',
+                    f'alg={alg} {L_EPSM}', 4)
+        for K in range(33, 41):
+            generic('lasso', tag, 'cvar', K, K, '_trimB', 5, '90G',
+                    f'alg={alg} {L_EPSM5}', 4, time='35:59:59', env=MKL)
     return units
 
 

@@ -95,11 +95,11 @@ def _plot_panel(axi, title, d, exp_bound, cvar_bound):
     Ks = range(1, K_MAX + 1)
     pep_vals = np.asarray(d['pep']['val'])[:K_MAX]  # single metric per run
     axi.set_title(title)
-    axi.plot(Ks, pep_vals, label='Worst-case (Bound)', color=WORST_COLOR,
+    axi.plot(Ks, pep_vals, label='Worst-case', color=WORST_COLOR,
              marker=MARKERS['worst'], markevery=MARKEVERY, markersize=5)
-    axi.plot(Ks, cvar_bound, label='CVaR (Bound)', color=CVAR_COLOR,
+    axi.plot(Ks, cvar_bound, label='CVaR', color=CVAR_COLOR,
              marker=MARKERS['cvar'], markevery=MARKEVERY, markersize=5)
-    axi.plot(Ks, exp_bound, label='Expectation (Bound)', color=EXP_COLOR,
+    axi.plot(Ks, exp_bound, label='Expectation', color=EXP_COLOR,
              marker=MARKERS['exp'], markevery=MARKEVERY, markersize=5)
     return pep_vals
 
@@ -173,7 +173,7 @@ def main_eps_sweep(k_fixed=12, alpha=DEFAULT_ALPHA, out_path='logreg_eps_sweep.p
         emp_mean = float(ins[ins['K'] == k_fixed]['obj_val'].mean())
 
         axi.plot(rows['eps'], rows['dro_feas_sol'], color=CVAR_COLOR, marker='s', markersize=5,
-                 label='DRO-PEP (Bound)')
+                 label='DRO-PEP')
         axi.axhline(pep_val, color=WORST_COLOR, linestyle='--', label='Worst-case (PEP)')
         axi.axhline(emp_mean, color=EXP_COLOR, linestyle=':', label='In-sample mean')
         axi.set_xscale('log')

@@ -55,12 +55,12 @@ DRO_MAP = {
         'nesterov_grad_desc_cvar_1_50': ['chunk_ngd_mu0_cvar_*', 'chunk_ngd_mu0_trim*_cvar_*', 'chunk_ngdmu0epsx_*cvar_*'],
     },
     'Lasso': {
-        'ISTA_exp_1_50':   ['chunk_ista_expectation_*', 'chunk_istaepsx_expectation_*'],
+        'ISTA_exp_1_50':   ['chunk_ista_expectation_*', 'chunk_istaeps[xm]*_expectation_*'],
         'ISTA_cvar_1_50':  ['chunk_ista_cvar_*', 'chunk_ista_trim*_cvar_*',
-                            'chunk_ista_e4_cvar_*', 'chunk_ista_eps*_cvar_*', 'chunk_istaepsx_*cvar_*'],
-        'FISTA_exp_1_50':  ['chunk_fista_expectation_*', 'chunk_fistaepsx_expectation_*'],
+                            'chunk_ista_e4_cvar_*', 'chunk_ista_eps*_cvar_*', 'chunk_istaeps[xm]*_cvar_*'],
+        'FISTA_exp_1_50':  ['chunk_fista_expectation_*', 'chunk_fistaeps[xm]*_expectation_*'],
         'FISTA_cvar_1_50': ['chunk_fista_cvar_*', 'chunk_fista_trim*_cvar_*',
-                            'chunk_fista_e4_cvar_*', 'chunk_fista_eps*_cvar_*', 'chunk_fistaepsx_*cvar_*'],
+                            'chunk_fista_e4_cvar_*', 'chunk_fista_eps*_cvar_*', 'chunk_fistaeps[xm]*_cvar_*'],
     },
 }
 
