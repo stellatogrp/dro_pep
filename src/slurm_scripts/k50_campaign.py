@@ -219,7 +219,7 @@ def running_unit_dirs():
             return m.group(1) if m else None
         kmin, kmax = gm(r'CKMIN=(\d+)'), gm(r'CKMAX=(\d+)')
         meas = gm(r'CMEASURE=(\w+)')
-        sfx = {None: '', '0': '', '1': '_trim', '2': '_trim2'}[gm(r'CTRIM=(\d)')]
+        sfx = {None: '', '0': '', '1': '_trim', '2': '_trim2', '3': '_trimA', '4': '_trimB'}[gm(r'CTRIM=(\d)')]
         if not (kmin and meas):
             continue
         if 'CEXP=' in line:
