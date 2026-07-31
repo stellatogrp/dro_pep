@@ -24,8 +24,8 @@ sample_N: 100
 cross_val_repeats: 100
 
 training:
-  expectation_N: 1
-  cvar_N: 1
+  expectation_N: 100  # in-sample N of the DRO problem (matches the figure runs)
+  cvar_N: 100
   lyap_N: 1
 num_clusters:
   expectation: null

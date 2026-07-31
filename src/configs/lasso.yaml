@@ -34,8 +34,8 @@ precond: false # true = apply preconditioning; false = identity (no precondition
 precond_type: average # 'average' or 'max' or 'min' (only used when precond: true)
 
 training:
-  expectation_N: 1
-  cvar_N: 1
+  expectation_N: 100  # in-sample N of the DRO problem (matches the figure runs)
+  cvar_N: 100
 num_clusters:
   expectation: null
   cvar: null
