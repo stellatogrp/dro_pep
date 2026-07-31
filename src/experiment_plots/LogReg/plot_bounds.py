@@ -55,17 +55,34 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
         dro = dro[np.isclose(dro['alpha'], alpha)]
     thr = quantile_threshold_per_k(dist, metric_col)
     bounds, chosen_eps = [], []
+    grid_sizes, uncovered = {}, []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
         if rows.empty:   # K not yet computed (partial pull): break the line
             bounds.append(np.nan)
             chosen_eps.append(np.nan)
             continue
+        grid_sizes[k] = len(rows)
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
+        if not len(feas):
+            # No eps in the grid certifies the empirical threshold. The
+            # fallback below plots a bound that does NOT cover it -- almost
+            # always a truncated eps grid at this K, not a real result.
+            uncovered.append((k, float(rows['dro_feas_sol'].max()), float(thr.loc[k])))
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
         bounds.append(float(pick['dro_feas_sol']))
         chosen_eps.append(float(pick['eps']))
+    tag = label or metric_col
+    if grid_sizes:
+        full = max(grid_sizes.values())
+        partial = {k: n for k, n in grid_sizes.items() if n < full}
+        if partial:
+            print(f"[cross_val WARNING] {tag}: incomplete eps grid (full={full}) "
+                  f"at K={partial}; rerun those chunks before trusting the curve")
+    for k, got, want in uncovered:
+        print(f"[cross_val WARNING] {tag}: K={k} has no covering eps -- plotted "
+              f"bound {got:.4e} < threshold {want:.4e} (fallback, not a certificate)")
     print(f"[cross_val eps] {label or metric_col}: {[round(e, 6) for e in chosen_eps]}")
     return bounds, chosen_eps
 
@@ -75,9 +92,18 @@ def compute_empirical_avg(samples, k):
 
 
 def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
-    samples_k = samples[samples['K'] == k]
-    quantile = samples_k['obj_val'].quantile(1 - alpha)
-    return samples_k[samples_k['obj_val'] >= quantile]['obj_val'].mean()
+    """Mean of the worst (largest) alpha-fraction.
+
+    Must match experiment_classes/lasso.py:compute_empirical_cvar, which
+    produces the cvar_<alpha> columns of sample_summary_dist.csv used as the
+    cross-validation threshold. A quantile-based variant disagrees with it
+    whenever alpha*n is not an integer (e.g. top-10 vs top-9 at alpha=0.05,
+    n=200), which would make the plotted sample curve and the threshold
+    driving the bound two different quantities.
+    """
+    vals = samples.loc[samples['K'] == k, 'obj_val'].to_numpy()
+    n_tail = max(1, int(np.ceil(alpha * len(vals))))
+    return float(np.mean(np.sort(vals)[-n_tail:]))
 
 
 def _load(alg):

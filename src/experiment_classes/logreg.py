@@ -129,6 +129,14 @@ def logreg_samples(cfg):
     alpha_vals = list(cfg.alpha_vals)
     n_repeats = cfg.cross_val_repeats
 
+    # The repeats must not redraw the in-sample set, or one of them silently
+    # becomes in-sample and the "cross-validation" coverage is optimistic.
+    if 0 <= cfg.seed.in_sample - cfg.seed.out_of_sample < n_repeats:
+        raise ValueError(
+            f'seed.in_sample={cfg.seed.in_sample} falls inside the repeat range '
+            f'[{cfg.seed.out_of_sample}, {cfg.seed.out_of_sample + n_repeats}); '
+            f'move seed.out_of_sample so the two streams stay disjoint')
+
     dist = []
     for j in trange(n_repeats):
         rng = np.random.default_rng(cfg.seed.out_of_sample + j)
@@ -202,7 +210,6 @@ def logreg_pep_subproblem(cfg, mu, L, k, obj, return_problem=False):
             x = x - t * func.gradient(x)
         x_last = x
     elif cfg.alg == 'nesterov_fgm':
-        q = cfg.delta / cfg.L
         beta = np.asarray(jax_get_nesterov_fgm_beta_sequence(mu, L, k))
         y = x0
         x_curr = x0

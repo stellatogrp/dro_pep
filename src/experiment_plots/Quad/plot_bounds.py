@@ -98,17 +98,34 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
     thr = quantile_threshold_per_k(dist, metric_col)
     bounds = []
     chosen_eps = []
+    grid_sizes, uncovered = {}, []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
         if rows.empty:   # K not yet computed (partial pull): break the line
             bounds.append(np.nan)
             chosen_eps.append(np.nan)
             continue
+        grid_sizes[k] = len(rows)
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
+        if not len(feas):
+            # No eps in the grid certifies the empirical threshold. The
+            # fallback below plots a bound that does NOT cover it -- almost
+            # always a truncated eps grid at this K, not a real result.
+            uncovered.append((k, float(rows['dro_feas_sol'].max()), float(thr.loc[k])))
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
         bounds.append(float(pick['dro_feas_sol']))
         chosen_eps.append(float(pick['eps']))
+    tag = label or metric_col
+    if grid_sizes:
+        full = max(grid_sizes.values())
+        partial = {k: n for k, n in grid_sizes.items() if n < full}
+        if partial:
+            print(f"[cross_val WARNING] {tag}: incomplete eps grid (full={full}) "
+                  f"at K={partial}; rerun those chunks before trusting the curve")
+    for k, got, want in uncovered:
+        print(f"[cross_val WARNING] {tag}: K={k} has no covering eps -- plotted "
+              f"bound {got:.4e} < threshold {want:.4e} (fallback, not a certificate)")
     print(f"[cross_val eps] {label or metric_col}: {[round(e, 6) for e in chosen_eps]}")
     return bounds, chosen_eps
 
@@ -153,10 +170,17 @@ def compute_cvar_prob(samples, pep, dro, k, alpha=0.1):
 
 
 def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
-    samples_k = samples[samples['K'] == k]
-    quantile = samples_k[METRIC].quantile(1-alpha)
-    tail_loss = samples_k[samples_k[METRIC] >= quantile]
-    return tail_loss[METRIC].mean()
+    """Mean of the worst (largest) alpha-fraction.
+
+    Must match experiment_classes/lasso.py:compute_empirical_cvar, which
+    produces the cvar_<alpha> columns of sample_summary_dist.csv used as the
+    cross-validation threshold. A quantile-based variant disagrees with it
+    whenever alpha*n is not an integer (e.g. top-10 vs top-9 at alpha=0.05,
+    n=200).
+    """
+    vals = samples.loc[samples['K'] == k, METRIC].to_numpy()
+    n_tail = max(1, int(np.ceil(alpha * len(vals))))
+    return float(np.mean(np.sort(vals)[-n_tail:]))
 
 
 # precond = 'precond_avg'
@@ -175,10 +199,10 @@ NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_50/pep.csv')
 # NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_exp_1_50/dro.csv')
 # NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_cvar_1_50/dro.csv')
 
-GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_50/dro.csv')
-GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_50/dro.csv')
-NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_exp_1_50/dro.csv')
-NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_grad_desc_cvar_1_50/dro.csv')
+GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_50/dro.csv')
+GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_50/dro.csv')
+NGD_exp_dro = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_50/dro.csv')
+NGD_cvar_dro = pd.read_csv('data/dro/nesterov_grad_desc_cvar_1_50/dro.csv')
 
 # Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
 GD_dist = pd.read_csv('data/samples/grad_desc_1_50/sample_summary_dist.csv')

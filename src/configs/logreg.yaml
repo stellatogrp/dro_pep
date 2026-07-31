@@ -19,7 +19,11 @@ K_min: 1
 K_max: 30
 
 seed:
-  out_of_sample: 10
+  # Cross-validation repeat j draws with default_rng(out_of_sample + j), so the
+  # two streams must stay disjoint over j = 0 .. cross_val_repeats-1. With
+  # out_of_sample = 10 the j = 10 repeat collided with in_sample = 20 and
+  # redrew the calibration/in-sample instance set exactly.
+  out_of_sample: 1000
   in_sample: 20
 
 N: 200

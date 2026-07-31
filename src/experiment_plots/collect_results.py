@@ -92,7 +92,9 @@ def merge():
             files = []
             for pat in patterns:
                 files += glob.glob(f'{MIRROR}/dro_outputs/{exp}/{pat}/dro.csv')
-            files = sorted(set(files))
+            # Oldest first, so a rerun (written later) supersedes the partial
+            # result it replaces. Path order does not imply run order.
+            files = sorted(set(files), key=os.path.getmtime)
             if not files:
                 print(f'  [{exp}] dro/{name}: no chunks found')
                 continue
@@ -102,13 +104,17 @@ def merge():
                     r = list(csv.reader(fh))
                 if not r:
                     continue
+                if header is not None and r[0] != header:
+                    raise ValueError(
+                        f'{f}: header {r[0]} differs from {header}; '
+                        f'chunks were produced by incompatible code versions')
                 header = r[0]
                 iK = header.index('K')
                 iE = header.index('eps')
                 iA = header.index('alpha') if 'alpha' in header else None
                 for row in r[1:]:
                     key = (float(row[iK]), float(row[iE]),
-                           float(row[iA]) if iA is not None else None)
+                           float(row[iA]) if iA is not None else -1.0)
                     rows[key] = row   # later file wins (reruns supersede)
             ordered = [rows[k] for k in sorted(rows)]
             dst = os.path.join(data, 'dro', name)
