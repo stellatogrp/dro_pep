@@ -37,7 +37,13 @@ dro_fname: dro.csv
 
 eps:
   space_type: logspace   # logspace or linspace
-  log_min: -2
-  log_max: 2
+  log_min: -1             # base grid of the archived K=50 runs: logspace(-1, 1, 13)
+  log_max: 1
   space_count: 13
+# The figure data also includes a small-radius extension, logspace(-3, -1.3, 6),
+# run via slurm_scripts/run_cert_dro_chunk.sh with CEXP=quad CTRIM=3
+# CARGS="alg=... eps.log_min=-3 eps.log_max=-1.3 eps.space_count=6".
+# The grid must reach the SAA limit: a bottom that is too high silently
+# inflates the certificates (cross-validation pins there; measured CVaR
+# inflation up to 12x at K=40 on the un-extended grid).
 alpha_vals: [0.01, 0.05, 0.10]
