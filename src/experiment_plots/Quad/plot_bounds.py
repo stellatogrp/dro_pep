@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter, NullFormatter, NullLocator
 
 # Log-scale x-axis ticks (plain integer labels) for the iteration axis.
-X_LOG_TICKS = [1, 2, 5, 10, 20, 50]
+X_LOG_TICKS = [1, 2, 5, 10, 20, 40]
 
 
 def set_log_xaxis(axi):
