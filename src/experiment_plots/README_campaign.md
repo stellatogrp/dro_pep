@@ -55,3 +55,13 @@ number) and `logreg_eps_sweep.pdf`. The Wasserstein radius is
 cross-validated per K inside `plot_bounds.py` (95% coverage across the
 100 sampling repeats in `sample_summary_dist.csv`); chosen radii are
 printed to stdout.
+
+## Quad and Lasso small-radius eps extensions
+
+The base grids of the K=50 quad campaign (logspace 1e-1..10) and the Lasso
+campaign (linspace 1e-3..1e-1) stop too high: cross-validation pins at the
+grid bottom and inflates the certificates (measured quad CVaR inflation up
+to 12x at K=40). `slurm_scripts/submit_epsx.sh` submits the extension DRO
+chunks (quad logspace 1e-3..10^-1.3, lasso logspace 1e-5..10^-3.2) at the
+figure horizons (K<=40 / K<=25). Merge the resulting `chunk_*_epsx_*` dirs
+into the plot data by concatenation with dedup on (K, eps, alpha).
