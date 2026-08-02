@@ -18,7 +18,7 @@ def set_log_xaxis(axi):
 
 # Theory slope guide lines: drawn only over the asymptotic tail [K_THEORY_START, K_max],
 # and floated THEORY_OFFSET x above the bound so they read as over-approximating slopes.
-K_THEORY_START = 20
+K_THEORY_START = 30
 THEORY_OFFSET = 1.3
 # Horizontal gap (in points) between the end of a guide line and its inline label.
 # Increase to push the labels further into the whitespace when the axes are narrowed.
