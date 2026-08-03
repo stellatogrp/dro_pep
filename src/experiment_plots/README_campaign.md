@@ -62,8 +62,24 @@ printed to stdout.
 Lasso DRO runs. It submits every eps grid behind the committed figure data:
 the base grid from the config plus the refinements that cannot be written as
 one hydra grid (quad: 23 radii spanning [1e-5, 10]; Lasso: 19 spanning
-[1e-5, 1e-1]). Merge its chunk outputs as in step 3, dedup on
-(K, eps, alpha).
+[1e-5, 1e-1]). Collect exactly as in step 3 --
+
+    python collect_results.py --pull --merge
+
+-- which now builds `{Quad,Lasso}/data/dro/` alongside `LogReg/data/`. Only the
+DRO stage is collected for these two: their samples and pep come from
+`run_q{pep,dro}_experiment.sh` under a different scratch root and their
+`data/samples`, `data/pep` dirs are committed as-is.
+
+Two things the rerun does not give you. It covers alpha in {0.01, 0.05}
+(`CTRIM=3`), the levels the paper figures use; the alpha=0.10 rows in the
+committed CSVs are left over from the earlier K=50 campaign, sit on the base
+grid only, and pin at the grid bottom for every K. And the merge globs the
+`base`/`ext`/`ext2`/`mid` chunk tags by name rather than by wildcard, so the
+older `chunk_*_{epsx,epsx2,basefill}_*` dirs still on the cluster are skipped
+on purpose: those predate `training.{expectation,cvar}_N = 100`, and since
+`dro.csv` carries no `N` column their rows would silently overwrite the N=100
+ones under the (K, eps, alpha) dedup.
 
 Grid resolution is not cosmetic. Cross-validation selects the smallest radius
 whose certificate covers the empirical threshold, so a grid that bottoms out

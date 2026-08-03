@@ -2,10 +2,11 @@
 # Full DRO campaign for the Quad and Lasso figures, submitted from scratch.
 #
 # This is the reproducibility entry point: on a fresh clone, `bash
-# submit_epsx.sh` produces exactly the (K, eps, alpha) rows behind the
-# committed experiment_plots/{Quad,Lasso}/data/dro CSVs. The configs carry the
-# base eps grid; the refinements below cannot be expressed as a single hydra
-# grid, which is why they live here rather than in the YAML.
+# submit_epsx.sh` produces the (K, eps) rows at the alphas the paper figures
+# use -- {0.01, 0.05}, via CTRIM=3 -- behind the committed
+# experiment_plots/{Quad,Lasso}/data/dro CSVs. The configs carry the base eps
+# grid; the refinements below cannot be expressed as a single hydra grid,
+# which is why they live here rather than in the YAML.
 #
 #   Quad  (K <= 40): base logspace(-1, 1, 13) from configs/quad.yaml
 #                  + logspace(-3, -1.3, 6)   small-radius extension

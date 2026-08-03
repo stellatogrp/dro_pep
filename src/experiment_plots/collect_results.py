@@ -1,4 +1,4 @@
-"""Collect logreg campaign results from the cluster into the plot layout.
+"""Collect campaign results from the cluster into the plot layout.
 
 Run LOCALLY from src/experiment_plots/:
 
@@ -13,8 +13,14 @@ results from timed-out jobs), and copies the newest samples/pep outputs
 per SLURM array task. Everything the figures need is then under
 <Exp>/data/, and each plot_bounds.py runs on it directly.
 
-The chunk-dir naming matches slurm_scripts/logreg_campaign.py (the
-campaign manifest); see that file for the submission side.
+The chunk-dir naming matches the submission side: LogReg comes from
+slurm_scripts/logreg_campaign.py (the campaign manifest), Quad and Lasso
+from slurm_scripts/submit_epsx.sh. Rename a CTAG there and the globs in
+DRO_MAP have to follow.
+
+Quad/Lasso samples and pep are NOT collected here: they are produced by
+run_q{pep,dro}_experiment.sh under a different scratch root, and their
+data/ dirs are committed. Only the DRO chunks are merged for them.
 """
 import argparse
 import csv
@@ -35,6 +41,25 @@ SAMPLES_MAP = {
 PEP_MAP = {
     'LogReg': {'0': 'GD_1_50', '1': 'FGM_1_50'},
 }
+# Eps grids submitted per experiment by slurm_scripts/submit_epsx.sh; the grid
+# name is the second field of the CTAG, so <alg>_<grid> identifies a chunk set.
+QUAD_GRIDS = ('base', 'ext', 'ext2')
+LASSO_GRIDS = ('base', 'ext', 'mid')
+
+
+def epsx_globs(alg, grids, measure):
+    """Chunk globs for one (alg, measure) across submit_epsx.sh's eps grids.
+
+    Deliberately enumerates the grids instead of globbing chunk_<alg>_*: the
+    July campaign left chunk_<alg>_{epsx,epsx2,basefill}_* dirs on the cluster
+    that were run at training N=1, before configs/{quad,lasso}.yaml moved to
+    N=100. Those rows share (K, eps, alpha) keys with the N=100 reruns but
+    carry different values (up to ~13% apart at K=1) and dro.csv has no N
+    column to tell them apart, so a wildcard here would silently mix runs.
+    """
+    return [f'chunk_{alg}_{g}_trimA_{measure}_*' for g in grids]
+
+
 # dro data dir -> chunk glob(s) relative to dro_outputs/<Exp>/
 DRO_MAP = {
     'LogReg': {
@@ -43,6 +68,21 @@ DRO_MAP = {
         'FGM_exp_1_50':   ['chunk_nesterov_fgm_eta1_expectation_*', 'chunk_fgm1epsx_expectation_*'],
         'FGM_cvar_1_50':  ['chunk_nesterov_fgm_eta1_cvar_*', 'chunk_fgm1epsx_*cvar_*'],
         'FGM19_exp_1_50': ['chunk_nesterov_fgm_eta1.9_expectation_*', 'chunk_fgm19epsx_expectation_*'],
+    },
+    # The expectation chunks also write an alpha column (0.01), so expectation
+    # and cvar must stay in separate globs or the (K, eps, alpha) dedup below
+    # would collapse them onto each other.
+    'Quad': {
+        'grad_desc_exp_1_50':            epsx_globs('gd', QUAD_GRIDS, 'expectation'),
+        'grad_desc_cvar_1_50':           epsx_globs('gd', QUAD_GRIDS, 'cvar'),
+        'nesterov_grad_desc_exp_1_50':   epsx_globs('fgm', QUAD_GRIDS, 'expectation'),
+        'nesterov_grad_desc_cvar_1_50':  epsx_globs('fgm', QUAD_GRIDS, 'cvar'),
+    },
+    'Lasso': {
+        'ISTA_exp_1_50':   epsx_globs('ista', LASSO_GRIDS, 'expectation'),
+        'ISTA_cvar_1_50':  epsx_globs('ista', LASSO_GRIDS, 'cvar'),
+        'FISTA_exp_1_50':  epsx_globs('fista', LASSO_GRIDS, 'expectation'),
+        'FISTA_cvar_1_50': epsx_globs('fista', LASSO_GRIDS, 'cvar'),
     },
 }
 
@@ -72,10 +112,13 @@ def newest_task_dirs(stage, exp):
 
 
 def merge():
-    for exp in ['LogReg']:
+    for exp in DRO_MAP:
         data = os.path.join(HERE, exp, 'data')
-        # samples + pep
-        for stage, mapping in [('sample', SAMPLES_MAP[exp]), ('pep', PEP_MAP[exp])]:
+        # samples + pep (only for experiments whose stages run in this campaign)
+        for stage, mapping in [('sample', SAMPLES_MAP.get(exp, {})),
+                               ('pep', PEP_MAP.get(exp, {}))]:
+            if not mapping:
+                continue
             sub = 'samples' if stage == 'sample' else 'pep'
             found = newest_task_dirs(stage, exp)
             for task, name in mapping.items():
