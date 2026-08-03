@@ -397,4 +397,5 @@ cython_debug/
 
 .direnv
 .envrc
-*.csvsrc/experiment_plots/_mirror/
+*.csv
+src/experiment_plots/_mirror/
