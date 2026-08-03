@@ -1,0 +1,12 @@
+# Reproduces the environment used for the reconstruction (July 2026).
+# matplotlib is pinned: the original figure was rendered with 3.10.8 and
+# usetex baseline placement differs slightly in 3.11.
+matplotlib==3.10.8
+numpy
+pandas
+pyyaml
+# only needed by regenerate_ood_set.py:
+jax
+cvxpy
+clarabel
+tqdm
