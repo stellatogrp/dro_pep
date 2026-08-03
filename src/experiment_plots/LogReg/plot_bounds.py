@@ -36,6 +36,12 @@ MARKERS = {'worst': 'o', 'cvar': 's', 'exp': '^'}
 MARKEVERY = [0, 1, 2, 4, 7, 11, 17, 23, 29]   # log-spaced marker positions
 
 
+
+# A selected radius is trustworthy when the grid resolves it from below: the
+# next smaller tested radius must be within this factor, otherwise the chosen
+# bound may be loose by roughly that much.
+GRID_GAP_FACTOR = 3.0
+
 def set_log_xaxis(axi):
     axi.set_xscale('log')
     axi.set_xticks(X_TICKS)
@@ -55,14 +61,13 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
         dro = dro[np.isclose(dro['alpha'], alpha)]
     thr = quantile_threshold_per_k(dist, metric_col)
     bounds, chosen_eps = [], []
-    grid_sizes, uncovered = {}, []
+    edge, coarse, uncovered = [], [], []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
         if rows.empty:   # K not yet computed (partial pull): break the line
             bounds.append(np.nan)
             chosen_eps.append(np.nan)
             continue
-        grid_sizes[k] = len(rows)
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
         if not len(feas):
             # No eps in the grid certifies the empirical threshold. The
@@ -73,13 +78,24 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
         bounds.append(float(pick['dro_feas_sol']))
         chosen_eps.append(float(pick['eps']))
+        # Only candidates BELOW the selection could tighten it (the bound grows
+        # with eps), so the grid is adequate at this K unless the selection sits
+        # at the smallest tested radius, or the next smaller one is far away.
+        tested = np.sort(rows['eps'].to_numpy())
+        sel = float(pick['eps'])
+        below = tested[tested < sel]
+        if not len(below):
+            edge.append(k)
+        elif sel / below[-1] > GRID_GAP_FACTOR:
+            coarse.append((k, float(below[-1]), sel))
     tag = label or metric_col
-    if grid_sizes:
-        full = max(grid_sizes.values())
-        partial = {k: n for k, n in grid_sizes.items() if n < full}
-        if partial:
-            print(f"[cross_val WARNING] {tag}: incomplete eps grid (full={full}) "
-                  f"at K={partial}; rerun those chunks before trusting the curve")
+    if edge:
+        print(f"[cross_val WARNING] {tag}: selection sits at the smallest tested "
+              f"eps at K={edge}; extend the grid downward before trusting the bound")
+    if coarse:
+        spans = ", ".join(f"K={k}: {lo:.3g}->{hi:.3g}" for k, lo, hi in coarse)
+        print(f"[cross_val WARNING] {tag}: coarse grid below the selection "
+              f"({spans}); the bound may be loose, densify those radii")
     for k, got, want in uncovered:
         print(f"[cross_val WARNING] {tag}: K={k} has no covering eps -- plotted "
               f"bound {got:.4e} < threshold {want:.4e} (fallback, not a certificate)")

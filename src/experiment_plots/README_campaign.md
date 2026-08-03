@@ -56,12 +56,18 @@ cross-validated per K inside `plot_bounds.py` (95% coverage across the
 100 sampling repeats in `sample_summary_dist.csv`); chosen radii are
 printed to stdout.
 
-## Quad and Lasso small-radius eps extensions
+## Quad and Lasso: full campaign
 
-The base grids of the K=50 quad campaign (logspace 1e-1..10) and the Lasso
-campaign (linspace 1e-3..1e-1) stop too high: cross-validation pins at the
-grid bottom and inflates the certificates (measured quad CVaR inflation up
-to 12x at K=40). `slurm_scripts/submit_epsx.sh` submits the extension DRO
-chunks (quad logspace 1e-3..10^-1.3, lasso logspace 1e-5..10^-3.2) at the
-figure horizons (K<=40 / K<=25). Merge the resulting `chunk_*_epsx_*` dirs
-into the plot data by concatenation with dedup on (K, eps, alpha).
+`slurm_scripts/submit_epsx.sh` is the single entry point for the quadratic and
+Lasso DRO runs. It submits every eps grid behind the committed figure data:
+the base grid from the config plus the refinements that cannot be written as
+one hydra grid (quad: 23 radii spanning [1e-5, 10]; Lasso: 19 spanning
+[1e-5, 1e-1]). Merge its chunk outputs as in step 3, dedup on
+(K, eps, alpha).
+
+Grid resolution is not cosmetic. Cross-validation selects the smallest radius
+whose certificate covers the empirical threshold, so a grid that bottoms out
+at the selection, or is coarse just below it, silently inflates the bound; we
+measured up to 12x on the quadratic CVaR at K=40, and a 17.5x gap in the Lasso
+grid produced a visible step at K=11. `plot_bounds.py` prints a warning for
+both cases, and for a K where no radius covers the threshold at all.
