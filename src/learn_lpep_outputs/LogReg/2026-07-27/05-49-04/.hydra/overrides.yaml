@@ -1,6 +1,0 @@
-- learning_framework=lpep
-- alg=vanilla_gd
-- sgd_iters=3
-- K_max=[3]
-- out_of_sample_val_N=10
-- data_source_dir=/Users/bs37/Library/CloudStorage/Dropbox/work/research/code/projects/dro_pep/src/sample_creation_outputs/LogReg/2026-07-27/05-48-00
