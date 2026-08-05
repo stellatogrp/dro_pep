@@ -7,6 +7,12 @@ from matplotlib.ticker import ScalarFormatter, NullFormatter, NullLocator
 X_LOG_TICKS = [1, 2, 5, 10, 20, 40]
 
 
+
+# A selected radius is trustworthy when the grid resolves it from below: the
+# next smaller tested radius must be within this factor, otherwise the chosen
+# bound may be loose by roughly that much.
+GRID_GAP_FACTOR = 3.0
+
 def set_log_xaxis(axi):
     """Log-scale the iteration (K) axis with readable integer ticks."""
     axi.set_xscale('log')
@@ -18,7 +24,7 @@ def set_log_xaxis(axi):
 
 # Theory slope guide lines: drawn only over the asymptotic tail [K_THEORY_START, K_max],
 # and floated THEORY_OFFSET x above the bound so they read as over-approximating slopes.
-K_THEORY_START = 20
+K_THEORY_START = 30
 THEORY_OFFSET = 1.3
 # Horizontal gap (in points) between the end of a guide line and its inline label.
 # Increase to push the labels further into the whitespace when the axes are narrowed.
@@ -65,7 +71,7 @@ plt.rcParams.update({
     "figure.figsize": (12, 5),
 })
 
-exp_K_max = 40
+exp_K_max = 40  # eps-extension coverage; base grid only beyond
 cvar_K_max = 40
 
 num_eps_vals = 5
@@ -77,7 +83,7 @@ METRIC = 'obj_val'
 
 # CVaR confidence levels (must match cfg.alpha_vals used to generate dro.csv).
 ALPHA_VALS = [0.01, 0.05, 0.10]
-DEFAULT_ALPHA = 0.05
+DEFAULT_ALPHA = 0.05  # matches the alpha stated in the paper for quad and Lasso
 
 # Across-repeat coverage level used to cross-validate the eps choice. Independent of alpha
 # (the within-experiment CVaR tail level) -- it is NOT 1 - alpha.
@@ -98,13 +104,44 @@ def cross_val_bound(dro, dist, metric_col, K_max, alpha=None, label=''):
     thr = quantile_threshold_per_k(dist, metric_col)
     bounds = []
     chosen_eps = []
+    edge, coarse, uncovered = [], [], []
     for k in range(1, K_max + 1):
         rows = dro[dro['K'] == k]
+        if rows.empty:   # K not yet computed (partial pull): break the line
+            bounds.append(np.nan)
+            chosen_eps.append(np.nan)
+            continue
         feas = rows[rows['dro_feas_sol'] >= thr.loc[k]]
+        if not len(feas):
+            # No eps in the grid certifies the empirical threshold. The
+            # fallback below plots a bound that does NOT cover it -- almost
+            # always a truncated eps grid at this K, not a real result.
+            uncovered.append((k, float(rows['dro_feas_sol'].max()), float(thr.loc[k])))
         pick = (rows.loc[feas['dro_feas_sol'].idxmin()] if len(feas)
                 else rows.loc[rows['dro_feas_sol'].idxmax()])
         bounds.append(float(pick['dro_feas_sol']))
         chosen_eps.append(float(pick['eps']))
+        # Only candidates BELOW the selection could tighten it (the bound grows
+        # with eps), so the grid is adequate at this K unless the selection sits
+        # at the smallest tested radius, or the next smaller one is far away.
+        tested = np.sort(rows['eps'].to_numpy())
+        sel = float(pick['eps'])
+        below = tested[tested < sel]
+        if not len(below):
+            edge.append(k)
+        elif sel / below[-1] > GRID_GAP_FACTOR:
+            coarse.append((k, float(below[-1]), sel))
+    tag = label or metric_col
+    if edge:
+        print(f"[cross_val WARNING] {tag}: selection sits at the smallest tested "
+              f"eps at K={edge}; extend the grid downward before trusting the bound")
+    if coarse:
+        spans = ", ".join(f"K={k}: {lo:.3g}->{hi:.3g}" for k, lo, hi in coarse)
+        print(f"[cross_val WARNING] {tag}: coarse grid below the selection "
+              f"({spans}); the bound may be loose, densify those radii")
+    for k, got, want in uncovered:
+        print(f"[cross_val WARNING] {tag}: K={k} has no covering eps -- plotted "
+              f"bound {got:.4e} < threshold {want:.4e} (fallback, not a certificate)")
     print(f"[cross_val eps] {label or metric_col}: {[round(e, 6) for e in chosen_eps]}")
     return bounds, chosen_eps
 
@@ -149,36 +186,43 @@ def compute_cvar_prob(samples, pep, dro, k, alpha=0.1):
 
 
 def compute_empirical_cvar(samples, k, alpha=DEFAULT_ALPHA):
-    samples_k = samples[samples['K'] == k]
-    quantile = samples_k[METRIC].quantile(1-alpha)
-    tail_loss = samples_k[samples_k[METRIC] >= quantile]
-    return tail_loss[METRIC].mean()
+    """Mean of the worst (largest) alpha-fraction.
+
+    Must match experiment_classes/lasso.py:compute_empirical_cvar, which
+    produces the cvar_<alpha> columns of sample_summary_dist.csv used as the
+    cross-validation threshold. A quantile-based variant disagrees with it
+    whenever alpha*n is not an integer (e.g. top-10 vs top-9 at alpha=0.05,
+    n=200).
+    """
+    vals = samples.loc[samples['K'] == k, METRIC].to_numpy()
+    n_tail = max(1, int(np.ceil(alpha * len(vals))))
+    return float(np.mean(np.sort(vals)[-n_tail:]))
 
 
 # precond = 'precond_avg'
 
-GD_samples = pd.read_csv('data/samples/grad_desc_1_40/samples.csv')
-NGD_samples = pd.read_csv('data/samples/nesterov_fgm_1_40/samples.csv')
+GD_samples = pd.read_csv('data/samples/grad_desc_1_50/samples.csv')
+NGD_samples = pd.read_csv('data/samples/nesterov_grad_desc_1_50/samples.csv')
 
-# GD_samples = pd.read_csv('data/dro/grad_desc_exp_1_40/samples.csv')
-# NGD_samples = pd.read_csv('data/dro/nesterov_fgm_exp_1_40/samples.csv')
+# GD_samples = pd.read_csv('data/dro/grad_desc_exp_1_50/samples.csv')
+# NGD_samples = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_50/samples.csv')
 
-GD_pep = pd.read_csv('data/pep/grad_desc_1_40/pep.csv')
-NGD_pep = pd.read_csv('data/pep/nesterov_fgm_1_40/pep.csv')
+GD_pep = pd.read_csv('data/pep/grad_desc_1_50/pep.csv')
+NGD_pep = pd.read_csv('data/pep/nesterov_grad_desc_1_50/pep.csv')
 
-# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_40/dro.csv')
-# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_40/dro.csv')
-# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_fgm_exp_1_40/dro.csv')
-# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_fgm_cvar_1_40/dro.csv')
+# GD_exp_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_exp_1_50/dro.csv')
+# GD_cvar_dro = pd.read_csv(f'data/dro/{precond}/grad_desc_cvar_1_50/dro.csv')
+# NGD_exp_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_exp_1_50/dro.csv')
+# NGD_cvar_dro = pd.read_csv(f'data/dro/{precond}/nesterov_grad_desc_cvar_1_50/dro.csv')
 
-GD_exp_dro = pd.read_csv(f'data/dro/grad_desc_exp_1_40/dro.csv')
-GD_cvar_dro = pd.read_csv(f'data/dro/grad_desc_cvar_1_40/dro.csv')
-NGD_exp_dro = pd.read_csv(f'data/dro/nesterov_fgm_exp_1_40/dro.csv')
-NGD_cvar_dro = pd.read_csv(f'data/dro/nesterov_fgm_cvar_1_40/dro.csv')
+GD_exp_dro = pd.read_csv('data/dro/grad_desc_exp_1_50/dro.csv')
+GD_cvar_dro = pd.read_csv('data/dro/grad_desc_cvar_1_50/dro.csv')
+NGD_exp_dro = pd.read_csv('data/dro/nesterov_grad_desc_exp_1_50/dro.csv')
+NGD_cvar_dro = pd.read_csv('data/dro/nesterov_grad_desc_cvar_1_50/dro.csv')
 
 # Across-repeat distributions of the per-K empirical summaries (for cross-validated eps choice).
-GD_dist = pd.read_csv('data/samples/grad_desc_1_40/sample_summary_dist.csv')
-NGD_dist = pd.read_csv('data/samples/nesterov_fgm_1_40/sample_summary_dist.csv')
+GD_dist = pd.read_csv('data/samples/grad_desc_1_50/sample_summary_dist.csv')
+NGD_dist = pd.read_csv('data/samples/nesterov_grad_desc_1_50/sample_summary_dist.csv')
 
 # GD_exp_fit_params = pd.read_csv(f'gd_exp_fit_params.csv')
 # GD_cvar_fit_params = pd.read_csv(f'gd_cvar_fit_params.csv')
@@ -247,15 +291,15 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='quad_nonstrongcvx.pdf'):
     ax[0].set_title('Gradient Descent (GD)')
 
     # Worst-case
-    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_pep[GD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 18, 27, 39], markersize=5, color=worst_case_color)
     # ax[0].plot(range(1, exp_K_max + 1), GD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # CVaR
-    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_bound, label='CVaR (Bound)', color=cvar_color)
+    ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 18, 27, 39], markersize=5, color=cvar_color)
     # ax[0].plot(range(1, cvar_K_max + 1), GD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Expectation
-    ax[0].plot(range(1, exp_K_max + 1), GD_exp_bound, label='Expectation (Bound)', color=exp_color)
+    ax[0].plot(range(1, exp_K_max + 1), GD_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 18, 27, 39], markersize=5, color=exp_color)
     # ax[0].plot(range(1, exp_K_max + 1), GD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # Theoretical asymptotic slope guides (GD only), over the tail and above each bound.
@@ -272,15 +316,15 @@ def main_bounds_alg(alpha=DEFAULT_ALPHA, out_path='quad_nonstrongcvx.pdf'):
     ax[1].set_title('Fast Gradient Method (FGM)')
 
     # Worst-case
-    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case (Bound)', color=worst_case_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_pep[NGD_pep['obj'] == METRIC]['val'][:exp_K_max], label='Worst-case', marker='o', markevery=[0, 1, 3, 6, 11, 18, 27, 39], markersize=5, color=worst_case_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_worst_cases[:exp_K_max], label='Worst-case (Sample)', linestyle='--', color=worst_case_color)
 
     # Expectation
-    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_bound, label='Expectation (Bound)', color=exp_color)
+    ax[1].plot(range(1, exp_K_max + 1), NGD_exp_bound, label='Expectation', marker='^', markevery=[0, 1, 3, 6, 11, 18, 27, 39], markersize=5, color=exp_color)
     # ax[1].plot(range(1, exp_K_max + 1), NGD_exp_k, label='Expectation (Sample)', linestyle='--', color=exp_color)
 
     # CVaR
-    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_bound, label='CVaR (Bound)', color=cvar_color)
+    ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_bound, label='CVaR', marker='s', markevery=[0, 1, 3, 6, 11, 18, 27, 39], markersize=5, color=cvar_color)
     # ax[1].plot(range(1, cvar_K_max + 1), NGD_cvar_k, label='CVaR (Sample)', linestyle='--', color=cvar_color)
 
     # Theoretical asymptotic slope guides (FGM): O(K^-2), O(K^-3 log K), O(K^-2.5).

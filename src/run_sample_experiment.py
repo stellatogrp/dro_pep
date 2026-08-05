@@ -43,6 +43,10 @@ Lasso_params = [
 ]
 
 LogReg_params = [
+    ['alg=grad_desc', 'eta=1.9'],
+    ['alg=nesterov_fgm'],
+    # bonus: FGM beyond the classical step-size regime (worst case diverges)
+    ['alg=nesterov_fgm', 'eta=1.9'],
 ]
 
 func_driver_map = {
@@ -68,7 +72,8 @@ def main():
         exit(0)
     if sys.argv[2] == 'cluster':
         # raise NotImplementedError
-        base_dir = '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out'
+        base_dir = os.environ.get(
+            'DRO_PEP_CERT_OUT', '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out')
     elif sys.argv[2] == 'local':
         base_dir = '.'
     else:

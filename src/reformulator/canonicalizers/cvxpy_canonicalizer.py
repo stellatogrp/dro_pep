@@ -203,8 +203,14 @@ class CvxpyCanonicalizer(CustomInterpCanonicalizer):
         elif self.measure == 'cvar':
             self.set_eps_alpha_value(eps, alpha)
 
+    def set_solver(self, solver, **solver_opts):
+        self.cp_solver = solver
+        self.cp_solver_opts = solver_opts
+
     def solve(self):
-        res = self.cp_problem.solve(solver=cp.CLARABEL)
+        solver = getattr(self, 'cp_solver', cp.CLARABEL)
+        solver_opts = getattr(self, 'cp_solver_opts', {})
+        res = self.cp_problem.solve(solver=solver, **solver_opts)
         out = {
             'obj': res,
             'solvetime': self.cp_problem.solver_stats.solve_time,

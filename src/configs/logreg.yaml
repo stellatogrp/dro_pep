@@ -1,29 +1,44 @@
-sample_frac: 0.25
-delta: 1e-2
-R: 1
-eta: 0.159
+# Real-data logistic regression certification experiment (see logreg_data.py).
+# Unregularized (delta = 0): smooth convex, mu = 0. Instances are m_sub-row
+# subsamples of the LIBSVM dataset; L and R are calibrated at runtime from
+# cfg.N reference instances (seed.in_sample) and overwrite the placeholders.
 
-L: 6.3 # FILL THIS IN ONCE KNOWN
+dataset: german.numer   # a9a, ijcnn1, or german.numer
+intercept: true
+standardize: true   # z-score features over the full dataset before subsampling
+m_sub: 300          # rows per instance; keep well above d to avoid separability
+delta: 0.0          # l2 regularization; 0 -> smooth convex (mu = 0)
+xopt_norm_max: 1.0e4   # separability guard: reject instances with ||x*|| above
+max_resample: 50
 
-K_min: 26
+eta: 1              # step size = eta / L
+L: 1.0              # placeholder, overwritten by compute_L_R
+R: 1.0              # placeholder, overwritten by compute_L_R (max ||x*||)
+
+K_min: 1
 K_max: 30
 
-alg: nesterov_fgm  # grad_desc or nesterov_grad_desc or nesterov_fgm
-dro_obj: expectation  # expectation or cvar
-dro_pep_obj: obj_val  # obj_val or grad_sq_norm or opt_dist_sq_norm
-
-precond_type: average # 'average' or 'max' or 'min'
-
 seed:
-  full_samples: 0
-  train: 1010
+  # Cross-validation repeat j draws with default_rng(out_of_sample + j), so the
+  # two streams must stay disjoint over j = 0 .. cross_val_repeats-1. With
+  # out_of_sample = 10 the j = 10 repeat collided with in_sample = 20 and
+  # redrew the calibration/in-sample instance set exactly.
+  out_of_sample: 1000
+  in_sample: 20
 
-sample_N: 1000
+N: 200
+cross_val_repeats: 100
+
+alg: nesterov_fgm   # grad_desc or nesterov_grad_desc or nesterov_fgm
+dro_obj: cvar       # expectation or cvar
+pep_obj: grad_sq_norm  # obj_val or grad_sq_norm or opt_dist_sq_norm
+
+precond: false      # true = apply preconditioning; false = identity
+precond_type: average  # 'average' or 'max' or 'min' (only used when precond: true)
 
 training:
   expectation_N: 100
   cvar_N: 100
-  lyap_N: 100
 num_clusters:
   expectation: null
   cvar: null
@@ -33,7 +48,8 @@ pep_fname: pep.csv
 dro_fname: dro.csv
 
 eps:
-  log_min: -2
-  log_max: -1
-  logspace_count: 4
-alpha: 0.1
+  space_type: logspace   # logspace or linspace
+  log_min: -8            # metric scale ~1e-6 at K=30; grid reaches the SAA limit
+  log_max: -0.5
+  space_count: 16
+alpha_vals: [0.01, 0.05, 0.10]

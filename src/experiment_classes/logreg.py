@@ -1,593 +1,352 @@
-import cvxpy as cp
-import matplotlib.pyplot as plt
+"""Logistic regression certification experiment (DRO-PEP) on real data.
+
+Unregularized (delta = 0, smooth convex, mu = 0) logistic regression on
+subsample instances of a LIBSVM dataset (see logreg_data.py). Mirrors the
+Lasso experiment: three stages (samples / pep / dro) sharing deterministic
+family constants L, R calibrated from cfg.seed.in_sample reference instances,
+with the modern custom-interpolation DRO path (Clarabel) and cross-validated
+epsilon support via sample_summary_dist.csv.
+
+Algorithms: gradient descent ('grad_desc') and Nesterov's fast gradient
+method ('nesterov_fgm'), step size eta/L, started at x0 = 0 (so the shifted
+initial point is z0 = -x_opt and ||x0 - x*|| <= R by calibration).
+"""
+import diffcp_patch  # noqa: F401  # COO->CSC fix for diffcp/clarabel
+import logging
+
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pandas as pd
-import logging
-import time
 from tqdm import trange
-from sklearn.datasets import load_breast_cancer, fetch_lfw_pairs
-from .utils import gradient_descent, nesterov_accelerated_gradient, nesterov_fgm, generate_trajectories, sample_x0_centered_disk
+
 from PEPit import PEP
 from PEPit.functions import SmoothStronglyConvexFunction
+
 from reformulator.dro_reformulator import DROReformulator
-# from ucimlrepo import fetch_ucirepo
-from .lyap_classes.gd import gd_lyap, gd_lyap_nobisect
+from learning.pep_constructions import (
+    construct_gd_pep_data, construct_fgm_pep_data, pep_data_to_numpy,
+)
+from learning.trajectories import logreg_gd_trajectories, logreg_fgm_trajectories
+from learning.acceleration_stepsizes import jax_get_nesterov_fgm_beta_sequence
+
+from .utils import build_eps_vals
+from .lasso import summarize_per_k, plot_sample_summary
+from .logreg_data import load_dataset, compute_L_R, sample_instance_batch
+
+jax.config.update("jax_enable_x64", True)
 
 log = logging.getLogger(__name__)
 
 
-def sigmoid(z):
-    return 1/(1 + np.exp(-z))
+# =============================================================================
+# Numpy objective/gradient and simulation (mirrors utils' PEP conventions)
+# =============================================================================
+
+def _sigmoid(v):
+    return 1.0 / (1.0 + np.exp(-v))
 
 
-# class LogReg(object):
+def logreg_gap(A, b, x, f_opt, delta):
+    """f(x) - f_opt for one instance."""
+    m = A.shape[0]
+    Ax = A @ x
+    log_likeli = np.sum(b * Ax - np.logaddexp(0, Ax))
+    val = -1 / m * log_likeli + 0.5 * delta * float(x @ x)
+    return val - f_opt
 
-#     def __init__(self, sample_frac=0.01, delta=0.1, R=1):
-#         self.delta = delta
 
-#         full_X, full_y = load_breast_cancer(return_X_y=True)
-#         # full_X = X.to_numpy()
-#         # full_y = y.to_numpy().reshape(-1,)
-#         self.full_X = full_X
-#         self.full_y = full_y
+def logreg_grad(A, b, x, delta):
+    m = A.shape[0]
+    return 1 / m * A.T @ (_sigmoid(A @ x) - b) + delta * x
 
-#         # bank_marketing = fetch_ucirepo(id=222) 
-#         # data (as pandas dataframes) 
-#         # X = bank_marketing.data.features 
-#         # y = bank_marketing.data.targets 
 
-#         self.samp_X, self.samp_y = self.sample_normalized(sample_frac=sample_frac)
-#         self.solve_optimal_values()
-#         self.compute_mu_L()
+def simulate_alg(cfg, A, b, x_opt, f_opt, t):
+    """Run cfg.alg from x0 = 0 and return the metric [m(x_k), k=1..K_max],
+    where m is cfg.pep_obj ('obj_val' -> f(x_k)-f*, 'grad_sq_norm' ->
+    ||grad f(x_k)||^2).
 
-#         self.x0 = np.zeros(self.samp_X.shape[1])
-#         self.x0[0] = R
-#         self.R = R
-#         self.dim = self.samp_X.shape[1]
+    Iterate conventions match construct_gd_pep_data / construct_fgm_pep_data
+    (and the PEPit baseline below), so all three stages bound the same quantity.
+    """
+    K_max = cfg.K_max
+    delta = cfg.delta
+    d = A.shape[1]
+    x = np.zeros(d)
+    gaps = []
 
-#     def sample(self, sample_frac=0.8):
-#         X = self.full_X
-#         y = self.full_y
+    def metric(xk):
+        if cfg.pep_obj == 'obj_val':
+            return logreg_gap(A, b, xk, f_opt, delta)
+        elif cfg.pep_obj == 'grad_sq_norm':
+            g = logreg_grad(A, b, xk, delta)
+            return float(g @ g)
+        raise ValueError(f"unsupported pep_obj '{cfg.pep_obj}'")
 
-#         sample_size = int(0.8 * X.shape[0])
-#         idx = np.random.choice(X.shape[0], size=sample_size, replace=False)
+    if cfg.alg == 'grad_desc':
+        for _ in range(K_max):
+            x = x - t * logreg_grad(A, b, x, delta)
+            gaps.append(metric(x))
+    elif cfg.alg == 'nesterov_fgm':
+        # FGM in the same form as construct_fgm_pep_data and
+        # logreg_fgm_trajectories: gradients at y_k, objective at
+        # x_{k+1} = y_k - t g(y_k), y_{k+1} = x_{k+1} + beta_k (x_{k+1} - x_k).
+        # Beta recursion identical to jax_get_nesterov_fgm_beta_sequence.
+        q = cfg.delta / cfg.L
+        A_seq = [0.0, 1.0 / (1.0 - q)]
+        y = x.copy()
+        x_curr = x.copy()
+        for k in range(K_max):
+            A_next_num = 2 * A_seq[k + 1] + 1 + np.sqrt(
+                1 + 4 * A_seq[k + 1] + 4 * q * A_seq[k + 1] ** 2)
+            A_seq.append(A_next_num / (2 * (1 - q)))
+            beta_num = (A_seq[k + 2] - A_seq[k + 1]) * (A_seq[k + 1] * (1 - q) - A_seq[k] - 1)
+            beta_den = A_seq[k + 2] * (2 * q * A_seq[k + 1] + 1) - q * A_seq[k + 1] ** 2
+            beta_k = beta_num / beta_den
 
-#         return X[idx], y[idx]
+            x_new = y - t * logreg_grad(A, b, y, delta)
+            y = x_new + beta_k * (x_new - x_curr)
+            x_curr = x_new
+            gaps.append(metric(x_new))
+    else:
+        raise NotImplementedError(f"unsupported alg '{cfg.alg}'")
 
-#     def sample_normalized(self, sample_frac=0.8):
-#         X_samp, y_samp = self.sample(sample_frac=sample_frac)
-#         means = X_samp.mean(axis=0)
-#         std_devs = X_samp.std(axis=0)
+    return gaps
 
-#         X_samp_normalized = (X_samp - means) / std_devs
-#         ones_column = np.ones((X_samp.shape[0], 1))
-#         X_samp_with_ones = np.hstack((X_samp_normalized, ones_column))
-#         return X_samp_with_ones, y_samp
 
-#     def solve_optimal_values(self):
-#         X, y = self.samp_X, self.samp_y
-#         m, n = X.shape
-#         beta = cp.Variable(n)
-#         log_likelihood = cp.sum(
-#             cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
-#         )
-#         obj = - 1 / m * log_likelihood + 0.5 * self.delta * cp.sum_squares(beta)
-#         problem = cp.Problem(cp.Minimize(obj))
-#         problem.solve()
-
-#         self.x_opt = beta.value
-#         self.f_opt = problem.value
-
-#     def compute_mu_L(self):
-#         X = self.samp_X
-#         m = X.shape[0]
-
-#         XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
-#         lambd_max = np.max(XTX_eigvals)
-#         L = lambd_max / (4 * m) + self.delta
-#         mu = self.delta
-        
-#         self.mu, self.L = mu, L
-
-#     def f(self, z):
-#         X, y = self.samp_X, self.samp_y
-#         m = X.shape[0]
-#         z = z + self.x_opt
-#         log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
-#         return - 1 / m * log_likeli + 0.5 * self.delta * z.T @ z - self.f_opt
-
-#     def grad(self, z):
-#         X, y = self.samp_X, self.samp_y
-#         m = X.shape[0]
-#         z = z + self.x_opt
-#         return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
-
-#     def sample_init_point(self):
-#         return sample_x0_centered_disk(self.dim, self.R)
-
-class LogReg(object):
-
-    def __init__(self, n=50, N=1000, p=0.3, delta=1e-2, R=1, seed=10, A_std=4, eps_std=1):
-        np.random.seed(seed)
-        self.beta = np.random.uniform(low=-3, high=3, size=(n,))
-        self.beta_mask = np.random.binomial(1, p, size=(n,))
-        self.beta = np.multiply(self.beta, self.beta_mask)
-        # print(self.beta)
-
-        self.x0 = np.zeros(n)
-        self.x0[0] = R
-        self.R = R
-        self.dim = n
-        self.delta = delta
-
-        self.A = np.random.normal(size=(N, n-1), scale=A_std)
-        self.A = np.hstack([self.A, np.ones((N, 1))])
-        Abeta_noise = self.A @ self.beta + eps_std * np.random.normal(scale=eps_std, size=(N,))
-        self.b = np.where(Abeta_noise > 0, 1, 0)
-
-        self.solve_optimal_values()
-        self.compute_mu_L()
-
-    def solve_optimal_values(self):
-        X, y = self.A, self.b
-        m, n = X.shape
-        beta = cp.Variable(n)
-        log_likelihood = cp.sum(
-            cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
-        )
-        obj = - 1 / m * log_likelihood + 0.5 * self.delta * cp.sum_squares(beta)
-        problem = cp.Problem(cp.Minimize(obj))
-        problem.solve()
-
-        self.x_opt = beta.value
-        self.f_opt = problem.value
-
-    def compute_mu_L(self):
-        X = self.A
-        m = X.shape[0]
-
-        XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
-        lambd_max = np.max(XTX_eigvals)
-        L = lambd_max / (4 * m) + self.delta
-        mu = self.delta
-        
-        self.mu, self.L = mu, L
-
-    def f(self, z):
-        X, y = self.A, self.b
-        m = X.shape[0]
-        z = z + self.x_opt
-        log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
-        return - 1 / m * log_likeli + 0.5 * self.delta * z.T @ z - self.f_opt
-
-    def grad(self, z):
-        X, y = self.A, self.b
-        m = X.shape[0]
-        z = z + self.x_opt
-        return 1 / m * X.T @ (sigmoid(X @ z) - y) + self.delta * z
-
-    def sample_init_point(self):
-        return sample_x0_centered_disk(self.dim, self.R)
-
+# =============================================================================
+# Stage 1: samples
+# =============================================================================
 
 def logreg_samples(cfg):
     log.info(cfg)
-    log.info(cfg)
-    np.random.seed(cfg.seed.full_samples)
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
+    compute_L_R(cfg, A_full, b_full)   # sets cfg.L, cfg.R (consistent across stages)
+    t = cfg.eta / cfg.L
+    log.info(f'L: {cfg.L}, R: {cfg.R}, step size: {t}')
 
-    df = []
+    alpha_vals = list(cfg.alpha_vals)
+    n_repeats = cfg.cross_val_repeats
 
-    params = {
-        't': cfg.eta, # NOT cfg.eta / cfg.L
-        'K_max': cfg.K_max,
-        'q': cfg.delta / cfg.L, 
-    }
+    # The repeats must not redraw the in-sample set, or one of them silently
+    # becomes in-sample and the "cross-validation" coverage is optimistic.
+    if 0 <= cfg.seed.in_sample - cfg.seed.out_of_sample < n_repeats:
+        raise ValueError(
+            f'seed.in_sample={cfg.seed.in_sample} falls inside the repeat range '
+            f'[{cfg.seed.out_of_sample}, {cfg.seed.out_of_sample + n_repeats}); '
+            f'move seed.out_of_sample so the two streams stay disjoint')
 
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
+    dist = []
+    for j in trange(n_repeats):
+        rng = np.random.default_rng(cfg.seed.out_of_sample + j)
+        instances, _ = sample_instance_batch(
+            rng, A_full, b_full, cfg, int(cfg.N), desc=f'repeat {j}')
 
-    L_vals = []
+        df = []
+        for i, (A, b, x_opt, f_opt, L_i) in enumerate(instances):
+            gaps = simulate_alg(cfg, A, b, x_opt, f_opt, t)
+            for k in range(1, cfg.K_max + 1):
+                df.append(pd.Series({'i': i, 'K': k, 'obj_val': gaps[k - 1]}))
 
-    for i in trange(cfg.sample_N):
-        # lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
-        lr = LogReg(delta=cfg.delta, seed=i)
-        # x0 = lr.x0
-        x0 = lr.sample_init_point()
+        df_to_save = pd.DataFrame(df)
+        summary = summarize_per_k(df_to_save, alpha_vals, 'obj_val', cfg.K_max)
 
-        # xs = lr.x_opt
-        # fs = lr.f_opt
-        # xs = np.zeros(lr.samp_X.shape[1])
-        xs = np.zeros(lr.A.shape[1])
-        fs = 0
-
-        L_vals.append(lr.L)
-
-        x_stack, g_stack, f_stack = algo(lr.f, lr.grad, x0, xs, params)
-        # stacks: [xs, x0, ..., xK]
-        for k in range(1, cfg.K_max + 1):
-            df.append(pd.Series({
-                'i': i,
-                'K': k,
-                'obj_val': f_stack[k+1] - fs,
-                'grad_sq_norm': np.linalg.norm(g_stack[k+1]) ** 2,
-                'opt_dist_sq_norm': np.linalg.norm(x_stack[k+1] - xs) ** 2,
-            }))
-
-        if i % 1000 == 0:
-            log.info(f'saving at i={i}')
-            df_to_save = pd.DataFrame(df)
+        if j == 0:
+            # Repeat-0 artifacts reproduce the legacy single-run outputs.
             df_to_save.to_csv(cfg.sample_fname, index=False)
+            summary.to_csv('sample_summary.csv', index=False)
+            log.info(summary)
+            plot_sample_summary(summary, cfg)
 
-    df_to_save = pd.DataFrame(df)
-    df_to_save.to_csv(cfg.sample_fname, index=False)
+        dist.append(summary.assign(repeat=j))
 
-    log.info(f'mu:{cfg.delta}')
-    log.info(f'L:{np.max(L_vals)}')
-
-    plot_worst_case(df_to_save, 'obj_val', cfg)
+    dist_df = pd.concat(dist, ignore_index=True)
+    dist_df = dist_df[['repeat'] + [c for c in dist_df.columns if c != 'repeat']]
+    dist_df.to_csv('sample_summary_dist.csv', index=False)
 
 
-def plot_worst_case(df, col, cfg):
-    worst_cases = df[['K', col]].groupby(['K']).max()
-    averages = df[['K', col]].groupby(['K']).mean()
-    quantiles = df[['K', col]].groupby(['K']).quantile(0.9)
-    plt.plot(range(1, cfg.K_max + 1), worst_cases)
-    plt.plot(range(1, cfg.K_max + 1), quantiles)
-    plt.plot(range(1, cfg.K_max + 1), averages)
-    plt.yscale('log')
-    plt.title(col)
-    plt.savefig('worstcases.pdf')
-
+# =============================================================================
+# Stage 2: worst-case PEP baseline (PEPit)
+# =============================================================================
 
 def logreg_pep(cfg):
     log.info(cfg)
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
-
-    # objs = ['obj_val', 'grad_sq_norm', 'opt_dist_sq_norm']
-    objs = ['obj_val']
-
-    mu = cfg.delta
-    L = cfg.L
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
+    compute_L_R(cfg, A_full, b_full)   # sets cfg.L, cfg.R (consistent across stages)
 
     res = []
     for k in range(cfg.K_min, cfg.K_max + 1):
-        for obj in objs:
-            tau, solvetime = logreg_pep_subproblem(cfg, mu, L, algo, k, obj)
-
-            res.append(pd.Series({
-                'K': k,
-                'obj': obj,
-                'val': tau,
-                'solvetime': solvetime,
-            }))
-            df = pd.DataFrame(res)
-            df.to_csv(cfg.pep_fname, index=False)
+        tau, solvetime = logreg_pep_subproblem(cfg, cfg.delta, cfg.L, k, cfg.pep_obj)
+        res.append(pd.Series({
+            'K': k,
+            'obj': cfg.pep_obj,
+            'val': tau,
+            'solvetime': solvetime,
+        }))
+        df = pd.DataFrame(res)
+        df.to_csv(cfg.pep_fname, index=False)
 
 
-def logreg_pep_subproblem(cfg, mu, L, algo, k, obj, return_problem=False):
+def logreg_pep_subproblem(cfg, mu, L, k, obj, return_problem=False):
+    """Worst-case PEP for GD / FGM over mu-strongly convex L-smooth functions.
+
+    Iterate conventions match construct_gd_pep_data / construct_fgm_pep_data
+    (FGM: gradients at y_k, objective at x_K = y_{K-1} - t g(y_{K-1})), so the
+    DRO bound converges to this PEP value as eps grows.
+    """
     problem = PEP()
     func = problem.declare_function(SmoothStronglyConvexFunction, mu=mu, L=L)
     xs = func.stationary_point()
     fs = func(xs)
     x0 = problem.set_initial_point()
-
-    params = {
-        't': cfg.eta, # NOT cfg.eta / cfg.L
-        'K_max': k,
-        'q': cfg.delta / cfg.L, 
-    }
-
-    log.info(params)
-
     problem.set_initial_condition((x0 - xs) ** 2 <= cfg.R ** 2)
-    x_stack, g_stack, f_stack = algo(func, func.gradient, x0, xs, params)
 
-    # problem.set_performance_metric(func(x) - fs)
-    if obj == 'obj_val':
-        problem.set_performance_metric(f_stack[-1] - fs)
-    elif obj == 'grad_sq_norm':
-        problem.set_performance_metric((g_stack[-1]) ** 2)
-    elif obj == 'opt_dist_sq_norm':
-        problem.set_performance_metric((x_stack[-1] - xs) ** 2)
+    t = cfg.eta / cfg.L
+    if cfg.alg == 'grad_desc':
+        x = x0
+        for _ in range(k):
+            x = x - t * func.gradient(x)
+        x_last = x
+    elif cfg.alg == 'nesterov_fgm':
+        beta = np.asarray(jax_get_nesterov_fgm_beta_sequence(mu, L, k))
+        y = x0
+        x_curr = x0
+        for j in range(k):
+            x_new = y - t * func.gradient(y)
+            y = x_new + float(beta[j]) * (x_new - x_curr)
+            x_curr = x_new
+        x_last = x_curr
     else:
-        log.info('should be unreachable code')
-        exit(0)
+        raise NotImplementedError(f"unsupported alg '{cfg.alg}'")
+
+    if obj == 'obj_val':
+        problem.set_performance_metric(func(x_last) - fs)
+    elif obj == 'grad_sq_norm':
+        problem.set_performance_metric(func.gradient(x_last) ** 2)
+    elif obj == 'opt_dist_sq_norm':
+        problem.set_performance_metric((x_last - xs) ** 2)
+    else:
+        raise ValueError(f"unknown pep objective '{obj}'")
 
     if return_problem:
         return problem
 
-    # start = time.time()
     pepit_tau = problem.solve(wrapper='cvxpy', solver='CLARABEL')
-    # solvetime = time.time() - start
-
     solvetime = problem.wrapper.prob.solver_stats.solve_time
-
-    log.info(pepit_tau)
+    log.info(f'pepit_tau at K={k}: {pepit_tau} (solvetime {solvetime})')
     return pepit_tau, solvetime
 
 
+# =============================================================================
+# Stage 3: DRO-PEP (modern custom-interpolation path, Clarabel)
+# =============================================================================
+
 def logreg_dro(cfg):
     log.info(cfg)
+    A_full, b_full = load_dataset(cfg.dataset, intercept=cfg.intercept,
+                                  standardize=cfg.get('standardize', False))
+    L, R, ref_instances = compute_L_R(cfg, A_full, b_full)
+    mu = float(cfg.delta)
+    t = cfg.eta / L
+    log.info(f'L: {L}, mu: {mu}, R: {R}, step size: {t}')
 
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
+    if cfg.alg not in ('grad_desc', 'nesterov_fgm'):
+        raise NotImplementedError(
+            f"DRO custom PEP construction supports 'grad_desc'/'nesterov_fgm', got '{cfg.alg}'")
 
     if cfg.dro_obj == 'expectation':
         N = cfg.training.expectation_N
         num_clusters = cfg.num_clusters.expectation
-        dro_obj = 'expectation'
+        measure = 'expectation'
     elif cfg.dro_obj == 'cvar':
         N = cfg.training.cvar_N
         num_clusters = cfg.num_clusters.cvar
-        dro_obj = 'cvar'
+        measure = 'cvar'
     else:
-        log.info('invalid dro obj')
-        exit(0)
+        raise ValueError(f"invalid dro_obj '{cfg.dro_obj}'")
 
-    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
-    alpha = cfg.alpha
+    if N > len(ref_instances):
+        raise ValueError(
+            f'training N={N} exceeds the {len(ref_instances)} calibration instances '
+            f'(cfg.N); raise cfg.N so L/R calibration covers the in-sample set')
+    instances = ref_instances[:N]
 
-    np.random.seed(cfg.seed.train)
-    logreg_funcs = []
-    for i in trange(N):
-        # lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
-        lr = LogReg(delta=cfg.delta, seed=i + 25000)
-        logreg_funcs.append(lr)
-    
+    eps_vals = build_eps_vals(cfg)
+    alpha_vals = list(cfg.alpha_vals)
+    # alpha only affects the cvar objective; expectation ignores it (single pass).
+    alphas_to_run = alpha_vals if measure == 'cvar' else [alpha_vals[0]]
+
     res = []
-
+    sample_df_list = []
     for k in range(cfg.K_min, cfg.K_max + 1):
+        t_vec = jnp.full(k, t)
+        if cfg.alg == 'grad_desc':
+            stp = (t_vec,)
+            pep_data = pep_data_to_numpy(construct_gd_pep_data(
+                t_vec, mu, L, R, k, cfg.pep_obj, composition_type='final'))
+            traj_fn = logreg_gd_trajectories
+        else:  # nesterov_fgm
+            beta = jax_get_nesterov_fgm_beta_sequence(mu, L, k)
+            stp = (t_vec, beta)
+            pep_data = pep_data_to_numpy(construct_fgm_pep_data(
+                t_vec, beta, mu, L, R, k, cfg.pep_obj, composition_type='final'))
+            traj_fn = logreg_fgm_trajectories
+
+        A_obj_np, b_obj_np = pep_data[0], pep_data[1]
+
         samples = []
-        problem = logreg_pep_subproblem(cfg, cfg.delta, cfg.L, algo, k, cfg.dro_pep_obj, return_problem=True)
-        # problem.solve(wrapper='cvxpy', solver='CLARABEL')
-
-        mosek_params = {
-            # 'intpntCoTolDfeas': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_DFEAS': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_PFEAS': 1e-7,
-            'MSK_DPAR_INTPNT_CO_TOL_REL_GAP': 1e-7,
-        }
-        pepit_tau = problem.solve(
-            wrapper='cvxpy',
-            solver='MOSEK',
-            mosek_params=mosek_params,
-        )
-        log.info(f'----pep problem solved at k={k}----')
-
-        for i in range(N):
-            lr = logreg_funcs[i]
-            # x0 = lr.x0
-            x0 = lr.sample_init_point()
-            # xs = lr.x_opt
-            # fs = lr.f_opt
-            # xs = np.zeros(lr.samp_X.shape[1])
-            xs = np.zeros(lr.A.shape[1])
-            fs = 0
-
-            params = {
-                't': cfg.eta, # NOT cfg.eta / cfg.L
-                'K_max': k,
-                'q': cfg.delta / cfg.L, 
-            }
-
-            G, F = generate_trajectories(lr.f, lr.grad, x0, xs, fs, algo, params)
-            # log.info(F.shape)
+        for i, (A, b, x_opt, f_opt, L_i) in enumerate(instances):
+            z0 = -jnp.asarray(x_opt)   # x0 = 0 in original coordinates
+            G, F = traj_fn(stp, jnp.asarray(A), jnp.asarray(b), z0,
+                           jnp.asarray(x_opt), f_opt, cfg.delta, k,
+                           return_Gram_representation=True)
+            G, F = np.asarray(G), np.asarray(F)
             samples.append((G, F))
+            emp = float(np.trace(A_obj_np @ G) + b_obj_np @ F)  # PEP objective on the sample
+            sample_df_list.append(pd.Series({'i': i, 'K': k, 'obj_val': emp}))
+        pd.DataFrame(sample_df_list).to_csv('samples.csv', index=False)
 
         DR = DROReformulator(
-            problem,
+            pep_data,
             samples,
-            dro_obj,
+            measure,
             'clarabel',
-            precond=True,
+            precond=cfg.precond,
             precond_type=cfg.precond_type,
             mro_clusters=num_clusters,
         )
-
+        log.info(f'----dro reformulator built at k={k}----')
         for eps_idx, eps in enumerate(eps_vals):
-            log.info(eps_idx)
-            log.info(eps)
+            for alpha_idx, alpha in enumerate(alphas_to_run):
+                DR.set_params(eps=eps, alpha=alpha)
+                out = DR.solve()
+                if num_clusters is not None:
+                    dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
+                else:
+                    dro_feas = out['obj']
 
-            DR.set_params(eps=eps, alpha=alpha)
-            out = DR.solve()
-            if num_clusters is not None:
-                dro_feas = DR.extract_dro_feas_sol_from_mro(eps=eps, alpha=alpha)
-            else:
-                dro_feas = out['obj']
+                res.append(pd.Series({
+                    'K': k,
+                    'eps_idx': eps_idx,
+                    'eps': eps,
+                    'alpha_idx': alpha_idx,
+                    'alpha': alpha,
+                    'mro_sol': out['obj'],
+                    'solvetime': out['solvetime'],
+                    'dro_feas_sol': dro_feas,
+                }))
 
-            res.append(pd.Series({
-                'K': k,
-                'eps_idx': eps_idx,
-                'eps': eps,
-                'alpha': alpha,
-                'mro_sol': out['obj'],
-                'solvetime': out['solvetime'],
-                'dro_feas_sol': dro_feas,
-            }))
-        
-            df = pd.DataFrame(res)
-            df.to_csv(cfg.dro_fname, index=False)
+                df = pd.DataFrame(res)
+                df.to_csv(cfg.dro_fname, index=False)
 
+
+# =============================================================================
+# Legacy entry point (kept importable for run_lyap_experiment.py)
+# =============================================================================
 
 def logreg_lyap(cfg):
-    log.info(cfg)
-
-    log.info(cfg)
-
-    if cfg.alg == 'grad_desc':
-        algo = gradient_descent
-    elif cfg.alg == 'nesterov_grad_desc':
-        algo = nesterov_accelerated_gradient
-    elif cfg.alg == 'nesterov_fgm':
-        algo = nesterov_fgm
-    else:
-        log.info('invalid alg in cfg')
-        exit(0)
-
-    N = cfg.training.lyap_N
-    eps_vals = np.logspace(cfg.eps.log_min, cfg.eps.log_max, num=cfg.eps.logspace_count)
-    alpha = cfg.alpha
-
-    np.random.seed(cfg.seed.train)
-    logreg_funcs = []
-    params = {
-        # 't': cfg.eta / cfg.L,
-        't': cfg.eta,
-        'K_max': cfg.K_max,
-        'q': cfg.delta / cfg.L, 
-    }
-
-    samples = []
-    for i in trange(N):
-        lr = LogReg(sample_frac=cfg.sample_frac, delta=cfg.delta, R=cfg.R)
-        logreg_funcs.append(lr)
-        x0 = lr.sample_init_point()
-        xs = np.zeros(lr.dim)
-
-        x, g, f = algo(lr.f, lr.grad, x0, xs, params)
-        x = x[1:]
-        g = g[1:]
-        f = f[1:]
-        sample_i = {
-            'x': x,
-            'g': g,
-            'f': f,
-        }
-        samples.append(sample_i)
-    
-    GF = []
-    for i in range(N):
-        sample = samples[i]
-        G, F, q = compute_sample_rho(sample)
-        GF.append((G, F))
-
-    dro_eps = .001
-    dro_eps_vals = [1e-4, 1e-3, 1e-2, 1e-1]
-
-    alpha_vals = np.linspace(1, .05, 20)
-    print(alpha_vals)
-    one_minus_alphas = []
-    rhos = []
-    for alpha in alpha_vals:
-        # lyap_res = gd_lyap(cfg.delta, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
-        lyap_res = gd_lyap_nobisect(cfg.delta, cfg.L, cfg.eta / cfg.L, 1, GF, dro_eps, cvar_alpha=alpha)
-        log.info(lyap_res)
-        one_minus_alphas.append(1 - alpha)
-        rhos.append(lyap_res)
-    
-    plt.plot(one_minus_alphas, rhos)
-    plt.xlabel('one minus alpha')
-    plt.ylabel('rho')
-    # plt.show()
-    plt.savefig('rho_plot.pdf')
-
-
-def compute_sample_rho(sample):
-    x, g, f = sample['x'], sample['g'], sample['f']
-    rho_max = 0
-    K = len(x) - 1
-    q = 0
-    # print('----')
-    for i in range(K):
-        xiplus1 = x[i+1]
-        f_iplus1 = f[i+1]
-        xi = x[i]
-        fi = f[i]
-        rho_i = f_iplus1 / fi
-        # rho_i = np.linalg.norm(xiplus1) ** 2 / np.linalg.norm(xi) ** 2
-        if rho_i > rho_max:
-            rho_max = rho_i
-            q = i
-        # print(rho_i)
-    print(rho_max, q)
-    G_half = np.array([x[q], g[q], g[q+1]])
-    return G_half @ G_half.T, np.array([f[q], f[q+1]]), q
-
-
-def main():
-    np.random.seed(0)
-
-    delta = 0.1
-
-    lr = LogReg(delta=delta)
-    # X, y = lr.sample_normalized()
-    X, y = lr.samp_X, lr.samp_y
-
-    m, n = X.shape
-    beta = cp.Variable(n)
-    log_likelihood = cp.sum(
-        cp.multiply(y, X @ beta) - cp.logistic(X @ beta)
-    )
-    obj = - 1 / m * log_likelihood + 0.5 * delta * cp.sum_squares(beta)
-    problem = cp.Problem(cp.Minimize(obj))
-    problem.solve()
-    print(beta.value)
-
-    def f(z):
-        # log_likeli = np.sum(np.multiply(y, X @ z) - np.log1p(np.exp(X @ z)))
-        log_likeli = np.sum(np.multiply(y, X @ z) - np.logaddexp(0, X @ z))
-        return - 1 / m * log_likeli + 0.5 * delta * z.T @ z
-
-    def grad(z):
-        return 1 / m * X.T @ (sigmoid(X @ z) - y) + delta * z
-
-    beta_k = np.zeros(n)
-    fp_resids = []
-    for _ in range(1000):
-        beta_new = beta_k - 0.1 * grad(beta_k)
-        fp_resids.append(np.linalg.norm(beta_new - beta_k))
-        beta_k = beta_new
-    print(beta_k)
-    # print(fp_resids)
-    XTX_eigvals = np.real(np.linalg.eigvals(X.T @ X))
-    lambd_max = np.max(XTX_eigvals)
-    L = lambd_max / (4 * m) + delta
-    print(L)
-
-    print(problem.value)
-    print(f(beta.value))
-
-    # f(x) -> f(x + x^\star) - f^\star
-
-    print('--------')
-
-    beta_k = np.ones(n)
-    for _ in range(1000):
-        beta_k = beta_k - 0.1 * lr.grad(beta_k)
-    print(beta_k)
-    print(lr.f(beta_k))
-    print(lr.grad(beta_k))
-
-    default_of_credit_card_clients = fetch_ucirepo(id=350) 
-  
-    # data (as pandas dataframes) 
-    X = default_of_credit_card_clients.data.features 
-    y = default_of_credit_card_clients.data.targets 
-    X = X.to_numpy()
-    Y = y.to_numpy()
-    print(X.shape, y.shape)
-
-if __name__ == '__main__':
-    main()
+    raise NotImplementedError(
+        'logreg_lyap was retired in the real-data certification rewrite; '
+        'see git history (pre bs37/logreg_cert_realdata) for the old version')

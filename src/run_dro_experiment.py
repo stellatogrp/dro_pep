@@ -76,10 +76,17 @@ Lasso_params = [
 ]
 
 LogReg_params = [
-    ['alg=grad_desc', 'dro_obj=expectation'],
+    ['alg=grad_desc', 'eta=1.9', 'dro_obj=expectation'],
     ['alg=nesterov_fgm', 'dro_obj=expectation'],
-    ['alg=grad_desc', 'dro_obj=cvar'],
+    ['alg=grad_desc', 'eta=1.9', 'dro_obj=cvar'],
     ['alg=nesterov_fgm', 'dro_obj=cvar'],
+    # wide-eps interpolation sweep at fixed K (logreg_eps_sweep.pdf)
+    ['alg=grad_desc', 'eta=1.9', 'dro_obj=cvar', 'K_min=12', 'K_max=12',
+     'eps.space_type=logspace', 'eps.log_min=-6', 'eps.log_max=2', 'eps.space_count=17'],
+    ['alg=nesterov_fgm', 'dro_obj=cvar', 'K_min=12', 'K_max=12',
+     'eps.space_type=logspace', 'eps.log_min=-6', 'eps.log_max=2', 'eps.space_count=17'],
+    # bonus: FGM at eta=1.9 (beyond classical regime; certificate remains valid)
+    ['alg=nesterov_fgm', 'eta=1.9', 'dro_obj=expectation'],
 ]
 
 func_driver_map = {
@@ -105,7 +112,8 @@ def main():
         exit(0)
     if sys.argv[2] == 'cluster':
         # raise NotImplementedError
-        base_dir = '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out'
+        base_dir = os.environ.get(
+            'DRO_PEP_CERT_OUT', '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out')
     elif sys.argv[2] == 'local':
         base_dir = '.'
     else:
