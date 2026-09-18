@@ -9,8 +9,11 @@ Verifies:
   4. The Gram-side PEP objective equals the numpy simulate_alg gap at K
      (samples stage and DRO stage bound the same quantity).
 
-Requires the a9a dataset (downloaded on first run, ~2MB, cached under
-$DRO_PEP_DATA or <repo>/data/libsvm).
+The dataset is whichever one configs/logreg.yaml selects, so this tracks the
+experiment rather than a hard-coded choice (it was pinned to a9a while the
+config had already moved to german.numer). It must be cached under
+$DRO_PEP_DATA or <repo>/data/libsvm -- compute nodes have no network, so
+slurm_scripts/mit/setup_env.sh prefetches it on the login node.
 
 Run: pytest tests/test_logreg_certification.py -v
 """
@@ -43,8 +46,23 @@ def _load_cfg(**overrides):
 
 
 @pytest.fixture(scope='module')
-def dataset():
-    return lrd.load_dataset('a9a', intercept=True)
+def dataset_name():
+    return _load_cfg().dataset
+
+
+@pytest.fixture(scope='module')
+def n_cols(dataset_name):
+    """Feature count from the dataset table, +1 for the appended intercept."""
+    return lrd.DATASETS[dataset_name][1] + 1
+
+
+@pytest.fixture(scope='module')
+def dataset(dataset_name):
+    path = lrd.data_cache_dir() / lrd.DATASETS[dataset_name][0]
+    if not path.is_file():
+        pytest.skip(f'{dataset_name} not cached at {path}; run '
+                    f'`python -m experiment_classes.logreg_data {dataset_name}`')
+    return lrd.load_dataset(dataset_name, intercept=True)
 
 
 @pytest.fixture(scope='module')
@@ -56,18 +74,20 @@ def tiny_instances(dataset):
     return cfg, instances
 
 
-def test_dataset_invariants(dataset):
+def test_dataset_invariants(dataset, n_cols):
     A, b = dataset
-    assert A.shape[1] == 124  # 123 features + intercept
+    assert A.shape[1] == n_cols
     assert np.allclose(A[:, -1], 1.0)
     assert set(np.unique(b)) <= {0.0, 1.0}
-    assert A.shape[0] > 30000
+    # Instances are drawn without replacement, and a subsample at or below the
+    # dimension is essentially always separable at delta = 0.
+    assert A.shape[0] > M_SUB > n_cols
 
 
-def test_instances_solvable(tiny_instances):
+def test_instances_solvable(tiny_instances, n_cols):
     cfg, instances = tiny_instances
     for A, b, x_opt, f_opt, L in instances:
-        assert A.shape == (M_SUB, 124)
+        assert A.shape == (M_SUB, n_cols)
         assert np.isfinite(f_opt)
         assert np.linalg.norm(x_opt) <= cfg.xopt_norm_max
         assert L > 0

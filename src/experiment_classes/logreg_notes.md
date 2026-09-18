@@ -4,6 +4,29 @@ Design decisions for the real-data logistic regression certification
 experiment (`logreg.py`, `logreg_data.py`), recorded so they survive
 context switches. See also the tests in `tests/test_logreg_certification.py`.
 
+> **These notes describe the earlier a9a configuration, not the committed one.**
+> `configs/logreg.yaml` is the authority; the reasoning below still holds, but
+> several concrete numbers have moved on:
+>
+> | | notes (a9a era) | `configs/logreg.yaml` today |
+> |---|---|---|
+> | dataset | a9a, raw (123 feats + intercept = 124) | **german.numer, standardized** (24 + 1 = 25) |
+> | `m_sub` | 600 | 300 |
+> | `xopt_norm_max` | O(10²), "do not tighten below ~120" | `1.0e4` (loose; `‖x*‖` is ~1.5-8 on standardized german.numer) |
+> | eps grid | logspace 1e-4 .. 10^-0.5 | logspace **1e-8** .. 10^-0.5, 16 points |
+> | `pep_obj` | `obj_val` | **`grad_sq_norm`** |
+> | `L`, `R` | 1.87, 191.7 | calibrated at runtime (~0.7, ~4-8) |
+>
+> The log-2 argument below is specifically about `pep_obj: obj_val` and does
+> not transfer verbatim to `grad_sq_norm`. Standardization is what shrinks `R`
+> by two orders of magnitude, which in turn is why the eps grid had to reach
+> further down.
+>
+> The DR-L2O learning experiment now shares this instance distribution: set
+> `data: german.numer` in `configs_learning/logreg.yaml` and
+> `learning_experiment_classes/logreg.py` samples through `logreg_data.py`,
+> so the learned schedules and these certificates describe the same problems.
+
 ## Instance distribution
 
 - Unregularized (`delta = 0`, smooth convex, `mu = 0`) logistic regression:

@@ -75,7 +75,7 @@ def main():
         base_dir = os.environ.get(
             'DRO_PEP_CERT_OUT', '/scratch/gpfs/BSTELLATO/vranjan/dro_pep_out')
     elif sys.argv[2] == 'local':
-        base_dir = '.'
+        base_dir = os.environ.get('DRO_PEP_CERT_OUT', '.')
     else:
         print('specify cluster or local')
         exit(0)
@@ -90,7 +90,10 @@ def main():
     base_dir = f'{base_dir}/{base_dir_map[sys.argv[1]]}'
     driver = func_driver_map[sys.argv[1]]
 
-    if target_machine == 'local' or "SLURM_ARRAY_TASK_ID" not in os.environ:
+    # The param table is selected by SLURM_ARRAY_TASK_ID alone, not by the
+    # target: that is what lets a local run reproduce one cluster task exactly
+    # (slurm_scripts/mit/run.sh --local --array N sets it).
+    if "SLURM_ARRAY_TASK_ID" not in os.environ:
         hydra_tags = [f'hydra.run.dir={base_dir}/${{now:%Y-%m-%d}}/${{now:%H-%M-%S}}', 'hydra.job.chdir=True']
     else:
         job_idx = int(os.environ["SLURM_ARRAY_TASK_ID"])
@@ -109,7 +112,10 @@ def main():
         if experiment == 'LogReg':
             hydra_tags += LogReg_params[job_idx]
 
-    sys.argv = [sys.argv[0]] + hydra_tags
+    # Anything past <experiment> <local|cluster> is passed straight to hydra, so a
+    # launcher can sweep K blocks or eps grids without editing the param tables.
+    extra_args = sys.argv[3:]
+    sys.argv = [sys.argv[0]] + hydra_tags + extra_args
 
     driver()
 

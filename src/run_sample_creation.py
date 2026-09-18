@@ -83,7 +83,7 @@ def main():
             'DRO_PEP_SAMPLE_OUT', '/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out'
         )
     elif target_machine == 'local':
-        base_dir = '.'
+        base_dir = os.environ.get('DRO_PEP_SAMPLE_OUT', '.')
     else:
         print('specify cluster or local')
         exit(0)

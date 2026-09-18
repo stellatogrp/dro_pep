@@ -32,6 +32,17 @@ from learning.trajectories.logreg_gd_fgm import (
 )
 from learning.silver_stepsizes import get_nonstrongly_convex_silver_stepsizes
 from learning.acceleration_stepsizes import jax_get_nesterov_fgm_beta_sequence
+# The certification experiment's real-data instance sampler, reused rather than
+# duplicated: it already produces exactly this module's data contract (labels in
+# {0,1}, trailing intercept column, mean logistic loss solved with CLARABEL), and
+# it carries the separability guard the synthetic generator does not need.
+# Safe to import across packages: experiment_classes/__init__.py is empty and
+# logreg_data imports only cvxpy, numpy, sklearn and stdlib.
+from experiment_classes.logreg_data import (
+    DATASETS,
+    load_dataset,
+    sample_instance_batch,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -234,18 +245,54 @@ class LogRegProblemModule(ProblemModule):
     Every sample carries its own (A, b); delta (the L2 weight) is fixed by
     config and baked into the trajectory functions, so it never enters the
     batched-parameter plumbing.
+
+    Two instance distributions, selected by ``cfg.data``:
+
+    ``'synth'``
+        Gaussian design, sparse true beta, noisy threshold labels. Dimensions
+        come from ``cfg.n`` / ``cfg.N_data``.
+    a dataset name (``'german.numer'``, ``'a9a'``, ``'ijcnn1'``)
+        An instance is a uniform ``cfg.m_sub``-row subsample of a standardized
+        LIBSVM dataset -- the certification experiment's distribution, so the
+        learned schedules and the certificates describe the same problems.
+        ``n`` is then the dataset's column count (+1 for the intercept) and
+        ``N_data`` is ``m_sub``; the config's values are ignored.
+
+    Both produce the same downstream contract, so the npz format, the loader,
+    the trajectory functions and the PEP construction are shared verbatim.
     """
 
     def __init__(self, cfg: Any):
         super().__init__(cfg)
 
-        self.n_val = cfg.n
-        self.N_data_val = cfg.N_data
+        self.data_mode = cfg.get('data', 'synth')
+        self.is_real = self.data_mode != 'synth'
         self.delta_val = float(cfg.delta)
-        self.A_std_val = cfg.A_std
-        self.p_beta_nonzero_val = cfg.p_beta_nonzero
-        self.beta_scale_val = cfg.beta_scale
-        self.eps_std_val = cfg.eps_std
+
+        if self.is_real:
+            if self.data_mode not in DATASETS:
+                raise ValueError(
+                    f"cfg.data='{self.data_mode}' is neither 'synth' nor a known "
+                    f"LIBSVM dataset; expected one of {sorted(DATASETS)}."
+                )
+            # Loaded once and cached: every instance is a subsample of these rows.
+            self._A_full, self._b_full = load_dataset(
+                self.data_mode,
+                intercept=bool(cfg.get('intercept', True)),
+                standardize=bool(cfg.get('standardize', True)),
+            )
+            # The dataset fixes the dimension; cfg.n / cfg.N_data are synth-only.
+            self.n_val = int(self._A_full.shape[1])
+            self.N_data_val = int(cfg.m_sub)
+        else:
+            self._A_full = self._b_full = None
+            self.n_val = cfg.n
+            self.N_data_val = cfg.N_data
+
+        self.A_std_val = cfg.get('A_std', 1.0)
+        self.p_beta_nonzero_val = cfg.get('p_beta_nonzero', 0.3)
+        self.beta_scale_val = cfg.get('beta_scale', 3.0)
+        self.eps_std_val = cfg.get('eps_std', 6.0)
 
         # Factory-built trajectory fns with delta baked in (stable jit identity)
         self._traj_fn_gd = create_logreg_traj_fn_gd(self.delta_val)
@@ -254,20 +301,68 @@ class LogRegProblemModule(ProblemModule):
         # Cache for compute_L_mu_R (data-dependent, computed once)
         self._L_mu_R = None
 
+    @property
+    def _ood_multiplier(self) -> float:
+        return float(self.cfg.get('ood_std_multiplier', 1.25))
+
     # -------------------------------------------------------------------------
     # Sampling
     # -------------------------------------------------------------------------
 
-    def _sample_fresh_batch(self, key: jax.Array, N: int, A_std: float,
-                            eps_std: float | None = None) -> Tuple[ProblemData, GroundTruth]:
-        """Fresh (A, b) sampling + CVXPY solves; z0 = -x_opt (x0 = 0)."""
-        if eps_std is None:
-            eps_std = self.eps_std_val
-        A_batch, b_batch, x_opt_batch, f_opt_batch = sample_logreg_batch(
-            key, N, self.N_data_val, self.n_val, A_std,
-            self.p_beta_nonzero_val, self.beta_scale_val,
-            eps_std, self.delta_val,
+    def _sample_real_batch(self, seed, N: int,
+                           feature_scale: float = 1.0) -> Tuple[ProblemData, GroundTruth]:
+        """N real instances: m_sub-row subsamples of the cached dataset.
+
+        ``feature_scale`` multiplies the WHOLE design matrix, intercept column
+        included -- that is what makes L scale by exactly feature_scale**2 (and
+        ||x*|| by 1/feature_scale) rather than approximately; see the
+        ood_std_multiplier note in configs_learning/logreg.yaml.
+
+        Reproducibility: the separability rejection loop inside sample_instance
+        consumes rng draws, so the same seed yields a different instance set if
+        m_sub, delta, xopt_norm_max or the solver changes.
+        """
+        rng = np.random.default_rng(int(seed))
+        A_full = self._A_full if feature_scale == 1.0 else feature_scale * self._A_full
+        instances, _ = sample_instance_batch(
+            rng, A_full, self._b_full, self.cfg, N,
+            desc=f'{self.data_mode} instances',
         )
+        A_batch = jnp.asarray(np.stack([inst[0] for inst in instances]))
+        b_batch = jnp.asarray(np.stack([inst[1] for inst in instances]))
+        x_opt_batch = jnp.asarray(np.stack([inst[2] for inst in instances]))
+        f_opt_batch = jnp.asarray(np.array([inst[3] for inst in instances]))
+        return A_batch, b_batch, x_opt_batch, f_opt_batch
+
+    def _sample_fresh_batch(self, key: jax.Array, N: int, dist: str = 'in',
+                            seed=None) -> Tuple[ProblemData, GroundTruth]:
+        """Fresh instance sampling + CVXPY solves; z0 = -x_opt (x0 = 0).
+
+        ``dist`` is 'in' or 'ood'; each data mode maps it to its own shift axis
+        (synth: A_std and eps_std scaled; real: a global feature scale). Keeping
+        the selector abstract here is what lets every caller stay mode-agnostic.
+
+        ``seed`` seeds the real sampler, which is numpy-based rather than JAX.
+        Sample creation passes its per-set seed through; callers that only hold
+        a JAX key let one be derived from it deterministically.
+        """
+        if dist not in ('in', 'ood'):
+            raise ValueError(f"dist must be 'in' or 'ood', got {dist!r}")
+        mult = self._ood_multiplier if dist == 'ood' else 1.0
+
+        if self.is_real:
+            if seed is None:
+                seed = int(jax.random.randint(key, (), 0, 2 ** 31 - 1))
+            A_batch, b_batch, x_opt_batch, f_opt_batch = self._sample_real_batch(
+                seed, N, feature_scale=mult,
+            )
+        else:
+            A_batch, b_batch, x_opt_batch, f_opt_batch = sample_logreg_batch(
+                key, N, self.N_data_val, self.n_val, self.A_std_val * mult,
+                self.p_beta_nonzero_val, self.beta_scale_val,
+                self.eps_std_val * mult, self.delta_val,
+            )
+
         z0_batch = -x_opt_batch
         return (
             {'A_batch': A_batch, 'b_batch': b_batch, 'z0_batch': z0_batch},
@@ -290,43 +385,44 @@ class LogRegProblemModule(ProblemModule):
         )
 
     def sample_training_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        loaded = self._load_set('training_set.npz', N,
-                                self.cfg.get('training_seed', 40000), 'training')
+        seed = self.cfg.get('training_seed', 40000)
+        loaded = self._load_set('training_set.npz', N, seed, 'training')
         if loaded is not None:
             return loaded
-        return self._sample_fresh_batch(key, N, self.A_std_val)
+        return self._sample_fresh_batch(key, N, 'in', seed=seed)
 
     def sample_validation_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        loaded = self._load_set('validation_set.npz', N,
-                                self.cfg.out_of_sample_val_seed, 'validation')
+        seed = self.cfg.out_of_sample_val_seed
+        loaded = self._load_set('validation_set.npz', N, seed, 'validation')
         if loaded is not None:
             return loaded
-        return self._sample_fresh_batch(key, N, self.A_std_val)
+        return self._sample_fresh_batch(key, N, 'in', seed=seed)
 
     def sample_test_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        loaded = self._load_set('test_set.npz', N,
-                                self.cfg.out_of_sample_test_seed, 'test')
+        seed = self.cfg.out_of_sample_test_seed
+        loaded = self._load_set('test_set.npz', N, seed, 'test')
         if loaded is not None:
             return loaded
-        return self._sample_fresh_batch(key, N, self.A_std_val)
+        return self._sample_fresh_batch(key, N, 'in', seed=seed)
 
     def _sample_ood_batch(self, key: jax.Array, N: int) -> Tuple[ProblemData, GroundTruth]:
-        """OOD: A_std AND eps_std scaled by ood_std_multiplier.
+        """OOD along the L-shift axis, mirroring the Quad OOD design.
 
-        Scaling both preserves the margin-to-noise ratio (same label
-        distribution, so instances stay decisively non-separable and x_opt
-        bounded, which unregularized logistic regression requires) while the
-        smoothness constant grows by multiplier^2 — the L-shift robustness
-        axis, mirroring the Quad OOD design.
+        synth: A_std AND eps_std scaled by ood_std_multiplier. Scaling both
+        preserves the margin-to-noise ratio (same label distribution, so
+        instances stay decisively non-separable and x_opt bounded, which
+        unregularized logistic regression requires) while the smoothness
+        constant grows by multiplier^2.
+
+        real: the design matrix is scaled by the same multiplier, which is the
+        exact analogue -- L *= multiplier^2 and ||x*|| /= multiplier exactly,
+        with f* and separability untouched.
         """
-        loaded = self._load_set('ood_set.npz', N,
-                                self.cfg.out_of_dist_seed, 'ood')
+        seed = self.cfg.out_of_dist_seed
+        loaded = self._load_set('ood_set.npz', N, seed, 'ood')
         if loaded is not None:
             return loaded
-        multiplier = self.cfg.get('ood_std_multiplier', 1.25)
-        return self._sample_fresh_batch(
-            key, N, self.A_std_val * multiplier, self.eps_std_val * multiplier
-        )
+        return self._sample_fresh_batch(key, N, 'ood', seed=seed)
 
     def generate_out_of_sample_data(
         self, key: jax.Array
@@ -383,6 +479,26 @@ class LogRegProblemModule(ProblemModule):
                 f"Computed from {train_path}: L={L:.6f} (cfg {self.cfg.get('L', None)}), "
                 f"R={R:.6f} (cfg {self.cfg.get('R', None)}), mu={mu}"
             )
+        elif self.is_real:
+            # Real-data fallback: same two maxima as the primary path, over a
+            # throwaway draw. cfg.L/cfg.R are the synthetic constants, so the
+            # real mode has its own pair.
+            L_cfg = self.cfg.get('L_real', None)
+            R_cfg = self.cfg.get('R_real', None)
+            if L_cfg is not None and R_cfg is not None:
+                L, R = float(L_cfg), float(R_cfg)
+            else:
+                n_ref = int(self.cfg.get('R_sample_size', 100))
+                A_b, _, x_opt_b, _ = self._sample_real_batch(
+                    self.cfg.get('R_seed', 5002), n_ref,
+                )
+                L_vals = jax.vmap(
+                    lambda A: compute_logreg_L_single(A, self.delta_val)
+                )(A_b)
+                L = float(jnp.max(L_vals))
+                R = float(jnp.max(jnp.linalg.norm(x_opt_b, axis=1)))
+            log.info(f"Using L={L:.6f}, R={R:.6f}, mu={mu} "
+                     f"({self.data_mode}, no training_set.npz)")
         else:
             L_cfg = self.cfg.get('L', None)
             R_cfg = self.cfg.get('R', None)
@@ -549,6 +665,23 @@ class LogRegProblemModule(ProblemModule):
                 f"smooth-convex benchmark; got delta={self.delta_val}. "
                 "Remove the override or change this guard deliberately."
             )
+        if self.is_real:
+            m_total = int(self._A_full.shape[0])
+            m_sub = int(self.cfg.m_sub)
+            if m_sub > m_total:
+                raise ValueError(
+                    f"m_sub={m_sub} exceeds the {m_total} rows of "
+                    f"'{self.data_mode}'; instances are drawn without replacement."
+                )
+            if m_sub <= self.n_val:
+                # sample_instance would otherwise raise from deep inside a batch,
+                # after burning max_resample solves per instance.
+                raise ValueError(
+                    f"m_sub={m_sub} is not above n={self.n_val} for "
+                    f"'{self.data_mode}': with delta=0 such subsamples are "
+                    "essentially always separable and every draw is rejected. "
+                    "Raise m_sub well above n."
+                )
 
 
 # =============================================================================
@@ -599,9 +732,14 @@ def logreg_sample_creation_run(cfg):
         validation_set.npz (in-distribution, size cfg.out_of_sample_val_N)
         test_set.npz       (in-distribution, size cfg.out_of_sample_test_N)
         ood_set.npz        (out-of-distribution, size cfg.out_of_dist_N;
-                            A_std AND eps_std scaled by cfg.ood_std_multiplier,
-                            raising L by multiplier^2 at unchanged label
-                            distribution)
+                            L raised by cfg.ood_std_multiplier**2 -- synth
+                            scales A_std and eps_std, real scales the design
+                            matrix; see LogRegProblemModule._sample_ood_batch)
+
+    The four sets differ only by seed, which for real data is the whole story:
+    an instance is a subsample of one fixed dataset, exactly as in the
+    certification experiment (configs/logreg.yaml separates seed.in_sample from
+    seed.out_of_sample the same way). Rows are therefore shared across sets.
 
     z0 = -x_opt for every instance (x0 = 0 in original coordinates). Every
     instance is solved with CVXPY/CLARABEL. Per-set L_max and R_max are
@@ -616,10 +754,11 @@ def logreg_sample_creation_run(cfg):
     multiplier = cfg.get('ood_std_multiplier', 1.25)
     delta = float(cfg.delta)
 
+    # Dimensions come from the module, not the config: for real data they are
+    # the dataset's, and cfg.n / cfg.N_data are stale synthetic values.
     metadata = {
-        'n': cfg.n, 'N_data': cfg.N_data, 'delta': delta,
-        'A_std': cfg.A_std, 'p_beta_nonzero': cfg.p_beta_nonzero,
-        'beta_scale': cfg.beta_scale, 'eps_std': cfg.eps_std,
+        'data': module.data_mode,
+        'n': module.n_val, 'N_data': module.N_data_val, 'delta': delta,
         'ood_std_multiplier': multiplier,
         'training_sample_N': cfg.training_sample_N,
         'training_seed': cfg.training_seed,
@@ -630,12 +769,27 @@ def logreg_sample_creation_run(cfg):
         'out_of_dist_N': cfg.out_of_dist_N,
         'out_of_dist_seed': cfg.out_of_dist_seed,
     }
+    # Whichever knobs actually shaped this run, so a run directory says which
+    # distribution produced it.
+    if module.is_real:
+        metadata.update({
+            'm_sub': int(cfg.m_sub),
+            'intercept': bool(cfg.get('intercept', True)),
+            'standardize': bool(cfg.get('standardize', True)),
+            'xopt_norm_max': float(cfg.xopt_norm_max),
+        })
+    else:
+        metadata.update({
+            'A_std': cfg.A_std, 'p_beta_nonzero': cfg.p_beta_nonzero,
+            'beta_scale': cfg.beta_scale, 'eps_std': cfg.eps_std,
+        })
 
-    def _build_set(name, N, seed, filename, A_std, eps_std):
+    def _build_set(name, N, seed, filename, dist):
         log.info(f"Generating {N} {name} problems "
-                 f"(seed={seed}, A_std={A_std}, eps_std={eps_std})...")
+                 f"(data={module.data_mode}, dist={dist}, seed={seed})...")
         key = jax.random.PRNGKey(int(seed))
-        problem_data, ground_truth = module._sample_fresh_batch(key, N, A_std, eps_std)
+        problem_data, ground_truth = module._sample_fresh_batch(
+            key, N, dist, seed=seed)
 
         A_np = np.array(problem_data['A_batch'])
         b_np = np.array(problem_data['b_batch'])
@@ -659,13 +813,13 @@ def logreg_sample_creation_run(cfg):
         log.info(f"Saved {filename} (A {A_np.shape}); L_max={L_max:.6f}, R_max={R_max:.6f}")
 
     _build_set("training", cfg.training_sample_N, cfg.training_seed,
-               "training_set.npz", cfg.A_std, cfg.eps_std)
+               "training_set.npz", 'in')
     _build_set("validation", cfg.out_of_sample_val_N, cfg.out_of_sample_val_seed,
-               "validation_set.npz", cfg.A_std, cfg.eps_std)
+               "validation_set.npz", 'in')
     _build_set("test", cfg.out_of_sample_test_N, cfg.out_of_sample_test_seed,
-               "test_set.npz", cfg.A_std, cfg.eps_std)
+               "test_set.npz", 'in')
     _build_set("ood", cfg.out_of_dist_N, cfg.out_of_dist_seed,
-               "ood_set.npz", cfg.A_std * multiplier, cfg.eps_std * multiplier)
+               "ood_set.npz", 'ood')
 
     np.savez_compressed("out_of_sample_metadata.npz", **metadata)
     log.info("=== LogReg sample-creation complete ===")

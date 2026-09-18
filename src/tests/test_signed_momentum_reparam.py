@@ -103,7 +103,7 @@ def _beta0_grad(signed_momentum: bool) -> float:
     loss_fn = trainer._build_loss_function(K, L, mu, R, stepsizes)
 
     problem_data, ground_truth = module._sample_fresh_batch(
-        jax.random.PRNGKey(1), 4, cfg.A_std
+        jax.random.PRNGKey(1), 4, 'in'
     )
     minibatch = {k[:-6]: v for k, v in {**problem_data, **ground_truth}.items()}
 

@@ -38,6 +38,14 @@ out_of_sample_outputs/
 learn_l2o_outputs/
 learn_lpep_outputs/
 sample_creation_outputs/
+# ICLR campaign results. The subdirectories under it (dro_outputs/,
+# learn_dro_outputs/, ...) already match the patterns above; this names the tree
+# itself so the intent is explicit: raw run dirs are pulled with
+# slurm_scripts/mit/sync.sh --pull, never committed. Only the merged CSVs under
+# experiment_plots*/ go into git.
+src/iclr_data_outputs/
+# sync.sh caches the last cluster target here; it is per-machine.
+src/slurm_scripts/mit/.sync_target
 pdhg_stepsizes/
 *.project
 ripple_tests/
@@ -399,3 +407,4 @@ cython_debug/
 .envrc
 *.csv
 src/experiment_plots/_mirror/
+src/slurm_scripts/mit/

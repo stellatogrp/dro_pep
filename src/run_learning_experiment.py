@@ -135,8 +135,12 @@ Quad_options = [
     ['eta_t=1e-2', 'eta_t=1e-1'],
     ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
     # ['weight_decay=0'],
-    # ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
-    ['K_max=[11, 12, 13, 14, 15]'],
+    # Both K blocks, so one submission covers the paper's full K = 1..15 range.
+    # Splitting them is what keeps a single task's SDP chain a manageable size;
+    # running only the second half (the previous default) silently halved the
+    # sweep. 5 eps x 2 eta x 3 wd x 2 blocks = 60 tasks.
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]',
+     'K_max=[11, 12, 13, 14, 15]'],
     # ['K_max=[15]'],
 ]
 
@@ -269,7 +273,7 @@ def main():
             'DRO_PEP_LEARN_OUT', '/scratch/gpfs/BSTELLATO/vranjan/learn_dro_pep_out'
         )
     elif target_machine == 'local':
-        base_dir = '.'
+        base_dir = os.environ.get('DRO_PEP_LEARN_OUT', '.')
     else:
         print('specify cluster or local')
         exit(0)
@@ -277,7 +281,10 @@ def main():
     base_dir = f'{base_dir}/{base_dir_map[experiment]}'
     driver = func_driver_map[experiment]
 
-    if target_machine == 'local' or "SLURM_ARRAY_TASK_ID" not in os.environ:
+    # The param table is selected by SLURM_ARRAY_TASK_ID alone, not by the
+    # target: that is what lets a local run reproduce one cluster task exactly
+    # (slurm_scripts/mit/run.sh --local --array N sets it).
+    if "SLURM_ARRAY_TASK_ID" not in os.environ:
         # Local run: use defaults from config
         hydra_tags = [
             f'hydra.run.dir={base_dir}/${{now:%Y-%m-%d}}/${{now:%H-%M-%S}}',

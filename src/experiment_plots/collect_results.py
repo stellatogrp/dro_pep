@@ -29,8 +29,16 @@ import os
 import shutil
 import subprocess
 
+# The della defaults are kept so an old campaign can still be re-pulled; the
+# ICLR campaign lives on MIT Sloan, so both are overridable together:
+#   DRO_PEP_CLUSTER_HOST=vranjan1@eosloan.mit.edu \
+#   DRO_PEP_CLUSTER_REMOTE=/nfs/sloanlab007/projects/pdopt_proj/vranjan/dro_pep/src/iclr_data_outputs \
+#       python collect_results.py --pull --merge
+# slurm_scripts/mit/sync.sh --pull does the same transfer over rsync; this path
+# is the one that also untars straight into _mirror/ for --merge.
 HOST = os.environ.get('DRO_PEP_CLUSTER_HOST', 'della-stellato')
-REMOTE = '/scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out'
+REMOTE = os.environ.get('DRO_PEP_CLUSTER_REMOTE',
+                        '/scratch/gpfs/BSTELLATO/bs37/cert_dro_pep_out')
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIRROR = os.path.join(HERE, '_mirror')
 
