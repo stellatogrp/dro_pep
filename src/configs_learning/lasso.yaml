@@ -87,7 +87,9 @@ output_dir: "learn_dro_outputs"
 # data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-22/14-55-30"
 # xsamp std 2
 # data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-04-30/00-13-51"
-data_source_dir: "/scratch/gpfs/BSTELLATO/vranjan/out_of_sample_out/sample_creation_outputs/Lasso/2026-05-03/19-48-28"
+# ICLR campaign sets, generated on MIT Sloan by
+#   run.sh --stage sample-creation --exp all --cluster
+data_source_dir: /nfs/sloanlab007/projects/pdopt_proj/vranjan/dro_pep/src/iclr_data_outputs/sample_creation_outputs/Lasso/2026-09-18/08-30-44
 
 # Out-of-sample validation/test configuration
 out_of_sample_val_N: 250     # Number of validation samples (in-distribution)

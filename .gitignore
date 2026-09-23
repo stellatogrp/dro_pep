@@ -44,6 +44,7 @@ sample_creation_outputs/
 # slurm_scripts/mit/sync.sh --pull, never committed. Only the merged CSVs under
 # experiment_plots*/ go into git.
 src/iclr_data_outputs/
+iclr_data_outputs_backup/
 # sync.sh caches the last cluster target here; it is per-machine.
 src/slurm_scripts/mit/.sync_target
 pdhg_stepsizes/

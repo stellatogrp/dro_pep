@@ -2,10 +2,12 @@
 
 Mirrors the selection conventions of lasso_intro_repro/reconstruct_lasso_intro.py:
   - per (framework, alg, K): glob every progress.csv, filter runs via the
-    sibling .hydra/config.yaml, take the min-validation_loss row within each
-    run, then the min across runs;
+    sibling .hydra/config.yaml, take the best row within each run by that
+    framework's own objective (SELECTION_METRIC), then the best across runs;
   - DR-L2O uses the fixed robust choice eps=10, eta_t=1e-3 (not CV'd);
-    L2O and OPT-PEP validation-select the learning rate.
+    L2O validation-selects the learning rate;
+  - OPT-PEP is selected on its TRAINING loss (the worst-case PEP bound), not
+    on validation loss -- see SELECTION_METRIC for why.
 
 Learned schedules and handcrafted baselines (GD 1/L, Silver GD, Nesterov FGM)
 are re-simulated with plain NumPy on the archived test/OOD sets, and
@@ -103,9 +105,30 @@ FRAMEWORK_CFG = {
 DRL2O_EPS = None
 DRL2O_ETA = 1e-3
 
+# Which column each series is selected on -- both within a run (best iterate)
+# and across the sweep.
+#
+# L2O and DR-L2O train against an empirical objective, so validation loss is
+# the honest held-out selector. OPT-PEP does NOT: it minimizes the worst-case
+# PEP bound, and its empirical validation loss *increases monotonically* as it
+# trains (measured on LogReg K=15: 7.7478e-04 -> 7.7869e-04). Selecting it on
+# validation loss therefore always returns iteration 0, i.e. the untrained
+# t = 1/L initialization -- which is why "OPT-PEP GD" came out numerically
+# identical to the "GD (1/L)" baseline. Each series is selected on the
+# objective it actually optimizes.
+SELECTION_METRIC = {
+    'DR-L2O': 'validation_loss',
+    'L2O': 'validation_loss',
+    'OPT-PEP': 'training_loss',
+}
+
 
 def load_candidates(runs_root, series, alg, K):
-    """All (val_loss, t, beta, meta) candidates for one (series, alg, K)."""
+    """All (score, t, beta, meta) candidates for one (series, alg, K).
+
+    `score` is the value of SELECTION_METRIC[series] at the selected row, so it
+    is comparable within a series but not across series.
+    """
     pattern = os.path.join(
         runs_root, FRAMEWORK_DIRS[series], 'LogReg', '*', '*',
         'learn_dro_outputs', f'K_{K}', 'progress.csv',
@@ -130,18 +153,20 @@ def load_candidates(runs_root, series, alg, K):
                 continue
             if float(cfg.get('eta_t', -1)) != DRL2O_ETA:
                 continue
+        metric = SELECTION_METRIC[series]
         df = pd.read_csv(csv_path)
-        df = df[np.isfinite(df['validation_loss'])]
+        df = df[np.isfinite(df[metric])]
         if len(df) == 0:
             continue
-        i = int(df['validation_loss'].idxmin())
+        i = int(df[metric].idxmin())
         t = df.loc[i, [f't{k}' for k in range(K)]].to_numpy(float)
         beta = None
         if f'beta{K - 1}' in df.columns:
             beta = df.loc[i, [f'beta{k}' for k in range(K)]].to_numpy(float)
         out.append((
-            float(df.loc[i, 'validation_loss']), t, beta,
+            float(df.loc[i, metric]), t, beta,
             {'csv': os.path.relpath(csv_path, runs_root), 'row': i,
+             'metric': metric, 'score': float(df.loc[i, metric]),
              'eps': cfg.get('eps'), 'eta_t': cfg.get('eta_t')},
         ))
     return out
@@ -253,10 +278,12 @@ def main():
                 if sel is None:
                     missing.append((label, K))
                     continue
-                val_loss, t_vec, beta_vec, meta = sel
+                _score, t_vec, beta_vec, meta = sel
+                # `meta` already carries 'metric' and 'score'; a 'val_loss'
+                # column would be a lie for OPT-PEP, which is selected on its
+                # training loss (the worst-case PEP bound).
                 add_method(label, K, t_vec,
-                           beta_vec if alg == 'nesterov_fgm' else None,
-                           {'val_loss': val_loss, **meta})
+                           beta_vec if alg == 'nesterov_fgm' else None, meta)
 
     if missing:
         print('WARNING: no runs found for:', missing)

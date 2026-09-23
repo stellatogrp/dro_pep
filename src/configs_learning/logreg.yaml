@@ -116,12 +116,13 @@ ood_std_multiplier: 1.25       # synth: scales BOTH A_std and eps_std by this
                                # fixed step t on mult*A is GD on A with step
                                # t*mult^2, which is what a learned schedule faces.
 
-# Pin training/eval sets to one sample-creation output (set after running
-# run_sample_creation.py; null falls back to fresh sampling).
+# Pin training/eval sets to one sample-creation output (null falls back to
+# fresh per-task sampling, which makes the tasks incomparable -- keep it set).
 #
-# Deliberately null: the previous value pinned the NeurIPS rebuttal's SYNTHETIC
-# eps_std=6.0 sets on della, which neither exist here nor match data:
-# german.numer. Point this at the run_sample_creation.py output for the
-# configured `data` before launching a sweep -- otherwise every task re-samples
-# its own instances and the runs are not comparable.
-data_source_dir: null
+# It MUST match `data` above: the previous value here pinned the NeurIPS
+# rebuttal's SYNTHETIC eps_std=6.0 sets on della. Regenerate with
+# run_sample_creation.py and repoint whenever `data` changes.
+#
+# ICLR campaign sets, generated on MIT Sloan by
+#   run.sh --stage sample-creation --exp all --cluster
+data_source_dir: /nfs/sloanlab007/projects/pdopt_proj/vranjan/dro_pep/src/iclr_data_outputs/sample_creation_outputs/LogReg/2026-09-18/08-30-44

@@ -95,4 +95,6 @@ grad_clip_norm: 1.0
 # Outputs
 # ----------------------------------------------------------------------------
 output_dir: "learn_dro_outputs"
-data_source_dir: "/home/vranjan/dro_pep/src/sample_creation_outputs/PDLP/2026-05-02/15-49-18/"  # Set to a previous PDLP sample-creation Hydra run dir to reuse its bundles.
+# ICLR campaign sets, generated on MIT Sloan by
+#   run.sh --stage sample-creation --exp all --cluster
+data_source_dir: /nfs/sloanlab007/projects/pdopt_proj/vranjan/dro_pep/src/iclr_data_outputs/sample_creation_outputs/PDLP/2026-09-18/08-51-13

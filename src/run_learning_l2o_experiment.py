@@ -154,8 +154,17 @@ Learn_Quad_params = conditional_product(
     ]
 )
 
-# L2O LogReg sweep: 2 algs x 3 etas x 3 K = 18 tasks (array 0-17).
-# idx = alg_idx*9 + eta_idx*3 + K_idx (last list varies fastest).
+# L2O LogReg sweep: 2 algs x 3 etas = 6 tasks (array 0-5), each covering the
+# whole K = 1..15 range in one process.
+# idx = alg_idx*3 + eta_idx (last list varies fastest).
+#
+# Grouped, unlike the DR-L2O sweep, which runs ONE K per task. That split
+# exists because the SDP layer leaks ~86 bytes per matrix nonzero per SGD step,
+# so a DR-L2O task's peak memory is set by the total work it does. L2O never
+# touches the SDP layer -- its iterations are ~0.002 s and flat in memory -- so
+# the only thing that matters here is process startup, which measured at 44 s
+# against 1.5 s of actual training for a K=5 run. One task per K would spend
+# ~66 min on 90 interpreter startups; grouped, the whole sweep is ~10 min.
 LogReg_options = [
     ['learning_framework=l2o'],
     ['pep_obj=obj_val'],
@@ -164,7 +173,7 @@ LogReg_options = [
     ['sgd_iters=500'],
     ['alg=vanilla_gd', 'alg=nesterov_fgm'],
     ['eta_t=1e-4', 'eta_t=1e-3', 'eta_t=1e-2'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['K_max=[' + ','.join(str(k) for k in range(1, 16)) + ']'],
 ]
 
 Learn_LogReg_params = conditional_product(

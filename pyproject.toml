@@ -3,13 +3,37 @@ name = "dro-pep"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+# 3.11, not 3.12: the MIT Sloan cluster's module is sloan/python/3.11.4, and
+# nothing here needs 3.12 -- no PEP 695 generics, no `type` statement, no
+# itertools.batched or typing.override.
+requires-python = ">=3.11"
 dependencies = [
     "cvxpy>=1.5.3",
     "gurobipy>=11.0.3",
     "pepit>=0.3.2",
     "clarabel",
-    "diffcp @ git+https://github.com/cvxgrp/diffcp.git@master",
+    # Pinned to an exact tag, not @master, so the cluster and the laptop build
+    # the same library -- but the pin has a FLOOR, and it is not negotiable:
+    # the revision must contain diffcp PR #77 ("Fix Clarabel PSD cone
+    # permutation for multiple cones", first released in v1.1.7).
+    #
+    # We hand diffcp an A built in SCS convention (lower triangle) with
+    # solve_method='CLARABEL', so diffcp does the SCS->Clarabel PSD row
+    # permutation internally -- and our cone dict is 's': [S_mat] * N, i.e. N
+    # PSD cones, exactly the multi-cone case PR #77 fixes. Before that fix the
+    # per-cone row stride was wrong (`start_row += v` instead of
+    # `v*(v+1)//2`), which scrambles A from the second cone onward.
+    # Measured on v1.1.6 at the smallest K, patch on and off: Quad, LogReg and
+    # PDLP all come back "Unbounded" with loss -1.0. On v1.1.9 the same cases
+    # solve, and reproduce the cluster exactly (LogReg initial_loss 0.068718,
+    # PDLP 122.899951). diffcp_patch.py is inert either way -- identical
+    # numbers with it on and off -- since it only wraps M_operator.
+    #
+    # v1.1.9 is the newest tag; master is v1.1.9 plus one CI-only commit.
+    # Bumping this means bumping the checkout at ../diffcp too: setup_env.sh
+    # and sync.sh read the tag back out of this line and refuse to install or
+    # push a mismatch.
+    "diffcp @ git+https://github.com/cvxgrp/diffcp.git@v1.1.9",
     "jax",
     "optax",
     "scipy",

@@ -9,6 +9,8 @@ Usage:
     import diffcp_patch  # Apply patch
     # ... rest of your code
 """
+import os
+
 import numpy as np
 import diffcp._diffcp as _diffcp
 
@@ -35,7 +37,17 @@ def _patched_M_operator(Q, cones_parsed, u, v, w):
     return _original_M_operator(Q, cones_parsed, u, v, w)
 
 
-# Apply the patch
-_diffcp.M_operator = _patched_M_operator
-
-print("[diffcp_patch] Applied COO->CSC and array->float fixes for M_operator")
+# Apply the patch.
+#
+# The escape hatch exists because diffcp upstream keeps fixing this same
+# territory -- notably PR #77, the Clarabel PSD-cone permutation for MULTIPLE
+# cones, which is exactly our layout ('s': [S_mat] * N). Whether this patch is
+# still needed, or now double-corrects, has to be answerable against any given
+# diffcp build without editing the six modules that import this one:
+#
+#   DRO_PEP_NO_DIFFCP_PATCH=1 python run_learning_experiment.py ...
+if os.environ.get('DRO_PEP_NO_DIFFCP_PATCH') == '1':
+    print("[diffcp_patch] NOT applied (DRO_PEP_NO_DIFFCP_PATCH=1)")
+else:
+    _diffcp.M_operator = _patched_M_operator
+    print("[diffcp_patch] Applied COO->CSC and array->float fixes for M_operator")

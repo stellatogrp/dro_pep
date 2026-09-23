@@ -92,7 +92,8 @@ Cluster jobs use `SLURM_ARRAY_TASK_ID` to select algorithm/parameter combination
 
 ## Dependencies
 
-Requires Python >=3.12. Key packages:
+Requires Python >=3.11 (the MIT Sloan cluster module is `sloan/python/3.11.4`).
+Key packages:
 - cvxpy, PEPit: Optimization modeling
 - Clarabel, SCS: SDP solvers (Clarabel preferred for learning)
 - diffcp: Differentiable cone programming (installed from git master)

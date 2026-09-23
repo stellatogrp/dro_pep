@@ -139,7 +139,15 @@ Learn_Quad_params = conditional_product(
     ]
 )
 
-# LPEP (OPT-PEP) LogReg sweep: 2 algs x 3 etas x 3 K = 18 tasks (array 0-17).
+# LPEP (OPT-PEP) LogReg sweep: 2 algs x 3 etas = 6 tasks (array 0-5), each
+# covering K = 1..15 in one process.
+#
+# Grouped like the L2O sweep rather than split per-K like DR-L2O. OPT-PEP
+# IS an SDP and so does go through the leaking layer, but it is the pure
+# worst-case PEP -- no N=20 sampled instances in the cone -- so the matrix is
+# orders of magnitude smaller: 0.006 s/iter at K=5 against DR-L2O's 0.605 s.
+# Startup dominates at that scale, so one task per K would be ~90 interpreter
+# launches for a few minutes of actual work.
 # idx = alg_idx*9 + eta_idx*3 + K_idx (last list varies fastest).
 # NOTE: framework was wrongly 'l2o' before; lpep ignores eps/N.
 LogReg_options = [
@@ -148,7 +156,7 @@ LogReg_options = [
     ['sgd_iters=500'],
     ['alg=vanilla_gd', 'alg=nesterov_fgm'],
     ['eta_t=1e-5', 'eta_t=1e-4', 'eta_t=1e-3'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    ['K_max=[' + ','.join(str(k) for k in range(1, 16)) + ']'],
 ]
 
 Learn_LogReg_params = conditional_product(

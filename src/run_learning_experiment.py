@@ -128,10 +128,14 @@ Quad_options = [
     # ['alpha=0.1'],
     ['stepsize_type=vector'],
     # ['vector_init=fixed', 'vector_init=silver'],
-    ['eps=1e-3', 'eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=10.0'],
+    # ONE eps, not a sweep: the paper figure consumes a single radius per
+    # problem -- experiment_plots_icml/quad/data_scrape.py pins eps=1.0.
+    # The hyperparameter search that find_best_stepsizes.py actually
+    # resolves is over eta_t x weight_decay, which is kept below.
+    ['eps=1.0'],
     # ['mu=1'],
     ['N=20'],
-    ['sgd_iters=1000'],
+    ['sgd_iters=500'],
     ['eta_t=1e-2', 'eta_t=1e-1'],
     ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
     # ['weight_decay=0'],
@@ -139,9 +143,12 @@ Quad_options = [
     # Splitting them is what keeps a single task's SDP chain a manageable size;
     # running only the second half (the previous default) silently halved the
     # sweep. 5 eps x 2 eta x 3 wd x 2 blocks = 60 tasks.
+    # Three blocks, ~2.1 / 4.7 / 9.5 h per task (iclr_data_outputs/cost_model.py).
+    # Split for parallelism, not for the wall limit -- these go to
+    # sched_mit_sloan_batch, MaxTime 4-00:00:00.
     ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]',
-     'K_max=[11, 12, 13, 14, 15]'],
-    # ['K_max=[15]'],
+     'K_max=[11, 12, 13, 14, 15]',
+     'K_max=[16, 17, 18, 19, 20]'],
 ]
 
 # Parameter combinations for Slurm array jobs
@@ -160,9 +167,37 @@ Learn_Quad_params = conditional_product(
     ]
 )
 
-# DR-L2O LogReg sweep: 2 algs x 5 eps x 3 K = 30 tasks (array 0-29).
-# itertools.product varies the LAST list fastest, so
-# idx = alg_idx*15 + eps_idx*3 + K_idx.
+# DR-L2O LogReg sweep: 2 algs x 15 K = 30 tasks (array 0-29).
+# itertools.product varies the LAST list fastest, so idx = alg_idx*15 + (K-1):
+#   vanilla_gd   K=1..15 -> idx  0..14
+#   nesterov_fgm K=1..15 -> idx 15..29
+#
+# ONE K per task, deliberately. The SDP layer leaks ~88 bytes per matrix
+# nonzero per SGD step and never frees it, so peak memory is set by the TOTAL
+# work a task does, not by its largest problem -- a task holding several K
+# values pays the sum. (Measured: a Quad task running K=1..10 finished K=1..6
+# and then died at 16G a hundred iterations into K=7, which alone needs ~4G.)
+# Splitting one K per task is what keeps the per-task request tractable.
+#
+# Calibration for the --mem you need at sgd_iters=500. alg=nesterov_fgm K=15
+# OOM'd at BOTH memory levels we ran -- 48G at iteration 476 (22976799_5) and
+# 16G at iteration 82 (23331838_6) -- which are two exact points on
+# mem = base + leak*iters, so the fit is measured rather than extrapolated:
+#
+#   leak = 86.1 bytes per matrix nonzero per SGD step
+#   base = 9.3 GB, essentially independent of K (XLA + the dense A intermediate)
+#   need(K, 500 iters) ~= 9.3 GB + 43.0 KB * nnz(K)
+#   nnz(K) = 10K^4 + 100K^3 + 390K^2 + 780K + 640
+#
+# giving  K<=9: 17G   K=10: 20G   K=12: 29G   K=13: 34G   K=14: 42G   K=15: 50G.
+# It back-predicts every 16G OOM we saw to within 6-16% on the conservative
+# side. Note the 9.3 GB floor: even K=1 needs ~10G, so there is no such thing
+# as a cheap task here.
+#
+# K=15 is the ceiling. The same law puts K=20 at ~120G, which does not fit
+# under the per-user memory cap -- raising it needs the leak fixed, not a
+# bigger --mem.
+# See slurm_scripts/mit/run.sh for the tiered --array/--mem submission.
 LogReg_options = [
     ['learning_framework=ldro-pep'],
     ['pep_obj=obj_val'],
@@ -171,8 +206,11 @@ LogReg_options = [
     ['sgd_iters=500'],
     ['eta_t=1e-3'],
     ['alg=vanilla_gd', 'alg=nesterov_fgm'],
-    ['eps=0.01', 'eps=0.1', 'eps=1.0', 'eps=5.0', 'eps=10.0'],
-    ['K_max=[5]', 'K_max=[10]', 'K_max=[15]'],
+    # One eps, matching Quad. LogReg has no pinned value in the plotting
+    # code yet (logreg/data_scrape.py constrains only alg), so this is a
+    # choice -- restore the 5-value list for the eps-vs-robustness curve.
+    ['eps=1.0'],
+    [f'K_max=[{k}]' for k in range(1, 16)],
 ]
 
 Learn_LogReg_params = conditional_product(
@@ -196,14 +234,32 @@ Lasso_options = [
     #  'training_sample_N=1000'],
     ['training_sample_N=1000'],
     ['dro_obj=expectation'],
-    ['sgd_iters=1000'],
-    ['eps=10.0', 'eps=50.0', 'eps=100.0'],
+    ['sgd_iters=500'],
+    # ONE eps, not a sweep: the paper figure consumes a single radius per
+    # problem -- experiment_plots_icml/lasso/data_scrape.py pins eps=10.0.
+    # The hyperparameter search that find_best_stepsizes.py actually
+    # resolves is over eta_t x weight_decay, which is kept below.
+    ['eps=10.0'],
     # ['eta_t=1e-5', 'eta_t=1e-4', 'eta_t=1e-3'],
     ['eta_t=1e-4', 'eta_t=1e-3'],
     ['weight_decay=0', 'weight_decay=1e-5', 'weight_decay=1e-4'],
-    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'],
-    # ['K_max=[11, 12, 13]'],
-    # ['K_max=[14, 15]'],
+    # K blocks are sized so that no single task exceeds ~21 h at
+    # sgd_iters=1000. Lasso's SDP is 4x Quad's at equal K (nnz leading
+    # coefficient 40 vs 10) and its per-iteration cost grows as nnz^0.87,
+    # so past K=15 each horizon gets its own task: K=20 alone is ~76 s/iter.
+    # Lasso is the expensive one: its SDP is 4x Quad's at equal K and cost
+    # grows as nnz^0.87 -- an exponent anchored by a direct K=20 measurement
+    # (78.7 s/iter, which the model predicts to 0.4%), not extrapolated.
+    # Past K=15 each horizon gets its own task: K=20 alone is ~22 h at
+    # sgd_iters=1000, which needs the 4-day sched_mit_sloan_batch partition.
+    ['K_max=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]',
+     'K_max=[11, 12, 13]',
+     'K_max=[14, 15]',
+     'K_max=[16]',
+     'K_max=[17]',
+     'K_max=[18]',
+     'K_max=[19]',
+     'K_max=[20]'],
 ]
 
 Learn_Lasso_params = conditional_product(
@@ -224,10 +280,24 @@ PDLP_options = [
     ['N=5'],
     # ['dro_obj=expectation', 'dro_obj=cvar'],
     # ['alpha=0.1'],
-    ['sgd_iters=10'],
+    # 10 iterations was a smoke-test budget, not a training budget -- the
+    # archived runs reach their best training loss as late as iteration ~900,
+    # so 10 never left the initialization. PDLP cannot join the other three at
+    # 500: one SGD step is ~57 s at K=10 and ~150 s at K=15, so even its
+    # cheapest block would need 23 h against the default partition's 12 h cap.
+    ['sgd_iters=100'],
     ['eta_t=1e-4', 'eta_t=1e-3'],
     ['eps=1.0', 'eps=10.0'],
-    ['K_max=[8, 9, 10]'],
+    # Capped at 12, NOT 15. Measured at sgd_iters=1: K=12 solves (86.9 s/iter,
+    # loss 23.62) but K=14 and K=15 both come back
+    # "[SparseFwd] Solver status: Failure". K=14 also takes 546.7 s/iter
+    # against a modelled 121 s -- the extra time IS the failure, spent in
+    # Clarabel's reduced-tolerance retries. A failed forward solve still
+    # returns a number (K=14 reported loss 19.51), so this would have produced
+    # plausible-looking garbage rather than an obvious crash.
+    # K=13 is untested; it is the only horizon that could still be recovered.
+    ['K_max=[8, 9, 10, 11]',
+     'K_max=[12]'],
 ]
 
 Learn_PDLP_params = conditional_product(
