@@ -43,7 +43,8 @@ def settings(problem):
     # Declared before looking at any new result. All configurations are exported.
     out = [Setting('fixed_1L', rule='fixed'),
            Setting('vinit_coarse', rule='coarse', growth=2, c=1e-4),
-           Setting('vinit_coarse_reset', rule='coarse', growth=2, c=1e-4, compound=False)]
+           Setting('vinit_coarse_reset', rule='coarse', growth=2, c=1e-4, compound=False),
+           Setting('vinit_safeguarded', rule='safeguard', growth=2, c=1e-4)]
     rules = [('majorization', 0.5)]
     if problem.startswith('logreg'):
         rules = [('armijo', 1e-4), ('majorization', 0.5)]
@@ -109,7 +110,7 @@ def simulate(problem, s, lambd, t0, K, cfg, schedule=None, beta=None, monitor=Tr
                 counts['function'][:, k + 1] += 1
         if cfg.rule == 'fixed':
             t = np.full(N, schedule[k] if schedule is not None else t0)
-        elif cfg.rule == 'coarse':
+        elif cfg.rule in ['coarse', 'safeguard']:
             t = cfg.growth * (previous if cfg.compound else np.full(N, t0))
         else:
             t = np.full(N, t0) if k == 0 else cfg.growth * previous
@@ -158,7 +159,7 @@ def simulate(problem, s, lambd, t0, K, cfg, schedule=None, beta=None, monitor=Tr
                 accepted[ids, k] = True
             active = active[~take]
             if active.size:
-                if cfg.rule == 'coarse':
+                if cfg.rule == 'coarse' or (cfg.rule == 'safeguard' and trial_number == 1):
                     t[active] = t0
                 else:
                     t[active] *= cfg.shrink
@@ -300,7 +301,7 @@ def summary_rows(problem, method, label, split, r, fopt, only_K=None, timing=np.
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--problem', choices=['lasso', 'logreg_gd', 'logreg_fgm'], required=True)
-    ap.add_argument('--mode', choices=['smoke', 'full'], default='full')
+    ap.add_argument('--mode', choices=['smoke', 'full', 'safeguard'], default='full')
     ap.add_argument('--results-dir', type=Path, required=True)
     ap.add_argument('--repeats', type=int, default=5)
     args = ap.parse_args()
@@ -331,7 +332,7 @@ def main():
     def run(method, label, cfg, K=15, schedule=None, beta=None, only_K=None):
         for split, s in data['splits'].items():
             p = raw / f'{method}_{split}.npz'
-            t0 = data['t_default'] if cfg.rule == 'coarse' else (1.0 if cfg.initial == 'unit' else 1/data['L'])
+            t0 = data['t_default'] if cfg.rule in ['coarse', 'safeguard'] else (1.0 if cfg.initial == 'unit' else 1/data['L'])
             if p.exists():
                 stored = np.load(p)
                 if str(stored['signature']) != signature:
@@ -341,7 +342,7 @@ def main():
             else:
                 fn = lambda: simulate(args.problem, s, data['lambd'], t0, K, cfg, schedule, beta)
                 r = fn()
-                if cfg.rule == 'backtrack':
+                if cfg.rule in ['backtrack', 'safeguard']:
                     assert np.max(r['violations']) < 1e-8, (method, np.max(r['violations']))
                 if cfg.rule == 'fixed':
                     t = schedule if schedule is not None else np.full(K, t0)
@@ -365,16 +366,18 @@ def main():
             print(f'{method} {split}: K={K} mean={r["losses"][:, -1].mean():.6g}', flush=True)
 
     for label, tag, K, t, beta, meta in schedules(args.problem):
-        if args.mode == 'smoke' and K != 15:
+        if args.mode == 'safeguard' or (args.mode == 'smoke' and K != 15):
             continue
         manifest['schedules'].append(dict(label=label, K=K, steps=t.tolist(),
                                          beta=None if beta is None else beta.tolist(), **meta))
         run(f'{tag}_K{K}', label, Setting(label, rule='fixed'), K, t, beta, only_K=K)
     for cfg in settings(args.problem):
+        if args.mode == 'safeguard' and cfg.name != 'vinit_safeguarded':
+            continue
         if args.mode == 'smoke' and cfg.name not in ['vinit_coarse', 'majorization_s0.5_training_g2']:
             continue
         run(cfg.name, cfg.name, cfg, beta=beta_std)
-    if args.problem == 'lasso':
+    if args.problem == 'lasso' and args.mode != 'safeguard':
         paper = pd.read_csv(dl.ARCHIVE_DIR / 'lasso' / 'paper_plots' / 'lasso_losses.csv')
         frame = pd.DataFrame(rows)
         for label, tag in [('L2O', 'l2o'), ('DR-L2O', 'ldro_pep'), ('OPT-PEP', 'lpep')]:

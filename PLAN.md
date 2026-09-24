@@ -8,11 +8,11 @@ No new training. Reuse Vinit's saved schedules and exactly the paper instances.
 - [x] Read the latest Zulip thread and clone Vinit's iclr branch.
 - [x] Inspect existing baseline, data loaders, and schedule selection.
 - [x] User chose remote scratch directory and bstellato account.
-- [ ] Bootstrap the isolated remote environment (human runs the skill's command).
-- [ ] Reproduce Vinit's coarse line-search losses and learned schedules.
-- [ ] Run a predeclared small grid of standard backtracking settings.
-- [ ] Compare final objective gaps, quantiles, success rates, oracle/matrix-product cost, and repeated batch timings.
-- [ ] Sync CSVs and plots; write a short recommendation and reproduction commands.
+- [x] Bootstrap the isolated remote environment (human runs the skill's command).
+- [x] Reproduce Vinit's coarse line-search losses and learned schedules.
+- [x] Run a predeclared small grid of standard backtracking settings.
+- [x] Compare final objective gaps, quantiles, success rates, oracle/matrix-product cost, and repeated batch timings.
+- [x] Sync CSVs and plots; write a short recommendation and reproduction commands.
 
 ## Protocol fixed before new experiments
 
@@ -37,7 +37,7 @@ Latest Zulip: Vinit messages 626738535, 626738658, 626740193.
 LASSO raw instances were absent from the minimal Git push. Recovered from
 /Users/bs37/Dropbox/work/research/code/projects/dro_pep/lasso_intro_repro/data/test_sets.
 Both f_opt and initial gaps match the committed coarse baseline within 5.2e-12.
-Full trajectory identity remains to be checked on the cluster.
+Full trajectory identity passed on the cluster against current committed coarse caches. All 270 current learned curve means and their q10/q90 statistics also reproduce.
 The archived LASSO test figure has 248 rows after excluding original rows 111 and 189.
 Produce paper-matching and all-250 comparisons explicitly, including those two instances.
 Logistic test/OOD data come directly from the committed 2026-09-18/08-30-44 bundle.
@@ -47,3 +47,38 @@ Logistic test/OOD data come directly from the committed 2026-09-18/08-30-44 bund
 Beck and Teboulle, FISTA (2009), DOI 10.1137/080716542.
 Author's implementation documents both monotone Lipschitz estimates and optional
 factor-2 decrease (regret_flag): https://www.tau.ac.il/~becka/solvers/fista.
+
+## Completed jobs and decision
+
+- 14389777: initial validation array stopped on an integer dtype in the analytic
+  test (the real-data coarse replays had passed). Fixed before production.
+- 14389906_0 / _1 / _2: full sweeps completed in 37 / 59 / 57 seconds,
+  1 CPU, 2 GB requested per task, no GPU. Code checkpoint 7735ae9.
+- 14390157: safeguarded coarse LASSO follow-up, 5 seconds. Added because 5 test
+  and 8 OOD default fallback steps failed the original majorization condition.
+  Safeguarding does not materially change the ranking.
+- All Slurm runs completed; plots and decision page are local under
+  results/linesearch-report/index.html. Complete CSV has 1,995 rows.
+- The conventional shrinking-only baseline loses to DR-L2O on both problems.
+  Step growth reverses many rankings. For LASSO, DR-L2O beats full backtracking
+  at equal matrix-product cost at K=15, but not the cheap safeguarded coarse rule.
+  The recommendation is an accuracy/cost comparison with these qualifications.
+
+## Reproduce
+
+Use the checked-in Slurm helper configuration and a fresh EXPERIMENT name.
+The initial production sweep used origin/iclr 40398f2 plus commit 7735ae9.
+The current runner additionally includes the safeguarded coarse rule.
+
+    python3 /path/to/slurm/scripts/slurm_agent.py sync up
+    python3 /path/to/slurm/scripts/slurm_agent.py submit slurm/job_array.slurm --time 00:05:00 --cpus 1 --mem 2G --array 0-2%2 --export EXPERIMENT=linesearch-replay --export MODE=full
+    # After test-only validation, repeat with --yes.
+    python3 /path/to/slurm/scripts/slurm_agent.py sync down
+    python src/tools/report_linesearch_audit.py --input results/linesearch-full-v2 --extra results/linesearch-safeguard-v3 --output results/linesearch-report
+
+Reconstructed LASSO input files are untracked under the existing
+src/iclr_data_outputs/archive/lasso/problem_instances layout. Their source hashes
+are in provenance.json; exact input hashes are also in each run manifest.
+The result bundle includes those inputs, current coarse-reference caches, the
+code, logs, selected-schedule manifests and all per-instance outputs.
+No results or messages were posted externally and no manuscript was edited.
