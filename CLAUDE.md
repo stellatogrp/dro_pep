@@ -105,3 +105,20 @@ Key packages:
 - `diffcp_patch.py` applies monkey-patches for Clarabel compatibility (COO→CSC conversion, array→float fixes)
 - Some configurations cause memory issues on large problems
 - MKL Pardiso detection in JAX Clarabel layer for faster linear solves
+
+## Cluster (Slurm)
+
+Experiments run on the cluster through the `slurm` skill; the same `uv run` entrypoints run
+locally on small configs. Configuration lives in `slurm/cluster.env` (host alias, remote project
+dir, account); job scripts are `slurm/job.slurm` and `slurm/job_array.slurm`.
+
+- Never run compute on a login node; submit everything with `sbatch` (the skill's `submit`).
+- Always validate with `submit` (test-only) before `submit --yes`.
+- Poll no faster than every 60 s (`watch` enforces it). The helper requires a human-opened
+  destination SSH session. On exit 3, stop and ask the human to reopen it (`ssh <alias>`).
+- QoS assignment follows site policy. Stats do not establish a whole-node memory peak;
+  do not reduce memory requests based on task-level MaxRSS.
+- Results are CSV files under `results/`; `sync down` pulls them. Plots are made locally.
+- Do not commit `results/`, `slurm/logs/`, or `slurm/jobs.log`.
+- Site rules for this cluster (account, partition/QoS policy, storage, login-node limits):
+  della-stellato only; account bstellato; directory in slurm/cluster.env was chosen by the user. Submit without explicit partition/QoS unless validation requires one. CPU NumPy baselines only.
