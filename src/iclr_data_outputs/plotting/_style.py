@@ -18,7 +18,7 @@ BASELINE_COLOR = '#666666'
 def use_paper_style():
     """Apply the paper's rcParams, falling back if LaTeX is unavailable.
 
-    HANDOFF.md pins matplotlib==3.10.8 to byte-match the paper: usetex
+    Pin matplotlib==3.10.8 to byte-match the paper: usetex
     tick-label baselines moved in 3.11, so a newer matplotlib shifts labels a
     few points even with identical rcParams. The figures are still correct,
     just not byte-identical.

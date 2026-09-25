@@ -2,13 +2,10 @@
 
 Reference implementations: the JAX trajectory functions used by the paper's
 evaluation scripts (Quad GD, Lasso ISTA), the numpy LogReg simulators in
-logreg_rebuttal/build_logreg_table.py, and learning.tv_averages.
+learning.baselines.build_logreg_table, and learning.tv_averages.
 run_pdhg_capture_gaps for PDHG. With ``growth = 1`` the baseline must
 reproduce the fixed-default-step method exactly.
 """
-import os
-import sys
-
 import numpy as np
 import pytest
 import jax
@@ -18,10 +15,6 @@ import scipy.sparse.linalg as spla
 
 jax.config.update('jax_enable_x64', True)
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO = os.path.abspath(os.path.join(_HERE, '..', '..'))
-sys.path.insert(0, os.path.join(_REPO, 'logreg_rebuttal'))
-
 from learning.baselines.coarse_line_search import (  # noqa: E402
     fgm_logreg, gd_logreg, gd_quad, ista_lasso, pdhg_lp,
 )
@@ -30,7 +23,7 @@ from learning.trajectories.gd_fgm import problem_data_to_gd_trajectories  # noqa
 from learning.trajectories.ista_fista import problem_data_to_ista_trajectories  # noqa: E402
 from learning.tv_averages import run_pdhg_capture_gaps  # noqa: E402
 from learning.tv_inpainting_test import LP_UPPER, extract_constraint_matrices  # noqa: E402
-import build_logreg_table as blt  # noqa: E402
+from learning.baselines import build_logreg_table as blt  # noqa: E402
 
 K_MAX = 12
 RTOL = 1e-10

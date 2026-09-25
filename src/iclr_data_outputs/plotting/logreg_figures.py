@@ -28,7 +28,7 @@ Differences from quad/lasso/pdlp:
     build_logreg_table.stats. On german.numer f(x^*) in ~[0.35, 0.51], so the
     scaling is a mild (~1.4x) per-instance loosening rather than a reshuffle.
 
-Schedule selection reuses logreg_rebuttal/build_logreg_table.py rather than
+Schedule selection reuses learning/baselines/build_logreg_table.py rather than
 reimplementing it: that module owns the per-framework SELECTION_METRIC rule
 (validation loss for L2O/DR-L2O, training loss -- the worst-case PEP bound --
 for OPT-PEP), and a second copy would drift from it.
@@ -44,11 +44,11 @@ HERE = Path(__file__).resolve().parent
 ICLR_OUT = HERE.parent                       # src/iclr_data_outputs
 REPO = ICLR_OUT.parent.parent                # dro_pep
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(REPO / 'logreg_rebuttal'))
+sys.path.insert(0, str(REPO / 'src'))
 
 from _style import (ARCH_COLORS, ARCH_DISPLAY_NAMES, ARCH_MARKERS, ARCH_ORDER,  # noqa: E402
                     use_paper_style)
-import build_logreg_table as blt  # noqa: E402
+from learning.baselines import build_logreg_table as blt  # noqa: E402
 
 K_VALS = list(range(1, 16))
 # One decade below the paper's {1e-3, 1e-2, 1e-1}; see the module docstring.

@@ -9,8 +9,7 @@ distribution, K = 1..30, N = 100 in-sample).
   `training.expectation_N = training.cvar_N = 100`, eps grid
   logspace 1e-5..10^-0.5 (13 points).
 - Family constants (L, R) are calibrated at runtime from the fixed
-  seeds in the config; nothing is hand-entered. See
-  `experiment_classes/logreg_notes.md` for the design decisions.
+  seeds in the config; nothing is hand-entered.
 
 ## 2. Cluster runs
 

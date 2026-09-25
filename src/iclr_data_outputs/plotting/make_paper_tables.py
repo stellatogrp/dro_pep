@@ -28,6 +28,12 @@ requires losses CSVs written after the `*_median` column was added; rerun
 `make_all_figures.py` after deleting a stale `<exp>_losses.csv` if it is
 missing.
 
+Backtracking line search (plot_backtracking.py -> figures/backtracking/
+backtracking_curves.csv): the logreg losses table gets a Backtracking block
+(its budget and iteration curves coincide), and lasso gets a separate
+lasso_backtracking_table.csv with an iteration block and a matrix-vector
+product budget block (Budget,x,IDmean,...,OODq90).
+
 quad / lasso / pdlp tables are written into archive/<exp>/paper_plots/, LogReg
 into figures/ (as logreg_fgm_*), mirroring where their sources live. The
 collect step copies all eight into figures/paper_tables/ under the names the
@@ -47,6 +53,7 @@ ICLR_OUT = HERE.parent
 ARCHIVE = ICLR_OUT / 'archive'
 FIGURES = ICLR_OUT / 'figures'
 PAPER_TABLES = FIGURES / 'paper_tables'
+BACKTRACKING_CURVES = FIGURES / 'backtracking' / 'backtracking_curves.csv'
 
 # (value in the split column, column prefix in the output tables)
 SPLITS = [('test', 'ID'), ('ood', 'OOD')]
@@ -94,6 +101,7 @@ EXPERIMENTS = {
         # logreg_figures.py already writes display names into `arch`.
         frameworks=[('L2O', 'L2O'), ('DR-L2O', 'DR-L2O'), ('OPT-PEP', 'OPT-PEP')],
         K_vals=list(range(1, 16)), etas=[1e-4, 1e-3, 1e-2],
+        backtracking='logreg_fgm',
     ),
 }
 DEFAULT_TARGETS = ['quad', 'lasso', 'pdlp', 'logreg']
@@ -153,6 +161,35 @@ def losses_table(spec):
                     out[f'{split_pre}{stat_pre}'] = format_loss(
                         r[spec['stat_cols'][stat]])
             rows.append(out)
+    if spec.get('backtracking'):
+        rows.extend(backtracking_rows(spec['backtracking'], 'K', 'Backtracking',
+                                      spec['K_vals'], 'Framework'))
+    return pd.DataFrame(rows)
+
+
+def backtracking_rows(problem, axis, label, xs, label_col):
+    """One block of backtracking rows from backtracking_curves.csv."""
+    if not BACKTRACKING_CURVES.is_file():
+        raise SystemExit(f'{BACKTRACKING_CURVES} missing; run plot_backtracking.py')
+    df = pd.read_csv(BACKTRACKING_CURVES)
+    rows = []
+    for i, x in enumerate(xs):
+        out = {label_col: label if i == 0 else '', 'K' if label_col == 'Framework' else 'x': x}
+        for split_val, split_pre in SPLITS:
+            r = _one(df, (df.problem == problem) & (df.method == 'backtracking')
+                     & (df.axis == axis) & (df.x == x) & (df.split == split_val),
+                     f'backtracking {problem}/{axis}/{split_val}/x={x}')
+            for stat, stat_pre in STATS:
+                out[f'{split_pre}{stat_pre}'] = format_loss(r[stat])
+        rows.append(out)
+    return rows
+
+
+def lasso_backtracking_table():
+    """Iteration block (x = K) then product-budget block (x = 2K)."""
+    Ks = list(range(1, 16))
+    rows = backtracking_rows('lasso', 'K', 'Iterations', Ks, 'Budget')
+    rows += backtracking_rows('lasso', 'matvec_budget', 'Products', [2 * K for K in Ks], 'Budget')
     return pd.DataFrame(rows)
 
 
@@ -183,7 +220,8 @@ def frac_table(spec):
 
 def build(exp):
     spec = EXPERIMENTS[exp]
-    n_expected = len(spec['frameworks']) * len(spec['K_vals'])
+    n_expected = (len(spec['frameworks']) + bool(spec.get('backtracking'))) * len(spec['K_vals'])
+    n_frac = len(spec['frameworks']) * len(spec['K_vals'])
     out_dir = spec['out_dir']
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,9 +231,15 @@ def build(exp):
     lt.to_csv(lt_path, index=False)
 
     ft = frac_table(spec)
-    assert len(ft) == n_expected, (exp, len(ft), n_expected)
+    assert len(ft) == n_frac, (exp, len(ft), n_frac)
     ft_path = out_dir / f"{spec['prefix']}_frac_solved_table.csv"
     ft.to_csv(ft_path, index=False)
+
+    if exp == 'lasso':
+        bt = lasso_backtracking_table()
+        bt_path = out_dir / 'lasso_backtracking_table.csv'
+        bt.to_csv(bt_path, index=False)
+        print(f'  {bt_path.relative_to(ICLR_OUT)}  ({len(bt)} rows)')
 
     etas = ', '.join(f'{e:g}' for e in sorted(spec['etas']))
     print(f'  {lt_path.relative_to(ICLR_OUT)}  ({len(lt)} rows)')
@@ -204,7 +248,7 @@ def build(exp):
 
 
 def collect():
-    """Copy the 8 tables into figures/paper_tables/ under the paper's names."""
+    """Copy the 9 tables into figures/paper_tables/ under the paper's names."""
     PAPER_TABLES.mkdir(parents=True, exist_ok=True)
     missing = []
     for exp, spec in EXPERIMENTS.items():
@@ -217,6 +261,12 @@ def collect():
                 continue
             shutil.copy2(src, PAPER_TABLES / name)
             print(f'  {name}')
+    src = EXPERIMENTS['lasso']['out_dir'] / 'lasso_backtracking_table.csv'
+    if src.is_file():
+        shutil.copy2(src, PAPER_TABLES / 'lasso_backtracking.csv')
+        print('  lasso_backtracking.csv')
+    else:
+        missing.append('lasso_backtracking.csv')
     return missing
 
 

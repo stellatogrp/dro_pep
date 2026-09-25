@@ -54,6 +54,31 @@ and rebuilt with `make_all_figures.py` first. The collect step copies all
 eight tables to `figures/paper_tables/` under the names the paper's
 `tables/` directory uses.
 
+## Backtracking line-search comparison
+
+Appendix E.4 compares DR-L2O and OPT-PEP with backtracking line search
+(unit trial step each iteration, halving; Armijo with coefficient 0.1 at the
+extrapolated point for LogReg FGM, proximal quadratic majorization for LASSO).
+From the repository root:
+
+```bash
+for p in lasso logreg_gd logreg_fgm; do
+  python src/tools/run_linesearch_audit.py --problem $p --mode backtracking \
+      --results-dir results/linesearch-backtracking
+done
+python src/iclr_data_outputs/plotting/plot_backtracking.py --input results/linesearch-backtracking
+python src/iclr_data_outputs/plotting/make_paper_tables.py lasso logreg
+```
+
+The runner replays the saved learned schedules and checks them against the
+paper's CSVs. `plot_backtracking.py` writes `lasso_backtracking.pdf` (2x2: loss
+against K and against matrix-vector products) and `logreg_backtracking.pdf`
+(1x2; backtracking there also costs two products per iteration) with
+`backtracking_curves.csv` to `figures/backtracking/`. `make_paper_tables.py`
+appends a Backtracking block to the LogReg losses table and writes
+`lasso_backtracking.csv`. The LASSO run reads the test and OOD instances from
+`archive/lasso/problem_instances/`.
+
 ## What was consolidated, and what was dropped
 
 `archive/{quad,lasso,pdlp}/` holds the inputs from `experiment_plots_icml/`,
@@ -113,12 +138,12 @@ Two deliberate differences, both forced by the data:
   paper's {1e-3, 1e-2, 1e-1}. The gap on german.numer spans ~1e-4..7e-2, so the
   paper's thresholds would saturate at 100% nearly everywhere.
 
-Schedule selection is delegated to `logreg_rebuttal/build_logreg_table.py` rather
+Schedule selection is delegated to `src/learning/baselines/build_logreg_table.py` rather
 than reimplemented, because that module owns the per-framework rule: L2O and
 DR-L2O are selected on validation loss, OPT-PEP on its **training** loss (the
 worst-case PEP bound), since its empirical validation loss rises monotonically as
-it trains. All 36 (framework, K, split) means in the generated CSVs match
-`logreg_rebuttal/results.csv` exactly.
+it trains. All 36 (framework, K, split) means in the generated CSVs match the
+`results.csv` that module writes exactly.
 
 ### Two caveats on the LogReg results
 
@@ -146,6 +171,6 @@ like-for-like.
 `eps ∈ {1e-3, 1e-2}`; the figures pin `eps = 1.0`, so `data_scrape.py` buckets
 them out and they do not affect any result.
 
-Figures were produced with matplotlib 3.11.2. `HANDOFF.md` pins **3.10.8** to
+Figures were produced with matplotlib 3.11.2. Pin **matplotlib==3.10.8** to
 byte-match the paper — usetex tick-label baselines moved in 3.11, so labels shift
 by a few points. The numbers are unaffected; `_style.py` prints a note.

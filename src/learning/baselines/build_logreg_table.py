@@ -1,6 +1,6 @@
-"""Build the OpenReview rebuttal table for the LogReg GD-vs-FGM experiment.
+"""Select the learned LogReg GD / FGM schedules and tabulate their test statistics.
 
-Mirrors the selection conventions of lasso_intro_repro/reconstruct_lasso_intro.py:
+Selection conventions:
   - per (framework, alg, K): glob every progress.csv, filter runs via the
     sibling .hydra/config.yaml, take the best row within each run by that
     framework's own objective (SELECTION_METRIC), then the best across runs;
@@ -12,13 +12,16 @@ Mirrors the selection conventions of lasso_intro_repro/reconstruct_lasso_intro.p
 Learned schedules and handcrafted baselines (GD 1/L, Silver GD, Nesterov FGM)
 are re-simulated with plain NumPy on the archived test/OOD sets, and
 mean/median/q10/q90/fraction-solved statistics are written to results.csv,
-table.md (OpenReview paste), and table.tex.
+table.md, and table.tex.
 
-Usage (from repo root):
-    python logreg_rebuttal/build_logreg_table.py \
-        --runs-root logreg_rebuttal/runs \
-        --data-dir  logreg_rebuttal/data \
+Usage (from repo root; tables are written to --out-dir, default the cwd):
+    python src/learning/baselines/build_logreg_table.py \
+        --runs-root <runs_root> \
+        --data-dir  <data_dir> \
         --ks 5 10 15
+
+Also imported as ``learning.baselines.build_logreg_table`` for its schedule
+selection and NumPy simulators.
 
 `runs_root` must contain learn_dro_outputs/LogReg/..., learn_l2o_outputs/...,
 learn_lpep_outputs/... as rsynced from the cluster; `data_dir` must contain
@@ -33,7 +36,7 @@ import numpy as np
 import pandas as pd
 import yaml
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 from learning.acceleration_stepsizes import get_nesterov_fgm_beta_sequence  # noqa: E402
 from learning.silver_stepsizes import get_nonstrongly_convex_silver_stepsizes  # noqa: E402
 
@@ -218,7 +221,7 @@ def main():
     ap.add_argument('--runs-root', required=True)
     ap.add_argument('--data-dir', required=True)
     ap.add_argument('--ks', type=int, nargs='+', default=[5, 10, 15])
-    ap.add_argument('--out-dir', default=os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument('--out-dir', default=os.getcwd())
     ap.add_argument('--solved-tol', type=float, default=1e-2,
                     help='tolerance shown in the markdown/latex tables')
     args = ap.parse_args()

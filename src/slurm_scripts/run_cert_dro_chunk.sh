@@ -17,8 +17,7 @@
 #   CARGS     extra hydra overrides, space-separated
 #             (e.g. "alg=ista" or "alg=grad_desc eta=1.9 mu=0")
 #   CTAG      short label folded into the output dir name
-# Memory/time: override at submit for large K (see calibration notes in
-# experiment_classes/logreg_notes.md).
+# Memory/time: override at submit for large K.
 
 module purge 2>/dev/null || true
 module load intel-mkl/2024.2 2>/dev/null || true

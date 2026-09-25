@@ -133,7 +133,7 @@ def gd_quad(Q, z0, *, t_default, K_max, growth=GROWTH_DEFAULT,
 
 # ---------------------------------------------------------------------------
 # Logistic regression: f(x) = mean_i softplus(a_i^T x) - b_i a_i^T x
-# (matches logreg_rebuttal/build_logreg_table.logreg_f / logreg_grad)
+# (matches learning.baselines.build_logreg_table.logreg_f / logreg_grad)
 # ---------------------------------------------------------------------------
 
 def _logreg_f_from_AX(AX, b):
