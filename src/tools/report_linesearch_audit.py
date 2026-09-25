@@ -4,9 +4,9 @@
 No algorithm simulations occur here. Suitable for local plotting after sync down.
 """
 import argparse
-import base64
 import html
 import json
+import re
 from pathlib import Path
 import sys
 
@@ -15,6 +15,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 ROOT = Path(__file__).resolve().parents[2]
 NAMES = {'lasso': 'LASSO / ISTA', 'logreg_gd': 'Logistic / GD', 'logreg_fgm': 'Logistic / FGM'}
@@ -55,7 +56,7 @@ def verify_current_figures(frame):
     return checks
 
 
-def curves(frame, out, problem, cohort='all'):
+def curves(frame, out, problem, cohort='all', pdf=None):
     fig, axes = plt.subplots(2, 2, figsize=(9, 6.3))
     colors = ['#487ca5', '#83a17d', '#777777', '#c59858', '#a47e9b', '#557c72']
     series = [('DR-L2O', 'DR-L2O'), ('OPT-PEP', 'OPT-PEP')] + [(v, LABELS[v]) for v in REPRESENTATIVE]
@@ -83,8 +84,10 @@ def curves(frame, out, problem, cohort='all'):
     fig.suptitle(NAMES[problem] + (' (paper test subset)' if cohort=='paper248' else ''), y=.99)
     fig.tight_layout(rect=(0,.14,1,.965))
     stem = problem + ('_paper248' if cohort=='paper248' else '')
-    for ext in ['png', 'pdf']:
+    for ext in ['png', 'pdf', 'svg']:
         fig.savefig(out/f'{stem}.{ext}', dpi=190, bbox_inches='tight')
+    if pdf is not None:
+        pdf.savefig(fig, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -135,9 +138,10 @@ def main():
     frame.to_csv(out/'all_results.csv',index=False)
     plt.rcParams.update({'text.usetex':True,'font.family':'serif','font.size':11,
                          'axes.titlesize':11,'axes.labelsize':11,'legend.fontsize':9})
-    for problem in NAMES:
-        curves(frame,out,problem)
-    curves(frame,out,'lasso','paper248')
+    with PdfPages(out/'comparison_plots.pdf', metadata={'Title': 'DR-L2O line-search comparisons'}) as pdf:
+        for problem in NAMES:
+            curves(frame,out,problem,pdf=pdf)
+        curves(frame,out,'lasso','paper248',pdf=pdf)
     bootstrap_pairs(args,out)
     decision=[]
     for problem in NAMES:
@@ -168,8 +172,15 @@ def main():
     sections=[]
     for problem in NAMES:
         d=display[display.problem==NAMES[problem]].drop(columns='problem')
-        image_src = "data:image/png;base64," + base64.b64encode((out / f"{problem}.png").read_bytes()).decode("ascii")
-        sections.append(f'<section><h2>{NAMES[problem]}</h2><img src="{image_src}" alt="{NAMES[problem]} comparison"><p><a href="{problem}.pdf">Vector PDF</a></p><div class="scroll">{d.to_html(index=False,escape=True)}</div></section>')
+        svg = (out/f'{problem}.svg').read_text()
+        svg = svg[svg.index('<svg '):]
+        # Keep fragment references local to each plot in the shared HTML document.
+        for ident in re.findall(r'id="([^"]+)"', svg):
+            svg = svg.replace(f'id="{ident}"', f'id="{problem}-{ident}"')
+            svg = svg.replace(f'href="#{ident}"', f'href="#{problem}-{ident}"')
+            svg = svg.replace(f'url(#{ident})', f'url(#{problem}-{ident})')
+        svg = svg.replace('<svg ', f'<svg role="img" aria-label="{NAMES[problem]} comparison" ', 1)
+        sections.append(f'<section><h2>{NAMES[problem]}</h2>{svg}<p><a href="{problem}.pdf">Vector PDF</a></p><div class="scroll">{d.to_html(index=False,escape=True)}</div></section>')
     table_columns=['problem','split','cohort','K','label','method','mean','median','q90','matvec_mean','function_mean','prox_mean','equal_matvec_mean','batch_seconds','fallback_fail']
     payload=frame[table_columns].to_json(orient='records')
     intro='''<p class="eyebrow">ICLR decision check · 24 September 2026</p>
@@ -177,16 +188,18 @@ def main():
 <p><b>Current-data replay passed.</b> All 270 learned curve means and their 10th/90th quantiles reproduce Vinit’s current commit <code>40398f2</code>. The full sweeps took 37 s (LASSO), 59 s (GD), and 57 s (FGM) on della-stellato.</p>
 <div class="callout"><b>Reading the comparison.</b> DR-L2O beats conventional backtracking that only shrinks steps. Allowing step growth makes line search much stronger. For LASSO, DR-L2O can beat full backtracking at equal matrix-product cost; the cheap coarse rule is a stronger competitor. For logistic regression, trial values reuse matrix products, so function counts and timing matter separately.</div>
 <p>Ratios in the tables are <b>line-search gap / DR-L2O gap</b>; above 1 favors DR-L2O. The plots show final objective gaps at equal iterations and equal matrix-product budgets. All settings, including unstable ones, are in the explorer and CSV.</p>
-<p><a href="DECISION.md">Short recommendation</a> · <a href="reproduction_bundle.zip">Reproduction bundle</a> · <a href="all_results.csv">Complete results CSV</a> · <a href="decision.csv">Decision table CSV</a> · <a href="paired_bootstrap.csv">Paired bootstrap intervals</a> · <a href="figure_reproduction_checks.json">Reproduction checks</a></p>'''
+<p><a href="comparison_plots.pdf">All comparison plots (PDF)</a> · <a href="DECISION.md">Short recommendation</a> · <a href="reproduction_bundle.zip">Reproduction bundle</a> · <a href="all_results.csv">Complete results CSV</a> · <a href="decision.csv">Decision table CSV</a> · <a href="paired_bootstrap.csv">Paired bootstrap intervals</a> · <a href="figure_reproduction_checks.json">Reproduction checks</a></p>'''
     methods='''<section><h2>Methods and scope</h2><p>Float64 NumPy/SciPy, one CPU thread, zero initialization, existing paper instances and saved learned schedules. No retraining or hyperparameter selection on test/OOD data. Standard backtracking uses shrink factors 0.5 and 0.8, initial step 1/L or 1, and either carries the previous step or first doubles it. LASSO uses the composite majorization condition. Logistic regression tests Armijo c=10<sup>−4</sup> and majorization c=1/2.</p>
 <p>For FGM, Armijo at the extrapolated point with an expanding step is a heuristic and can be unstable. Do not interpret these unstable variants as a representative accelerated line-search baseline. The original FISTA guarantee uses a nondecreasing Lipschitz estimate. Step expansion with unchanged momentum is reported as a practical variant. <a href="https://www.tau.ac.il/~becka/solvers/fista">Author’s description of backtracking and the optional growth rule</a>.</p>
 <p>Matrix products count forward and transpose products per instance, including the final objective evaluation. Function values used by search, gradients, and proximal evaluations are separate counters. Logistic regression reuses A times the search direction across trials. For an equal matrix-product budget, we return the last completely accepted iterate that fits. An unfinished trial does not advance the solution.</p>
 <p>Timing is the median of five whole-batch runs after warmup. It excludes data loading and learned-schedule selection, and omits intermediate diagnostic objective evaluations for fixed schedules. Counters remain enabled. This is CPU batch latency, not GPU throughput or a universal oracle-cost conversion. Training cost is outside this inference comparison.</p>
 <p>LASSO’s primary result uses all 250 test instances. The current paper cache removes original rows 111 and 189 from every method. <a href="lasso_paper248.pdf">Matching 248-instance plot</a>. That subset is also available in the explorer. Recovered raw inputs reproduce both current coarse traces and current learned figures; their hashes are recorded in the run manifests.</p>
 <p>All methods use a common cached NumPy implementation; timings are not timings of the original training/evaluation scripts. A faster 15-iteration run need not reach a given accuracy sooner. The safeguarded coarse check ran on another node, so its comparative timing is omitted. Its raw timing remains in its run output.</p><p>The safeguarded coarse LASSO check was added after observing 5 test and 8 OOD fallback steps that failed Vinit’s majorization condition. It backtracks on such fallbacks. The original and repaired outcomes are both retained. Bootstrap intervals resample the 250 paired instances (2,000 draws, fixed seed); they describe test-set sampling uncertainty, not training variability.</p></section>'''
-    explorer='''<section><h2>All configurations</h2><label>Problem <select id="problem"><option value="">All</option><option>lasso</option><option>logreg_gd</option><option>logreg_fgm</option></select></label> <label>Horizon <select id="horizon"><option>15</option><option>10</option><option>5</option><option>1</option><option value="">All</option></select></label> <label>Split <select id="split"><option value="">Both</option><option>test</option><option>ood</option></select></label> <label>Cohort <select id="cohort"><option>all</option><option>paper248</option></select></label><div class="scroll"><table id="explorer"></table></div></section>'''
-    script='''<script>const rows=PAYLOAD; const fields=['problem','split','K','method','mean','median','q90','matvec_mean','function_mean','equal_matvec_mean','batch_seconds','fallback_fail'];function update(){const horizon=document.getElementById('horizon');let d=rows.filter(r=>['problem','split','cohort'].every(k=>!document.getElementById(k).value||r[k]===document.getElementById(k).value)&&(!horizon.value||r.K==horizon.value));document.getElementById('explorer').innerHTML='<thead><tr>'+fields.map(f=>'<th>'+f+'</th>').join('')+'</tr></thead><tbody>'+d.map(r=>'<tr>'+fields.map(f=>'<td>'+(typeof r[f]==='number'?(Number.isInteger(r[f])?r[f]:r[f].toPrecision(4)):(r[f]??''))+'</td>').join('')+'</tr>').join('')+'</tbody>'}document.querySelectorAll('select').forEach(s=>s.addEventListener('change',update));update();</script>'''.replace('PAYLOAD',payload)
-    page='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DR-L2O line-search comparison</title><style>body{font:16px/1.5 system-ui,sans-serif;margin:0;background:#f5f6f5;color:#25313a}main{max-width:1150px;margin:auto;padding:35px 25px}h1{font-size:34px;line-height:1.15}h2{font-size:24px}a{color:#315f85}section{background:white;padding:22px;margin:28px 0;border-radius:8px}.callout{background:#e4ecef;padding:18px;border-left:4px solid #487ca5}.eyebrow{color:#60727a}img{width:100%;max-width:1000px}table{border-collapse:collapse;font:12px/1.5 ui-monospace,monospace}th,td{padding:8px;text-align:right;border-bottom:1px solid #ddd;white-space:nowrap}th{background:#eff2f3;position:sticky;top:0}td:first-child{text-align:left}.scroll{overflow:auto;max-height:600px}select{padding:6px;margin:5px}code{background:#eef1f2;padding:2px 5px}</style><main>'''+intro+''.join(sections)+explorer+methods+'</main>'+script+'</html>'
+    fields=['problem','split','cohort','K','method','mean','median','q90','matvec_mean','function_mean','equal_matvec_mean','batch_seconds','fallback_fail']
+    static_table=frame[fields].to_html(index=False,escape=True,table_id='explorer',float_format=lambda v:f'{v:.4g}',na_rep='')
+    explorer='''<section><h2>All configurations</h2><p id="static-note">All result rows are shown below. <a href="all_results.csv">Download CSV</a> for sorting and filtering.</p><div id="filters" hidden><label>Problem <select id="problem"><option value="">All</option><option>lasso</option><option>logreg_gd</option><option>logreg_fgm</option></select></label> <label>Horizon <select id="horizon"><option>15</option><option>10</option><option>5</option><option>1</option><option value="">All</option></select></label> <label>Split <select id="split"><option value="">Both</option><option>test</option><option>ood</option></select></label> <label>Cohort <select id="cohort"><option>all</option><option>paper248</option></select></label></div><div class="scroll">'''+static_table+'</div></section>'
+    script='''<script>const rows=PAYLOAD; const fields=FIELDS;function update(){const horizon=document.getElementById('horizon');let d=rows.filter(r=>['problem','split','cohort'].every(k=>!document.getElementById(k).value||r[k]===document.getElementById(k).value)&&(!horizon.value||r.K==horizon.value));document.getElementById('explorer').innerHTML='<thead><tr>'+fields.map(f=>'<th>'+f+'</th>').join('')+'</tr></thead><tbody>'+d.map(r=>'<tr>'+fields.map(f=>'<td>'+(typeof r[f]==='number'?(Number.isInteger(r[f])?r[f]:r[f].toPrecision(4)):(r[f]??''))+'</td>').join('')+'</tr>').join('')+'</tbody>'}document.querySelectorAll('select').forEach(s=>s.addEventListener('change',update));update();document.getElementById('filters').hidden=false;document.getElementById('static-note').hidden=true;</script>'''.replace('PAYLOAD',payload).replace('FIELDS',json.dumps(fields))
+    page='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DR-L2O line-search comparison</title><style>body{font:16px/1.5 system-ui,sans-serif;margin:0;background:#f5f6f5;color:#25313a}main{max-width:1150px;margin:auto;padding:35px 25px}h1{font-size:34px;line-height:1.15}h2{font-size:24px}a{color:#315f85}section{background:white;padding:22px;margin:28px 0;border-radius:8px}.callout{background:#e4ecef;padding:18px;border-left:4px solid #487ca5}.eyebrow{color:#60727a}svg{width:100%;height:auto;max-width:1000px}table{border-collapse:collapse;font:12px/1.5 ui-monospace,monospace}th,td{padding:8px;text-align:right;border-bottom:1px solid #ddd;white-space:nowrap}th{background:#eff2f3;position:sticky;top:0}td:first-child{text-align:left}.scroll{overflow:auto;max-height:600px}select{padding:6px;margin:5px}code{background:#eef1f2;padding:2px 5px}</style><main>'''+intro+''.join(sections)+explorer+methods+'</main>'+script+'</html>'
     (out/'index.html').write_text(page)
     print(f'Wrote {out}/index.html; {len(frame)} result rows; all figure checks passed.')
 
