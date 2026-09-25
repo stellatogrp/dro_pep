@@ -5,6 +5,7 @@ No algorithm simulations occur here. Suitable for local plotting after sync down
 """
 import argparse
 import html
+import io
 import json
 import re
 from pathlib import Path
@@ -27,6 +28,27 @@ NOTES = {
     'logreg_gd':'Boyd and Vandenberghe, Algorithm 9.2: unit trial reset, Armijo coefficient 0.1, shrink factor 0.5.',
     'logreg_fgm':'Accelerated adaptation: Armijo at the extrapolated point; unit trial reset, coefficient 0.1, shrink factor 0.5.',
 }
+
+
+def inline_svg(svg, prefix, label):
+    svg=svg[svg.index('<svg '):]
+    for ident in re.findall(r'id="([^"]+)"', svg):
+        svg=svg.replace(f'id="{ident}"', f'id="{prefix}-{ident}"')
+        svg=svg.replace(f'href="#{ident}"', f'href="#{prefix}-{ident}"')
+        svg=svg.replace(f'url(#{ident})', f'url(#{prefix}-{ident})')
+    return svg.replace('<svg ', f'<svg role="img" aria-label="{html.escape(label, quote=True)}" ', 1)
+
+
+def equation(tex, name):
+    """Typeset locally so equations work when the viewer blocks images/scripts."""
+    with plt.rc_context({'text.usetex':True, 'text.latex.preamble':r'\usepackage{amsmath,amssymb}'}):
+        fig=plt.figure(figsize=(1,1))
+        fig.text(0,0,tex,fontsize=14,color='#25313a')
+        stream=io.StringIO()
+        fig.savefig(stream,format='svg',bbox_inches='tight',pad_inches=0.04,transparent=True)
+        plt.close(fig)
+    return '<div class="equation">'+inline_svg(stream.getvalue(),name,tex)+'</div>'
+
 
 
 def md_table(frame):
@@ -173,13 +195,7 @@ def main():
     sections=[]
     for problem in NAMES:
         d=display[display.problem==NAMES[problem]][list(brief_columns)].rename(columns=brief_columns)
-        svg=(out/f'{problem}.svg').read_text()
-        svg=svg[svg.index('<svg '):]
-        for ident in re.findall(r'id="([^"]+)"', svg):
-            svg=svg.replace(f'id="{ident}"', f'id="{problem}-{ident}"')
-            svg=svg.replace(f'href="#{ident}"', f'href="#{problem}-{ident}"')
-            svg=svg.replace(f'url(#{ident})', f'url(#{problem}-{ident})')
-        svg=svg.replace('<svg ', f'<svg role="img" aria-label="{NAMES[problem]} comparison" ', 1)
+        svg=inline_svg((out/f'{problem}.svg').read_text(),problem,f'{NAMES[problem]} comparison')
         sections.append(f'<section class="plot"><h2>{NAMES[problem]}</h2><p class="caption">{NOTES[problem]}</p>{svg}<div class="scroll">{d.to_html(index=False,escape=True)}</div><p class="caption">BT is the displayed backtracking baseline. Ratios above 1 favor DR-L2O. <a href="{problem}.pdf">Vector plot PDF</a>.</p></section>')
     takeaway=(f'At 15 iterations, DR-L2O has a lower mean gap in {int((dec.ls_over_dr>1).sum())} of 6 comparisons. '
               f'At a budget of 30 matrix products, it has a lower mean gap in {int((dec.equal_matvec_ratio>1).sum())} of 6 comparisons. '
@@ -192,11 +208,56 @@ def main():
 <h2>Comparison at 15 iterations</h2><p>Gap ratios are <b>backtracking / DR-L2O</b>; above 1 favors DR-L2O. ID and OOD each use 250 instances. Timing ratios compare CPU batch latency at 15 iterations, with different achieved accuracies.</p>
 <div class="scroll">'''+overview.to_html(index=False,escape=True)+'''</div>
 <p class="downloads"><a href="report.pdf">Full webpage PDF</a> · <a href="comparison_plots.pdf">All plots PDF</a> · <a href="all_results.csv">Complete results CSV</a> · <a href="paired_bootstrap.csv">Paired bootstrap intervals</a> · <a href="reproduction_bundle.zip">Reproduction bundle</a></p>'''
-    methods='''<section class="methods"><h2>Backtracking rule and adaptations</h2>
-<p><b>Logistic GD.</b> Use the negative gradient at the current iterate. Start each search at step 1, accept the Armijo decrease condition with coefficient 0.1, and otherwise halve the step. This is <a href="https://www.seas.ucla.edu/~vandenbe/cvxbook/bv_cvxbook.pdf#page=478">Boyd and Vandenberghe, Algorithm 9.2, p. 464</a>.</p>
-<p><b>LASSO / ISTA.</b> Use the proximal-gradient trial with soft thresholding. Test quadratic majorization of the smooth least-squares term, as in <a href="https://web.stanford.edu/~boyd/papers/pdf/prox_algs.pdf#page=30">Parikh and Boyd, Section 4.2</a>. This adaptation resets the trial step to 1 and halves failures; the cited proximal algorithm itself carries the previous step. Smooth Armijo is not applied to the nonsmooth LASSO objective.</p>
-<p><b>Logistic FGM.</b> Apply Armijo at the extrapolated point with the existing momentum sequence. This is an adaptation of the line-search rule, not the gradient-descent algorithm in the book. No accelerated convergence guarantee is asserted for this combination.</p>
-<p><b>Observed steps.</b> Both logistic baselines accepted step 1 on every instance and iteration. LASSO accepted steps between 0.25 and 1. These are observed outcomes, not settings selected from the test data.</p></section>'''
+    gd_math=equation(
+        r'$\begin{aligned}'
+        r'd_k&=-\nabla f(x_k),\qquad t\leftarrow1,\qquad \alpha=0.1,\quad\beta=0.5.\\'
+        r'\text{While }\;f(x_k+t d_k)&>f(x_k)+\alpha t\,\nabla f(x_k)^{\mathsf T}d_k,'
+        r'\qquad t\leftarrow\beta t.\\'
+        r't_k&\leftarrow t,\qquad x_{k+1}=x_k+t_kd_k.'
+        r'\end{aligned}$','eq-gd')
+    lasso_math=equation(
+        r'$\begin{aligned}'
+        r'F(x)&=q(x)+\lambda\|x\|_1,\qquad q(x)=\tfrac12\|Ax-b\|_2^2.\\'
+        r'z(t)&=\operatorname{soft}_{t\lambda}\!\left(x_k-t\nabla q(x_k)\right).\\'
+        r'q(z(t))&\le q(x_k)+\nabla q(x_k)^{\mathsf T}(z(t)-x_k)'
+        r'+\frac{\|z(t)-x_k\|_2^2}{2t}.\\'
+        r't_k&\leftarrow t,\qquad x_{k+1}=z(t_k).'
+        r'\end{aligned}$','eq-lasso')
+    fgm_math=equation(
+        r'$\begin{aligned}'
+        r'y_0&=x_0,\qquad '
+        r'f\!\left(y_k-t\nabla f(y_k)\right)\le f(y_k)-\alpha t\|\nabla f(y_k)\|_2^2.\\'
+        r'x_{k+1}&=y_k-t_k\nabla f(y_k),\qquad '
+        r'y_{k+1}=x_{k+1}+\omega_k(x_{k+1}-x_k).'
+        r'\end{aligned}$','eq-fgm')
+    methods='''<section class="methods"><h2>Backtracking iteration</h2>
+<p><b>Smooth gradient descent.</b> At outer iteration <i>k</i>, compute the negative gradient and keep it fixed during the search. Restart the trial step at 1, halve it while the Armijo test fails, then take the first accepted step. This is <a href="https://www.seas.ucla.edu/~vandenbe/cvxbook/bv_cvxbook.pdf#page=478">Boyd and Vandenberghe, Algorithm 9.2</a>.</p>'''+gd_math+'''
+<p><b>LASSO / ISTA adaptation.</b> Reset the trial step to 1. Form the soft-thresholded trial below and halve the step until the displayed quadratic-majorization inequality holds. The threshold is the trial step times the regularization coefficient. This uses the <a href="https://web.stanford.edu/~boyd/papers/pdf/prox_algs.pdf#page=30">proximal acceptance test of Parikh and Boyd</a>, with a unit reset rather than their carried step.</p>'''+lasso_math+'''
+<p><b>Logistic FGM adaptation.</b> Apply the same unit reset and Armijo search at the extrapolated point. Accept the first trial satisfying the inequality below, then update the iterate and extrapolate using the existing momentum coefficient. The symbol omega denotes momentum; beta above is the backtracking shrink factor. No accelerated rate guarantee is asserted for this combination.</p>'''+fgm_math+'''
+</section>'''
+    lead,remaining=intro.split('<div class="callout">',1)
+    intro=lead
+    overview_html='<section class="overview"><div class="callout">'+remaining+'</section>'
+    call_frame=frame[(frame.K==15)&(frame.cohort=='all')&
+                     frame.label.isin(['DR-L2O','boyd_backtracking'])].copy()
+    call_frame['problem']=call_frame.problem.map(NAMES)
+    call_frame['split']=call_frame.split.map({'test':'ID','ood':'OOD'})
+    call_frame['label']=call_frame.label.replace({'boyd_backtracking':'Backtracking'})
+    call_columns={'problem':'Algorithm','split':'Split','label':'Method',
+                  'gradient_mean':'Gradients','prox_mean':'Proximal calls',
+                  'function_mean':'Search function values','matvec_mean':'Matrix products'}
+    calls=call_frame[list(call_columns)].rename(columns=call_columns)
+    cost_math=equation(
+        r'$\begin{aligned}'
+        r'C_A^{\rm DR}(K)&=2K,\qquad C_A^{\rm BT}(K)=K+\sum_{k=0}^{K-1}m_k\quad\text{(LASSO)}.\\'
+        r'j_i(B)&=\max\{j:C_{A,i}(j)\le B\},\qquad '
+        r'G(B)=\frac1N\sum_{i=1}^N\left(F_i(x_{i,j_i(B)})-F_i^\star\right).'
+        r'\end{aligned}$','eq-cost')
+    costs='''<section class="costs"><h2>Accuracy and oracle calls</h2>
+<p>At the same iteration count, both methods make the same number of gradient calls. Backtracking also evaluates trial points. The table reports mean calls per instance for <b>15 accepted updates</b>. Search function values are evaluations needed for acceptance tests; evaluations used solely for accuracy diagnostics are excluded from that column. These counts overlap with matrix-product work and should not be added together.</p>'''+calls.to_html(index=False,escape=True,float_format=lambda v:f'{v:.2f}')+'''
+<p>For LASSO, let <i>m</i><sub>k</sub> count all proximal trials, including rejected ones. Caching the accepted residual requires one product with the transpose of the data matrix per gradient and one forward product per trial. Equal cost means a common per-instance budget <i>B</i>, returning the last fully accepted iterate that fits:</p>'''+cost_math+'''
+<p>With a budget of 30 matrix products, DR-L2O completes 15 steps. Backtracking completes an average of 11.72 steps on ID data and 10.65 on OOD data. The corresponding mean gaps are <b>0.08967 versus 0.10198 (ID)</b> and <b>0.82204 versus 1.76545 (OOD)</b>, DR-L2O first. Backtracking reaches lower LASSO gaps at 15 iterations, but requires 36.55 / 39.23 products instead of 30.</p>
+<p><b>How to state the advantage.</b> For LASSO, emphasize objective accuracy under a fixed matrix-product budget and report the extra proximal and function calls. For logistic regression, both methods use 30 products and 15 gradients; the extra backtracking cost is 16 function values for GD or 29 for FGM. This separates oracle usage from the same-iteration CPU timings and makes no claim of fewer gradient calls at 15 iterations.</p></section>'''
     provenance='''<section class="provenance"><h2>Validation and cost accounting</h2>
 <p>All jobs ran on della-stellato with one CPU and 2 GB each: 23 s (LASSO), 23 s (GD), and 16 s (FGM). Job array: <code>14395605</code>. Learned schedules were rerun in the same jobs. All 270 saved learned-curve means and their 10th/90th quantiles reproduce Vinit’s commit <code>40398f2</code>. An analytic check verifies acceptance of step 0.25 followed by step 1, confirming the reset. Every accepted baseline trial passed its condition.</p>
 <p>Float64 NumPy/SciPy, zero initialization, one CPU thread, existing instances and schedules. No retraining or test/OOD tuning. Plots compare DR-L2O, OPT-PEP and the stated baseline. L2O is also included in the table and CSV.</p>
@@ -219,10 +280,11 @@ function update(){const horizon=document.getElementById('horizon');let d=rows.fi
 document.querySelectorAll('select').forEach(s=>s.addEventListener('change',update));update();document.getElementById('filters').hidden=false;</script>'''.replace('PAYLOAD',payload).replace('FIELDS',json.dumps(fields)).replace('TITLES',json.dumps(titles))
     style='''<style>
 body{font:16px/1.5 system-ui,sans-serif;margin:0;background:#f5f6f5;color:#25313a}main{max-width:1150px;margin:auto;padding:35px 25px}h1{font-size:34px;line-height:1.15}h2{font-size:24px}a{color:#315f85}section{background:white;padding:22px;margin:28px 0;border-radius:8px}.callout{background:#e4ecef;padding:18px;border-left:4px solid #487ca5}.eyebrow{color:#60727a}.caption{font-size:13px}svg{display:block;width:100%;height:auto;max-width:1000px;margin:auto}table{border-collapse:collapse;font:12px/1.5 system-ui,sans-serif;width:100%}th,td{padding:8px;text-align:right;border-bottom:1px solid #ddd;white-space:nowrap}th{background:#eff2f3;position:sticky;top:0}td:first-child,th:first-child{text-align:left}.scroll{overflow:auto;max-height:650px}select{padding:6px;margin:5px}code{background:#eef1f2;padding:2px 5px}
+.equation{padding:5px 0;overflow-x:auto}.equation svg{width:auto;max-width:100%;height:auto;margin:0 auto}
 @page{size:A4 landscape;margin:12mm}
-@media print{body{font:10pt/1.35 Georgia,serif;background:white;color:#202930;-webkit-print-color-adjust:exact;print-color-adjust:exact}main{max-width:none;padding:0}h1{font-size:24pt;margin:0 0 10pt}h2{font-size:16pt;margin:0 0 8pt}p{margin:7pt 0}section{padding:0;margin:0;border-radius:0}.callout{padding:9pt}.eyebrow{font-size:9pt}.plot,.results,.provenance{break-before:page}.plot{break-inside:avoid}.plot svg{width:190mm;max-width:100%;height:auto}.caption{font-size:8.5pt;line-height:1.2;margin:5pt 0}.scroll{overflow:visible;max-height:none}table{font:8.5pt/1.2 Georgia,serif}th,td{padding:4pt;white-space:normal}th{position:static}thead{display:table-header-group}tr{break-inside:avoid}.results th,.results td{padding:3pt}.methods{margin-top:14pt;font-size:9pt}.methods h2{font-size:13pt}.downloads,#filters{display:none}a{color:#315f85;text-decoration:none}.provenance{font-size:11pt;line-height:1.45}}
+@media print{body{font:10pt/1.35 Georgia,serif;background:white;color:#202930;-webkit-print-color-adjust:exact;print-color-adjust:exact}main{max-width:none;padding:0}h1{font-size:24pt;margin:0 0 10pt}h2{font-size:16pt;margin:0 0 8pt}p{margin:7pt 0}section{padding:0;margin:0;border-radius:0}.callout{padding:9pt}.eyebrow{font-size:9pt}.overview,.costs,.plot,.results,.provenance{break-before:page}.plot{break-inside:avoid}.plot svg{width:190mm;max-width:100%;height:auto}.caption{font-size:8.5pt;line-height:1.2;margin:5pt 0}.scroll{overflow:visible;max-height:none}table{font:8.5pt/1.2 Georgia,serif}th,td{padding:4pt;white-space:normal}th{position:static}thead{display:table-header-group}tr{break-inside:avoid}.results th,.results td{padding:3pt}.equation{padding:2pt 0;break-inside:avoid}.methods{margin-top:10pt;font-size:9pt}.costs{font-size:9.5pt}.costs th,.costs td{padding:3pt}.methods h2{font-size:13pt}.downloads,#filters{display:none}a{color:#315f85;text-decoration:none}.provenance{font-size:11pt;line-height:1.45}}
 </style>'''
-    page='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Boyd backtracking comparison</title>'+style+'</head><body><main>'+intro+methods+''.join(sections)+explorer+provenance+'</main>'+script+'</body></html>'
+    page='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Boyd backtracking comparison</title>'+style+'</head><body><main>'+intro+methods+overview_html+costs+''.join(sections)+explorer+provenance+'</main>'+script+'</body></html>'
     (out/'index.html').write_text(page)
     memo='# Boyd backtracking comparison\n\n'+takeaway+'\n\n'+md_table(overview)+'\n\n'
     memo+='Every iteration resets the trial step to 1 and halves failed trials. Armijo alpha=0.1 for logistic GD and its extrapolated-point FGM adaptation. LASSO uses proximal quadratic majorization. Parameters were fixed before the rerun.\n\n'

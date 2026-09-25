@@ -115,7 +115,7 @@ At K=15, BT/DR gap ratios (ID/OOD): LASSO 0.1516/0.4029, logistic GD
 1.137/2.148. Its paired 95% intervals are [1.021,1.266] / [2.025,2.274].
 The LASSO cost advantage does not imply better accuracy at equal iterations.
 
-The final webpage PDF is results/linesearch-report/report.pdf (six landscape
+The final webpage PDF is results/linesearch-report/report.pdf (eight landscape
 pages). Every page was rendered and visually inspected; the complete 24-row
 K=15 table fits on one page. Inline SVG plots and static tables also passed
 the viewer CSP check (default-src none, scripts blocked). The interactive
@@ -125,3 +125,15 @@ After generating the webpage, export it with the agent-browser skill using
 a named browser session: open the absolute file URL for index.html, run
 agent-browser pdf /absolute/path/to/results/linesearch-report/report.pdf,
 then close the session. The HTML print stylesheet defines the layout.
+
+## Mathematical introduction and oracle accounting
+
+The report now opens with the exact smooth Armijo iteration and the labeled
+LASSO and FGM adaptations. LaTeX is rendered to inline SVG so the equations
+work under the viewer's image/script restrictions. The report has eight pages.
+The new oracle table distinguishes gradient, proximal, search-function and
+matrix-product counts at 15 accepted updates. All numerical CSV hashes remain
+unchanged. At a 30-product budget, LASSO backtracking completes 11.724 / 10.652
+accepted iterations on average (ID/OOD), versus 15 for DR-L2O. Function counts
+refer to search tests, excluding objective values used only for diagnostics.
+The first three PDF pages and the complete-table pagination were inspected.
