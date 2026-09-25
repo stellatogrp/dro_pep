@@ -5,8 +5,9 @@ Three paper-ready figures plus a LaTeX timings table, styled to match the
 Quad / Lasso versions in ``../{quad,lasso}/create_paper_plots.py``:
 
 ``pdlp_losses.pdf``  (1 x 2 grid, mean + [q10, q90] band, log-y)
-    Left:  in-distribution Lagrangian gap vs. K (every Olivetti face,
-           ``MISSING_FRACTION = 0.1``, shared mask seed 42).
+    Left:  in-distribution Lagrangian gap vs. K (the Olivetti images of the
+           held-out test subjects, ``MISSING_FRACTION = 0.1``, shared mask
+           seed 42; see ``olivetti_test_face_indices``).
     Right: out-of-distribution Lagrangian gap vs. K (40 RGB tiny-imagenet
            images, ``MISSING_FRACTION = 0.1``, mask seed 42).
 
@@ -21,7 +22,7 @@ Quad / Lasso versions in ``../{quad,lasso}/create_paper_plots.py``:
     ``ARCH_TO_SUBDIR``, e.g. ``ldro-pep_timings/``). Reports K in {1, 5, 10}.
 
 ``pdlp_reconstructions.pdf``  (2 x 6 grid, similar to ``tv_inpainting_test.py``)
-    Top row:    the Olivetti face that maximizes
+    Top row:    the Olivetti test image that maximizes
                 ``l2o_final_gap - ldro_pep_final_gap`` (the face where
                 DR-L2O beats L2O by the largest margin at iteration
                 K_MAX). Mask seed 42, MISSING_FRACTION=0.1.
@@ -56,6 +57,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import yaml
 from tqdm import tqdm
 
 plt.rcParams.update({
@@ -94,7 +96,31 @@ from learning.tv_inpainting_test import (  # noqa: E402
     make_matrix_extractor,
     solve_lp,
 )
-from learning_experiment_classes.pdlp import build_strict_interior_init  # noqa: E402
+from learning_experiment_classes.pdlp import (  # noqa: E402
+    build_strict_interior_init,
+    image_pool_for_persons,
+    split_persons_by_subject,
+)
+
+PDLP_CONFIG = SRC_DIR / "configs_learning" / "pdlp.yaml"
+
+
+def olivetti_test_face_indices() -> np.ndarray:
+    """Olivetti image indices of the held-out test subjects.
+
+    Uses the person split of training (``configs_learning/pdlp.yaml``):
+    subjects are split train/val/test under ``person_split_seed`` and every
+    image of a subject stays in its split.
+    """
+    cfg = yaml.safe_load(PDLP_CONFIG.read_text())
+    _, _, test_persons = split_persons_by_subject(
+        int(cfg["person_split_seed"]),
+        int(cfg["n_subjects_train"]),
+        int(cfg["n_subjects_val"]),
+        int(cfg["n_subjects_test"]),
+        n_total=int(cfg["n_subjects_total"]),
+    )
+    return image_pool_for_persons(test_persons, int(cfg["images_per_subject"]))
 
 # ==================== Configuration ====================
 
@@ -240,21 +266,19 @@ def _evaluate_olivetti_face(
     return gaps, float(solution["objective_value"])
 
 
-def compute_in_split_gaps(schedules: dict):
-    """Run every Olivetti face at MISSING_FRACTION (mask seed 42)."""
-    from sklearn.datasets import fetch_olivetti_faces
-
-    faces = fetch_olivetti_faces()
-    n_faces = len(faces.images)
+def compute_in_split_gaps(schedules: dict, face_indices: np.ndarray):
+    """Run the Olivetti test images at MISSING_FRACTION (mask seed 42).
+    Row ``i`` of the results is image ``face_indices[i]``."""
+    n_faces = len(face_indices)
     K_total = K_MAX * NUM_REPS
 
     results = {arch: np.empty((n_faces, K_total + 1), dtype=np.float64)
                for arch in ARCHS}
     f_opts = np.empty(n_faces, dtype=np.float64)
 
-    for i in tqdm(range(n_faces), desc="in (Olivetti)"):
+    for i, face_index in enumerate(tqdm(face_indices, desc="in (Olivetti test)")):
         gaps, f_opt = _evaluate_olivetti_face(
-            face_index=i,
+            face_index=int(face_index),
             missing_fraction=MISSING_FRACTION,
             random_seed=42,
             schedules=schedules,
@@ -305,14 +329,23 @@ def _split_npz_path(split: str) -> Path:
     return PAPER_PLOTS_DIR / f"pdlp_{split}_gaps_K{K_MAX}_reps{NUM_REPS}.npz"
 
 
-def save_split_gaps_npz(split: str, results: dict, f_opts: np.ndarray) -> Path:
+def save_split_gaps_npz(split: str, results: dict, f_opts: np.ndarray,
+                        face_indices: np.ndarray | None = None) -> Path:
     path = _split_npz_path(split)
     payload = {arch: results[arch].astype(np.float64) for arch in ARCHS}
     payload["f_opts"] = f_opts.astype(np.float64)
+    if face_indices is not None:
+        payload["face_indices"] = np.asarray(face_indices, dtype=np.int64)
     payload["K_max"] = np.int64(K_MAX)
     payload["num_reps"] = np.int64(NUM_REPS)
     np.savez(path, **payload)
     return path
+
+
+def cached_face_indices(split: str):
+    """Olivetti indices stored with the cached gaps, or None if absent."""
+    z = np.load(_split_npz_path(split))
+    return np.asarray(z["face_indices"]) if "face_indices" in z.files else None
 
 
 def load_split_gaps_npz(split: str):
@@ -949,23 +982,27 @@ def make_times() -> None:
 # ==================== Main ====================
 
 def _ensure_split_gaps(split: str, schedules: dict, recompute: bool):
-    """Return ``(results, f_opts)`` for ``split``, hitting NPZ cache when
-    available."""
+    """Return ``(results, f_opts, recomputed)`` for ``split``, hitting the
+    NPZ cache when it is valid. An in-distribution cache is valid only if it
+    was computed on the current Olivetti test images."""
     npz_path = _split_npz_path(split)
+    face_indices = olivetti_test_face_indices() if split == "in" else None
     if not recompute and npz_path.exists():
-        print(f"  Loading cached gaps: {npz_path.name}")
-        return load_split_gaps_npz(split)
+        if face_indices is None or np.array_equal(cached_face_indices(split), face_indices):
+            print(f"  Loading cached gaps: {npz_path.name}")
+            return (*load_split_gaps_npz(split), False)
+        print(f"  {npz_path.name} does not match the Olivetti test split; recomputing")
 
     if split == "in":
-        results, f_opts = compute_in_split_gaps(schedules)
+        results, f_opts = compute_in_split_gaps(schedules, face_indices)
     elif split == "ood":
         results, f_opts = compute_ood_split_gaps(schedules)
     else:
         raise ValueError(f"unknown split {split!r}")
 
-    save_split_gaps_npz(split, results, f_opts)
+    save_split_gaps_npz(split, results, f_opts, face_indices)
     print(f"  Saved {npz_path.relative_to(PDLP_DIR)}")
-    return results, f_opts
+    return results, f_opts, True
 
 
 def main():
@@ -985,14 +1022,18 @@ def main():
     schedules = build_schedules_dict(K_MAX)
 
     print("\n  [gap trajectories]")
+    in_results, in_f_opts, in_recomputed = _ensure_split_gaps("in", schedules, args.recompute)
+    ood_results, ood_f_opts, ood_recomputed = _ensure_split_gaps("ood", schedules, args.recompute)
     gaps_by_split = {
-        "test": _ensure_split_gaps("in", schedules, args.recompute),
-        "ood":  _ensure_split_gaps("ood", schedules, args.recompute),
+        "test": (in_results, in_f_opts),
+        "ood": (ood_results, ood_f_opts),
     }
+    # Figure caches derived from the gaps are rebuilt whenever the gaps are.
+    stale = args.recompute or in_recomputed or ood_recomputed
 
     print("\n  [losses]")
     losses_csv = _losses_csv_path()
-    if not args.recompute and losses_csv.exists():
+    if not stale and losses_csv.exists():
         print(f"  Loading cached losses data ({losses_csv.name})...")
         losses_data = load_losses_csv(losses_csv)
     else:
@@ -1006,7 +1047,7 @@ def main():
 
     print("\n  [frac_problems_solved]")
     frac_csv = _frac_csv_path()
-    if not args.recompute and frac_csv.exists():
+    if not stale and frac_csv.exists():
         print(f"  Loading cached frac-solved data ({frac_csv.name})...")
         frac_data = load_frac_solved_csv(frac_csv)
     else:
@@ -1020,18 +1061,17 @@ def main():
 
     print("\n  [reconstructions]")
     recon_npz = _recon_npz_path()
-    if not args.recompute and recon_npz.exists():
+    if not stale and recon_npz.exists():
         print(f"  Loading cached reconstructions ({recon_npz.name})...")
         olivetti, color, face_idx, image_idx = load_reconstructions_npz(recon_npz)
         print(f"  cached olivetti face_index = {face_idx}, "
               f"color image_index = {image_idx}")
     else:
-        in_results, _ = gaps_by_split["test"]
-        ood_results, _ = gaps_by_split["ood"]
-        face_idx = pick_best_drl2o_index(in_results)
+        face_row = pick_best_drl2o_index(in_results)
+        face_idx = int(olivetti_test_face_indices()[face_row])
         image_idx = pick_best_drl2o_index(ood_results)
-        in_margin = float(in_results["l2o"][face_idx, -1]
-                          - in_results["ldro_pep"][face_idx, -1])
+        in_margin = float(in_results["l2o"][face_row, -1]
+                          - in_results["ldro_pep"][face_row, -1])
         ood_margin = float(ood_results["l2o"][image_idx, -1]
                            - ood_results["ldro_pep"][image_idx, -1])
         print(f"  olivetti face_index = {face_idx}  "
@@ -1054,7 +1094,7 @@ def main():
     # pdlp_reconstructions.pdf; here we show the next two we want.
     more_recon_ranks = (6, 7)
     row1 = row2 = None
-    if not args.recompute and more_recon_npz.exists():
+    if not stale and more_recon_npz.exists():
         print(f"  Loading cached more reconstructions ({more_recon_npz.name})...")
         row1, row2, idx1, idx2 = load_more_reconstructions_npz(more_recon_npz)
         print(f"  cached image indices: row1 = {idx1}, row2 = {idx2}")
