@@ -64,30 +64,32 @@ factor-2 decrease (regret_flag): https://www.tau.ac.il/~becka/solvers/fista.
   at equal matrix-product cost at K=15, but not the cheap safeguarded coarse rule.
   The recommendation is an accuracy/cost comparison with these qualifications.
 
-## Reproduce the current Boyd comparison
+## Reproduce the current standard backtracking comparison
 
 Use the checked-in Slurm helper configuration and a fresh EXPERIMENT name.
 The initial production sweep used origin/iclr 40398f2 plus commit 7735ae9.
 The current runner additionally includes the safeguarded coarse rule.
 
     python3 /path/to/slurm/scripts/slurm_agent.py sync up
-    python3 /path/to/slurm/scripts/slurm_agent.py submit slurm/job_array.slurm --time 00:05:00 --cpus 1 --mem 2G --array 0-2%2 --export EXPERIMENT=linesearch-boyd-replay --export MODE=boyd
+    python3 /path/to/slurm/scripts/slurm_agent.py submit slurm/job_array.slurm --time 00:05:00 --cpus 1 --mem 2G --array 0-2%2 --export EXPERIMENT=linesearch-backtracking-replay --export MODE=backtracking
     # After test-only validation, repeat with --yes.
     python3 /path/to/slurm/scripts/slurm_agent.py sync down
-    python src/tools/report_linesearch_audit.py --input results/linesearch-boyd-replay --output results/linesearch-report
+    python src/tools/report_linesearch_audit.py --input results/linesearch-backtracking-replay --output results/linesearch-report
 
 Reconstructed LASSO input files are untracked under the existing
 src/iclr_data_outputs/archive/lasso/problem_instances layout. Their source hashes
 are in provenance.json; exact input hashes are also in each run manifest.
 The result bundle includes those inputs, current coarse-reference caches, the
 code, logs, selected-schedule manifests and all per-instance outputs.
-No results or messages were posted externally and no manuscript was edited.
+The final report, plots and branch were shared with Vinit and Jisun in the
+paper's Zulip thread. No manuscript was edited.
 
-## Boyd backtracking update, 24 September 2026
+## Standard backtracking update, 24 September 2026
 
-The requested report now focuses on Boyd and Vandenberghe, Algorithm 9.2.
-The book starts each line search at a unit trial step. The earlier carried-step
-configuration is not the same rule and will not be relabeled as Boyd backtracking.
+The report uses standard backtracking line search. Boyd and Vandenberghe,
+Algorithm 9.2, provides a textbook reference. Each search starts at a unit
+trial step. The earlier carried-step configuration uses a different
+initialization policy.
 
 Protocol chosen before rerunning: reset trial step to 1 at every iteration,
 shrink by 0.5, and use Armijo alpha=0.1 for logistic GD. The user approved
@@ -101,11 +103,12 @@ existing momentum sequence. No accelerated convergence guarantee is claimed.
 - [x] Show this baseline only in the plots and webpage, with precise labels.
 - [x] Export the complete webpage to a readable PDF and inspect every page.
 
-New output directory: results/linesearch-boyd-v1.
-Replay uses the existing job array with MODE=boyd and EXPERIMENT=linesearch-boyd-v1.
+Archived output directory (historical name): results/linesearch-boyd-v1.
+Replay uses the existing job array with MODE=backtracking and a fresh
+EXPERIMENT=linesearch-backtracking-replay directory.
 Parameters and all previous experiment outputs remain available for audit.
 
-Boyd runs completed: 14395605_0 / _1 / _2, 23 / 23 / 16 seconds, all on
+Backtracking runs completed: 14395605_0 / _1 / _2, 23 / 23 / 16 seconds, all on
 della-i13n25. Requested 1 CPU and 2 GB each; reported maximum RSS 109 / 127 /
 130 MB and total CPU time 11 / 12 / 13 seconds. No GPU was used.
 All accepted trials and analytic reset checks passed. All 270 learned means
@@ -137,3 +140,11 @@ unchanged. At a 30-product budget, LASSO backtracking completes 11.724 / 10.652
 accepted iterations on average (ID/OOD), versus 15 for DR-L2O. Function counts
 refer to search tests, excluding objective values used only for diagnostics.
 The first three PDF pages and the complete-table pagination were inspected.
+
+## Terminology and archive compatibility
+
+The CLI mode is `backtracking`; smooth GD uses the label Armijo backtracking.
+The report reader accepts the historical method identifiers in archived runs.
+Original raw files and manifests retain their names and hashes. Regenerating
+the report preserves every numerical CSV value exactly. The updated eight-page
+PDF was checked for pagination and the changed pages were visually inspected.
