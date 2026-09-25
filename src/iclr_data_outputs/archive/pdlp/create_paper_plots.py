@@ -22,10 +22,8 @@ Quad / Lasso versions in ``../{quad,lasso}/create_paper_plots.py``:
     ``ARCH_TO_SUBDIR``, e.g. ``ldro-pep_timings/``). Reports K in {1, 5, 10}.
 
 ``pdlp_reconstructions.pdf``  (2 x 6 grid, similar to ``tv_inpainting_test.py``)
-    Top row:    the Olivetti test image that maximizes
-                ``l2o_final_gap - ldro_pep_final_gap`` (the face where
-                DR-L2O beats L2O by the largest margin at iteration
-                K_MAX). Mask seed 42, MISSING_FRACTION=0.1.
+    Top row:    Olivetti image ``OLIVETTI_RECON_FACE_INDEX`` (fixed, any of
+                the 400 images). Mask seed 42, MISSING_FRACTION=0.1.
     Bottom row: the tiny-imagenet image (within the deterministic
                 ``IMAGE_SAMPLE_SEED`` sample) that maximizes the same
                 ``l2o - ldro_pep`` final-gap margin. Mask seed 42.
@@ -161,6 +159,9 @@ ETA_VALS_FRAC = [1e-2, 5e-2, 1e-1]
 
 # Even-integer x-ticks for K up to K_MAX.
 X_TICKS = [k for k in (2, 4, 6, 8, 10, 12, 14) if k <= K_MAX]
+
+# Olivetti image shown in the top row of pdlp_reconstructions.pdf.
+OLIVETTI_RECON_FACE_INDEX = 363
 
 # Column order for the learned reconstructions in pdlp_reconstructions.pdf.
 RECON_ARCH_ORDER = ["lpep", "l2o", "ldro_pep"]
@@ -1061,21 +1062,18 @@ def main():
 
     print("\n  [reconstructions]")
     recon_npz = _recon_npz_path()
-    if not stale and recon_npz.exists():
+    if (not stale and recon_npz.exists()
+            and load_reconstructions_npz(recon_npz)[2] == OLIVETTI_RECON_FACE_INDEX):
         print(f"  Loading cached reconstructions ({recon_npz.name})...")
         olivetti, color, face_idx, image_idx = load_reconstructions_npz(recon_npz)
         print(f"  cached olivetti face_index = {face_idx}, "
               f"color image_index = {image_idx}")
     else:
-        face_row = pick_best_drl2o_index(in_results)
-        face_idx = int(olivetti_test_face_indices()[face_row])
+        face_idx = OLIVETTI_RECON_FACE_INDEX
         image_idx = pick_best_drl2o_index(ood_results)
-        in_margin = float(in_results["l2o"][face_row, -1]
-                          - in_results["ldro_pep"][face_row, -1])
         ood_margin = float(ood_results["l2o"][image_idx, -1]
                            - ood_results["ldro_pep"][image_idx, -1])
-        print(f"  olivetti face_index = {face_idx}  "
-              f"(l2o - ldro_pep final-gap margin = {in_margin:.6e})")
+        print(f"  olivetti face_index = {face_idx}")
         print(f"  color image_index   = {image_idx}  "
               f"(l2o - ldro_pep final-gap margin = {ood_margin:.6e})")
         olivetti = compute_olivetti_reconstructions(schedules, face_idx)
