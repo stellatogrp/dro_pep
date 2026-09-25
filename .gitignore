@@ -409,3 +409,8 @@ cython_debug/
 *.csv
 src/experiment_plots/_mirror/
 src/slurm_scripts/mit/
+
+# cluster outputs (add to your project's .gitignore)
+results/
+slurm/logs/
+slurm/jobs.log
