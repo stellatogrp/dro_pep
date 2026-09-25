@@ -4,6 +4,7 @@
 No algorithm simulations occur here. Suitable for local plotting after sync down.
 """
 import argparse
+import base64
 import html
 import json
 from pathlib import Path
@@ -167,7 +168,8 @@ def main():
     sections=[]
     for problem in NAMES:
         d=display[display.problem==NAMES[problem]].drop(columns='problem')
-        sections.append(f'<section><h2>{NAMES[problem]}</h2><img src="{problem}.png" alt="{NAMES[problem]} comparison"><p><a href="{problem}.pdf">Vector PDF</a></p><div class="scroll">{d.to_html(index=False,escape=True)}</div></section>')
+        image_src = "data:image/png;base64," + base64.b64encode((out / f"{problem}.png").read_bytes()).decode("ascii")
+        sections.append(f'<section><h2>{NAMES[problem]}</h2><img src="{image_src}" alt="{NAMES[problem]} comparison"><p><a href="{problem}.pdf">Vector PDF</a></p><div class="scroll">{d.to_html(index=False,escape=True)}</div></section>')
     table_columns=['problem','split','cohort','K','label','method','mean','median','q90','matvec_mean','function_mean','prox_mean','equal_matvec_mean','batch_seconds','fallback_fail']
     payload=frame[table_columns].to_json(orient='records')
     intro='''<p class="eyebrow">ICLR decision check · 24 September 2026</p>
