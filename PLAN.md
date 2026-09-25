@@ -64,17 +64,17 @@ factor-2 decrease (regret_flag): https://www.tau.ac.il/~becka/solvers/fista.
   at equal matrix-product cost at K=15, but not the cheap safeguarded coarse rule.
   The recommendation is an accuracy/cost comparison with these qualifications.
 
-## Reproduce
+## Reproduce the current Boyd comparison
 
 Use the checked-in Slurm helper configuration and a fresh EXPERIMENT name.
 The initial production sweep used origin/iclr 40398f2 plus commit 7735ae9.
 The current runner additionally includes the safeguarded coarse rule.
 
     python3 /path/to/slurm/scripts/slurm_agent.py sync up
-    python3 /path/to/slurm/scripts/slurm_agent.py submit slurm/job_array.slurm --time 00:05:00 --cpus 1 --mem 2G --array 0-2%2 --export EXPERIMENT=linesearch-replay --export MODE=full
+    python3 /path/to/slurm/scripts/slurm_agent.py submit slurm/job_array.slurm --time 00:05:00 --cpus 1 --mem 2G --array 0-2%2 --export EXPERIMENT=linesearch-boyd-replay --export MODE=boyd
     # After test-only validation, repeat with --yes.
     python3 /path/to/slurm/scripts/slurm_agent.py sync down
-    python src/tools/report_linesearch_audit.py --input results/linesearch-full-v2 --extra results/linesearch-safeguard-v3 --output results/linesearch-report
+    python src/tools/report_linesearch_audit.py --input results/linesearch-boyd-replay --output results/linesearch-report
 
 Reconstructed LASSO input files are untracked under the existing
 src/iclr_data_outputs/archive/lasso/problem_instances layout. Their source hashes
@@ -96,11 +96,32 @@ condition; logistic FGM applies Armijo at the extrapolated point with the
 existing momentum sequence. No accelerated convergence guarantee is claimed.
 
 - [x] Check the primary book source and agree on the adaptations.
-- [ ] Rerun this baseline and the current learned schedules through Slurm only.
-- [ ] Recheck current paper curves, step reset, acceptance conditions and costs.
-- [ ] Show this baseline only in the plots and webpage, with precise labels.
-- [ ] Export the complete webpage to a readable PDF and inspect every page.
+- [x] Rerun this baseline and the current learned schedules through Slurm only.
+- [x] Recheck current paper curves, step reset, acceptance conditions and costs.
+- [x] Show this baseline only in the plots and webpage, with precise labels.
+- [x] Export the complete webpage to a readable PDF and inspect every page.
 
 New output directory: results/linesearch-boyd-v1.
 Replay uses the existing job array with MODE=boyd and EXPERIMENT=linesearch-boyd-v1.
 Parameters and all previous experiment outputs remain available for audit.
+
+Boyd runs completed: 14395605_0 / _1 / _2, 23 / 23 / 16 seconds, all on
+della-i13n25. Requested 1 CPU and 2 GB each; reported maximum RSS 109 / 127 /
+130 MB and total CPU time 11 / 12 / 13 seconds. No GPU was used.
+All accepted trials and analytic reset checks passed. All 270 learned means
+and q10/q90 values match the current paper. The new result set has 420 rows.
+At K=15, BT/DR gap ratios (ID/OOD): LASSO 0.1516/0.4029, logistic GD
+2.796/3.243, logistic FGM 3.619/3.657. At 30 products, LASSO ratios are
+1.137/2.148. Its paired 95% intervals are [1.021,1.266] / [2.025,2.274].
+The LASSO cost advantage does not imply better accuracy at equal iterations.
+
+The final webpage PDF is results/linesearch-report/report.pdf (six landscape
+pages). Every page was rendered and visually inspected; the complete 24-row
+K=15 table fits on one page. Inline SVG plots and static tables also passed
+the viewer CSP check (default-src none, scripts blocked). The interactive
+LASSO paper248 filter returns four rows.
+
+After generating the webpage, export it with the agent-browser skill using
+a named browser session: open the absolute file URL for index.html, run
+agent-browser pdf /absolute/path/to/results/linesearch-report/report.pdf,
+then close the session. The HTML print stylesheet defines the layout.
