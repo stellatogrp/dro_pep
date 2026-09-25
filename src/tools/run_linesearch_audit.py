@@ -37,6 +37,7 @@ class Setting:
     growth: float = 1.0
     initial: str = 'training'
     compound: bool = True
+    reset_each_iter: bool = False
 
 
 def settings(problem):
@@ -110,6 +111,9 @@ def simulate(problem, s, lambd, t0, K, cfg, schedule=None, beta=None, monitor=Tr
                 counts['function'][:, k + 1] += 1
         if cfg.rule == 'fixed':
             t = np.full(N, schedule[k] if schedule is not None else t0)
+        elif cfg.reset_each_iter:
+            # Boyd and Vandenberghe, Algorithm 9.2: restart at t=1 each time.
+            t = np.full(N, t0)
         elif cfg.rule in ['coarse', 'safeguard']:
             t = cfg.growth * (previous if cfg.compound else np.full(N, t0))
         else:
@@ -259,6 +263,17 @@ def verify(problem, data):
     np.testing.assert_array_equal(r['matvec'][:, 1], 6)
     assert np.max(r['violations']) < 1e-10
     checks.append(dict(check='analytic_lasso_backtracking_and_counts', status='PASS'))
+    # This scalar logistic problem accepts 1/4 first, then a full unit step.
+    # Carrying the previous step would incorrectly keep the second step at 1/4.
+    tiny_logreg = dict(A=np.array([[[10.]]]), b=np.ones((1, 1)), f_opt=np.zeros(1))
+    cfg = Setting('boyd_reset_check', c=0.1, initial='unit', reset_each_iter=True)
+    r = simulate('logreg_gd', tiny_logreg, 0.0, 1.0, 2, cfg)
+    np.testing.assert_array_equal(r['steps'], [[0.25, 1.0]])
+    np.testing.assert_array_equal(r['trials'], [[0, 3, 4]])
+    np.testing.assert_array_equal(r['matvec'], [[0, 2, 4]])
+    np.testing.assert_allclose(r['losses'][0, 1], np.logaddexp(0., -12.5), atol=1e-14)
+    assert np.max(r['violations']) < 1e-12
+    checks.append(dict(check='boyd_unit_reset_and_armijo_analytic_logistic', status='PASS'))
     return checks
 
 
@@ -301,7 +316,7 @@ def summary_rows(problem, method, label, split, r, fopt, only_K=None, timing=np.
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--problem', choices=['lasso', 'logreg_gd', 'logreg_fgm'], required=True)
-    ap.add_argument('--mode', choices=['smoke', 'full', 'safeguard'], default='full')
+    ap.add_argument('--mode', choices=['smoke', 'full', 'safeguard', 'boyd'], default='full')
     ap.add_argument('--results-dir', type=Path, required=True)
     ap.add_argument('--repeats', type=int, default=5)
     args = ap.parse_args()
@@ -317,7 +332,10 @@ def main():
     print(json.dumps(checks, indent=2), flush=True)
     inputs = {str(p.relative_to(ROOT)): file_hash(p) for p in Path(data['data_dir']).glob('*.npz')}
     signature = hashlib.sha256((file_hash(__file__) + json.dumps(inputs, sort_keys=True)).encode()).hexdigest()
-    manifest = dict(problem=args.problem, settings=[asdict(c) for c in settings(args.problem)],
+    chosen_settings = ([Setting('boyd_backtracking', initial='unit', reset_each_iter=True,
+                                c=0.5 if args.problem == 'lasso' else 0.1)]
+                       if args.mode == 'boyd' else settings(args.problem))
+    manifest = dict(problem=args.problem, settings=[asdict(c) for c in chosen_settings],
                     baseline_sha='40398f2', script_sha256=file_hash(__file__), input_sha256=inputs,
                     job_id=os.environ['SLURM_JOB_ID'], host=platform.node(),
                     python=platform.python_version(), numpy=np.__version__,
@@ -326,6 +344,15 @@ def main():
                     schedule_selection='unchanged current iclr selectors; no new tuning',
                     test_exclusions='none in primary results; additionally show historical paper248 mask',
                     schedules=[])
+    if args.mode == 'boyd':
+        manifest['line_search'] = dict(
+            reference='https://www.seas.ucla.edu/~vandenbe/cvxbook/bv_cvxbook.pdf#page=478',
+            algorithm='9.2', initial_trial_each_iteration=1.0, shrink=0.5,
+            armijo_alpha=None if args.problem == 'lasso' else 0.1,
+            acceptance=('proximal quadratic majorization of the smooth loss' if args.problem == 'lasso'
+                        else 'Armijo at the extrapolated point' if args.problem.endswith('_fgm')
+                        else 'Armijo at the current iterate'),
+            scope='LASSO and FGM are explicitly labeled adaptations; no FGM rate guarantee asserted')
     rows = []
     beta_std = get_nesterov_fgm_beta_sequence(0, data['L'], 15) if args.problem.endswith('_fgm') else None
 
@@ -371,7 +398,7 @@ def main():
         manifest['schedules'].append(dict(label=label, K=K, steps=t.tolist(),
                                          beta=None if beta is None else beta.tolist(), **meta))
         run(f'{tag}_K{K}', label, Setting(label, rule='fixed'), K, t, beta, only_K=K)
-    for cfg in settings(args.problem):
+    for cfg in chosen_settings:
         if args.mode == 'safeguard' and cfg.name != 'vinit_safeguarded':
             continue
         if args.mode == 'smoke' and cfg.name not in ['vinit_coarse', 'majorization_s0.5_training_g2']:

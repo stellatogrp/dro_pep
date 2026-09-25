@@ -82,3 +82,25 @@ are in provenance.json; exact input hashes are also in each run manifest.
 The result bundle includes those inputs, current coarse-reference caches, the
 code, logs, selected-schedule manifests and all per-instance outputs.
 No results or messages were posted externally and no manuscript was edited.
+
+## Boyd backtracking update, 24 September 2026
+
+The requested report now focuses on Boyd and Vandenberghe, Algorithm 9.2.
+The book starts each line search at a unit trial step. The earlier carried-step
+configuration is not the same rule and will not be relabeled as Boyd backtracking.
+
+Protocol chosen before rerunning: reset trial step to 1 at every iteration,
+shrink by 0.5, and use Armijo alpha=0.1 for logistic GD. The user approved
+clearly labeled adaptations: LASSO uses the proximal quadratic-majorization
+condition; logistic FGM applies Armijo at the extrapolated point with the
+existing momentum sequence. No accelerated convergence guarantee is claimed.
+
+- [x] Check the primary book source and agree on the adaptations.
+- [ ] Rerun this baseline and the current learned schedules through Slurm only.
+- [ ] Recheck current paper curves, step reset, acceptance conditions and costs.
+- [ ] Show this baseline only in the plots and webpage, with precise labels.
+- [ ] Export the complete webpage to a readable PDF and inspect every page.
+
+New output directory: results/linesearch-boyd-v1.
+Replay uses the existing job array with MODE=boyd and EXPERIMENT=linesearch-boyd-v1.
+Parameters and all previous experiment outputs remain available for audit.
