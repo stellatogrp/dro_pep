@@ -19,12 +19,28 @@ missing_fraction_in_dist: 0.1     # used for train/val/test pools
 missing_fraction_out_of_dist: 0.2 # heavier corruption -> distribution shift for OOD
 scaled_lp_01: true               # mirrors SCALED_LP_01; lp_upper derived in code
                                   # (true => lp_upper=1.0, false => lp_upper=255.0)
-# NOTE: the PEP construction requires (x0, y0) in the strict interior of
-# [l, u] x (R^{m1}_+ x R^{m2}). Sample creation and the trainer both use
-#   x0 = 0.5 * lp_upper * ones,   y0 = [0.1 * ones(m1); zeros(m2)]
-# (see build_strict_interior_init / _make_cp_tv_traj_fn). There is no
-# corrupted-image warm start in the production path; that variant exists only
-# in src/learning/tv_inpainting_test.py as a diagnostic.
+# --- PDHG initialization ---
+# The PEP construction requires (x0, y0) in the strict interior of
+# [l, u] x (R^{m1}_+ x R^{m2}). Sample creation (for R_val) and the trainer
+# must use the same init; the trainer checks it against the sample metadata.
+#   center: x0 = 0.5 * lp_upper * ones                (original init)
+#   warm:   x0 = [clip(corrupted image, d, 1-d); |D p0| + d] * lp_upper, d = warm_delta
+#   consistent: x0 = known pixels + neighbour-mean fill, slacks |D p0| + d; y0 = TV subgradient
+#           of |D p0| and known-pixel stationary equality duals (dual_* keys ignored); R ~ 27
+#   consistent_holes: same, but missing pixels start at 0.5 (the corrupted image) instead of the fill
+#   y0 = [dual_ineq * ones(m1); zeros(m2)], dual_ineq = 0.5 if warm_dual else 0.1,
+#   unless dual_init is set: then y0 = dual_init * ones(m1 + m2) (paper: 1.0)
+# (see build_pdhg_init / _make_cp_tv_traj_fn in learning_experiment_classes/pdlp.py)
+init_type: center
+warm_delta: 0.01
+warm_dual: false
+dual_init: null
+
+# --- Forward model ---
+# Gaussian blur (std in pixels) applied before masking: the LP observes the
+# blurred image at the known pixels, A = [E H, 0], b = (H p_orig)[known].
+# 0 = plain inpainting (the original experiment). Center init only.
+blur_sigma: 0.0
 
 # --- Seeds ---
 person_split_seed: 12345
@@ -36,12 +52,14 @@ ood_mask_seed_base: 30000
 # --- Operator-norm / IC-radius safety factors (Lasso-analog) ---
 m_safety_factor: 1.2
 r_safety_factor: 1.1
+# Training-time R_val (null = sample-creation value). Must be >= it.
+R_val_override: null
 
 # ----------------------------------------------------------------------------
 # Algorithm / framework (carried forward; consumed once learning wiring lands)
 # ----------------------------------------------------------------------------
 alg: 'cp'                               # PDLP uses Chambolle-Pock
-pep_obj: 'obj_val'                      # duality gap is the only CP metric
+pep_obj: 'obj_val'                      # 'obj_val' = duality gap, 'opt_dist_sq_norm' = ||z_K - z*||^2, 'opt_primal_dist_sq_norm' = ||x_K - x*||^2
 learning_framework: 'ldro-pep'          # 'ldro-pep', 'l2o', or 'lpep'
 
 stepsize_type: "vector"                 # "scalar" or "vector"
@@ -78,6 +96,10 @@ sgd_seed: 500
 dro_obj: "expectation"                  # "expectation" or "cvar"
 sdp_backend: "diffcp"
 dro_canon_backend: "manual_jax"         # "manual_jax" or "cvxpylayers"
+# Gradient of the SDP optimal value: 'envelope' (exact y x^T / -y, no linear
+# solve) or 'diffcp' (LSQR adjoint of the solution map). diffcp's adjoint is
+# too inaccurate for this badly scaled SDP (FD check: tools/pdlp_grad_bisect.py).
+sdp_value_grad: "envelope"
 eps: 0.1
 alpha: 0.1
 precond_type: 'identity'

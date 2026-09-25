@@ -44,10 +44,28 @@ def _create_cp_gap_obj_builder(repX_f1, repY_h, repF_f1, repF_h,
     return obj_builder
 
 
-@partial(jax.jit, static_argnames=['K_max', 'composition_type'])
+def _create_cp_dist_obj_builder(repX_f1, repY_h, dimF, primal_only=False):
+    """Build obj_builder(k) encoding the squared distance to the saddle point,
+
+        Dist_k = ||x_k - x_s||^2 + ||y_k - y_s||^2        (primal_only=False)
+        Dist_k = ||x_k - x_s||^2                          (primal_only=True)
+
+    which is a pure Gram quadratic form: repX_f1 / repY_h already store the
+    shifted iterates (x_k - x_s), (y_k - y_s). No function values enter.
+    """
+    def obj_builder(k):
+        A_k = jnp.outer(repX_f1[k], repX_f1[k])
+        if not primal_only:
+            A_k = A_k + jnp.outer(repY_h[k], repY_h[k])
+        return A_k, jnp.zeros(dimF)
+
+    return obj_builder
+
+
+@partial(jax.jit, static_argnames=['K_max', 'composition_type', 'metric'])
 def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
                                        composition_type='final',
-                                       decay_rate=0.9):
+                                       decay_rate=0.9, metric='gap'):
     """
     Construct PEP for Chambolle-Pock with a Euclidean-ball initial condition:
         ||x0 - xs||^2 + ||u0 - us||^2 <= R^2.
@@ -80,6 +98,11 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
         K_max: Number of iterations
         composition_type: 'final' or 'weighted'
         decay_rate: Decay for weighted composition (w_k = decay_rate^(K_max - k))
+        metric: 'gap' (duality gap, the original objective), 'dist'
+            (squared distance ||x_k - x_s||^2 + ||y_k - y_s||^2 to the saddle
+            point) or 'pdist' (primal part ||x_k - x_s||^2 only). Both distances
+            are bounded for every stepsize because the prox steps are
+            nonexpansive and ||K|| <= M, see tests/test_cp_distance_pep.py
 
     Returns:
         pep_data tuple
@@ -327,12 +350,17 @@ def construct_chambolle_pock_pep_data(tau, sigma, theta, M, R, K_max,
     # via operator pairs in Section 6), the cross-terms simplify to
     #     <K x_k, y_s> = <x_k, -gf1_s>    and    -<K x_s, y_k> = -<y_k, gh_s>,
     # which avoids needing K@x_k basis slots for intermediate k.
-    obj_builder = _create_cp_gap_obj_builder(
-        repX_f1, repY_h, repF_f1, repF_h,
-        idx_xs, idx_ys,
-        gf1_vec(idx_saddle), gh_vec(idx_saddle),
-        dimG, dimF1, dimF_h, eyeG,
-    )
+    if metric == 'gap':
+        obj_builder = _create_cp_gap_obj_builder(
+            repX_f1, repY_h, repF_f1, repF_h,
+            idx_xs, idx_ys,
+            gf1_vec(idx_saddle), gh_vec(idx_saddle),
+            dimG, dimF1, dimF_h, eyeG,
+        )
+    elif metric in ('dist', 'pdist'):
+        obj_builder = _create_cp_dist_obj_builder(repX_f1, repY_h, dimF, primal_only=(metric == 'pdist'))
+    else:
+        raise ValueError(f"metric must be 'gap', 'dist' or 'pdist', got {metric!r}")
     A_obj, b_obj = compose_objective(
         obj_builder, K_max, composition_type, decay_rate,
     )

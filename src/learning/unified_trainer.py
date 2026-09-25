@@ -131,6 +131,9 @@ class UnifiedTrainer:
         # LDRO-PEP specific parameters
         self.precond_type = cfg.get('precond_type', 'average')
         self.dro_canon_backend = cfg.get('dro_canon_backend', 'manual_jax')
+        # Backward rule for the SDP optimal value ('diffcp' | 'envelope');
+        # see scs_solve_wrapper_sparse.
+        self.sdp_value_grad = cfg.get('sdp_value_grad', 'diffcp')
 
         # Optimizer parameters
         self.weight_decay = cfg.get('weight_decay', 1e-2)
@@ -463,10 +466,13 @@ class UnifiedTrainer:
                     psd_mat_dims_static, nse_upper,
                 )
 
+            value_grad = self.sdp_value_grad
+
             def ldro_pep_loss(sqrt_stepsizes, minibatch):
                 A_data, A_indices, b, c = _build_inputs(sqrt_stepsizes, minibatch)
                 return scs_solve_wrapper_sparse(
                     static_data, A_data, A_indices, A_shape, b, c,
+                    value_grad=value_grad,
                 )
 
             return ldro_pep_loss
@@ -798,7 +804,7 @@ class UnifiedTrainer:
         val_loss_type = self.validation_loss_type_composition
         modes = self._modes
 
-        def val_loss_fn(sqrt_stepsizes):
+        def val_loss_fn(sqrt_stepsizes, batched_data):
             """Compute validation loss on held-out validation set."""
             stepsizes = to_actual_params(sqrt_stepsizes, modes)
 
@@ -837,7 +843,12 @@ class UnifiedTrainer:
             # Apply risk measure (same as training)
             return self._apply_risk_measure(val_metrics)
 
-        return jax.jit(val_loss_fn)
+        # The validation arrays are passed as jit ARGUMENTS, not closed over:
+        # as closure constants XLA constant-folds the problem module's sparse
+        # (BCOO) scatter and can return wrong values (seen on the stereo LP:
+        # validation -8602 where the true mean gap is positive).
+        val_loss_jit = jax.jit(val_loss_fn)
+        return lambda sqrt_stepsizes: val_loss_jit(sqrt_stepsizes, batched_data)
 
     def _initialize_optimizer(self, stepsizes: Stepsizes):
         """Set up an optax optimizer with warmup-cosine LR schedule and global-norm clipping.

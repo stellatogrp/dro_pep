@@ -27,6 +27,7 @@ from learning_experiment_classes.lasso import lasso_sample_creation_run as lasso
 from learning_experiment_classes.logreg import logreg_sample_creation_run as logreg_run
 from learning_experiment_classes.quad import quad_sample_creation_run as quad_run
 from learning_experiment_classes.pdlp import pdlp_sample_creation_run as pdlp_run
+from learning_experiment_classes.stereo import stereo_sample_creation_run as stereo_run
 
 
 @hydra.main(version_base='1.2', config_path='configs_learning', config_name='quad.yaml')
@@ -49,11 +50,17 @@ def pdlp_driver(cfg):
     pdlp_run(cfg)
 
 
+@hydra.main(version_base='1.2', config_path='configs_learning', config_name='stereo.yaml')
+def stereo_driver(cfg):
+    stereo_run(cfg)
+
+
 func_driver_map = {
     'Lasso': lasso_driver,
     'LogReg': logreg_driver,
     'Quad': quad_driver,
     'PDLP': pdlp_driver,
+    'Stereo': stereo_driver,
 }
 
 base_dir_map = {
@@ -61,6 +68,7 @@ base_dir_map = {
     'LogReg': 'sample_creation_outputs/LogReg',
     'Quad': 'sample_creation_outputs/Quad',
     'PDLP': 'sample_creation_outputs/PDLP',
+    'Stereo': 'sample_creation_outputs/Stereo',
 }
 
 

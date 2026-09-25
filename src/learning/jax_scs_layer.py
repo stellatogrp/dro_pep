@@ -236,6 +236,7 @@ def jax_scs_scaled_off_triangles(A, scale_factor):
 
 import numpy as np
 import diffcp
+import diffcp_patch  # noqa: F401  (PSD inverse-permutation fix; wrong gradients without it)
 from jax.experimental import sparse as jsparse
 
 
@@ -558,7 +559,8 @@ def scs_solve_wrapper(static_data, A_dense, b, c):
     return _solve(A_dense, b, c)
 
 
-def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
+def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c,
+                             value_grad='diffcp'):
     """Differentiable SDP solve with sparse A passed as (data, indices) triplets.
 
     Mirrors ``scs_solve_wrapper`` semantics but the constraint matrix arrives
@@ -573,10 +575,22 @@ def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
         A_indices: (nse, 2) JAX int array — (row, col) per nonzero.
         A_shape:   (m, n) Python tuple — static.
         b, c:      JAX float64 arrays.
+        value_grad: backward rule for the optimal value p* = c^T x*.
+            'diffcp'   — diffcp's adjoint of the solution map (LSQR), contracted
+                         with c. Differentiates x* itself.
+            'envelope' — the exact value-function gradient at the returned
+                         primal-dual pair: dp*/dA_ij = y_i x_j, dp*/db = -y,
+                         dp*/dc = x. No linear solve. On badly scaled SDPs
+                         (PDLP ldro-pep) the loss gradient is a small residual
+                         of large cancelling terms; diffcp's ~1% LSQR error
+                         swamps it, while the envelope form cancels exactly
+                         (tools/pdlp_grad_bisect.py).
 
     Returns:
         Optimal objective value (scalar, differentiable).
     """
+    if value_grad not in ('diffcp', 'envelope'):
+        raise ValueError(f"value_grad must be 'diffcp' or 'envelope', got {value_grad!r}")
     _adjoint_cache = {}
 
     tol_gap_abs = 1e-5
@@ -714,20 +728,26 @@ def scs_solve_wrapper_sparse(static_data, A_data, A_indices, A_shape, b, c):
                     np.zeros_like(c_arr),
                 )
 
-            adjoint_deriv = _adjoint_cache['adjoint']
             y_cached = _adjoint_cache['y']
             s_cached = _adjoint_cache['s']
+            rows = A_idx_arr[:, 0]
+            cols = A_idx_arr[:, 1]
+            valid = (rows < m_rows) & (cols < n_cols)
+            dA_data_aligned = np.zeros_like(A_data_arr)
 
+            if value_grad == 'envelope':
+                r_v = rows[valid].astype(np.int64)
+                c_v = cols[valid].astype(np.int64)
+                dA_data_aligned[valid] = d_obj_arr * y_cached[r_v] * x_arr[c_v]
+                return dA_data_aligned, -d_obj_arr * y_cached, d_obj_arr * x_arr
+
+            adjoint_deriv = _adjoint_cache['adjoint']
             dx = d_obj_arr * c_arr
             dy = np.zeros_like(y_cached)
             ds = np.zeros_like(s_cached)
             dA_sol, db_sol, dc_sol = adjoint_deriv(dx, dy, ds)
 
             dA_csr = dA_sol.tocsr()
-            rows = A_idx_arr[:, 0]
-            cols = A_idx_arr[:, 1]
-            valid = (rows < m_rows) & (cols < n_cols)
-            dA_data_aligned = np.zeros_like(A_data_arr)
             if valid.any():
                 dA_data_aligned[valid] = np.asarray(
                     dA_csr[rows[valid].astype(np.int64), cols[valid].astype(np.int64)]

@@ -311,8 +311,12 @@ def make_matrix_extractor(known_indices: np.ndarray, M: int, N: int):
     )
 
 
-def solve_lp(matrices: TVInpaintingMatrices) -> dict:
-    """Solve the LP via CVXPY in the user's standard form."""
+def solve_lp(matrices: TVInpaintingMatrices, max_iter: int | None = None) -> dict:
+    """Solve the LP via CVXPY in the user's standard form.
+
+    ``max_iter`` raises Clarabel's iteration cap (its default is 200), which
+    ill-conditioned blurred LPs can exceed.
+    """
     import cvxpy as cp
 
     n_vars = matrices.c.shape[0]
@@ -325,7 +329,8 @@ def solve_lp(matrices: TVInpaintingMatrices) -> dict:
         x <= matrices.u,
     ]
     prob = cp.Problem(cp.Minimize(matrices.c @ x), constraints)
-    prob.solve(solver=cp.CLARABEL, verbose=False)
+    opts = {} if max_iter is None else {"max_iter": int(max_iter)}
+    prob.solve(solver=cp.CLARABEL, verbose=False, **opts)
 
     if prob.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
         raise RuntimeError(f"LP solve failed with status: {prob.status}")

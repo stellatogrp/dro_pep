@@ -1,0 +1,69 @@
+# ----------------------------------------------------------------------------
+# Stereo disparity (linearized TV-L1) on Olivetti faces, learned PDHG (CP)
+#
+# LP and instance generation: learning/stereo_lp.py; module + sample creation:
+# learning_experiment_classes/stereo.py. Color OOD evaluation:
+# tools/stereo_l2o_check.py --eval-runs.
+# ----------------------------------------------------------------------------
+
+# --- Dataset split (as PDLP) ---
+n_subjects_total: 40
+images_per_subject: 10
+n_subjects_train: 28
+n_subjects_val: 4
+n_subjects_test: 8
+person_split_seed: 12345
+
+# --- Stereo LP ---
+stereo_lambda: 10.0        # data weight
+stereo_place: inside       # 'inside': lambda scales the data rows of G; 'cost': lambda in c
+stereo_dmax: 1.0           # max |true disparity| (pixels)
+dual_init: 1.0             # PDHG y0 = dual_init * ones (paper init)
+stereo_slack_init: 0.01    # x0: d = 0, slacks s, t = this (null = box center; center gives R ~ 1e3)
+stereo_feasible_init: false # x0: d = 0, s = |lambda r| + 0.01, t = 0.01 (feasible start; overrides slack_init)
+stereo_dual_warm: false     # y0: subgradient of |residual| at d = 0 per pair (0.99/0.01; TV 0.5/0.5); overrides dual_init
+stereo_cache_dir: null     # optional reference-solve cache (reused from the L2O check)
+n_jobs: 4
+
+# --- PEP bounds (sample creation) ---
+m_safety_factor: 1.2
+r_safety_factor: 1.1
+
+# --- Algorithm / framework ---
+alg: 'cp'
+pep_obj: 'obj_val'
+learning_framework: 'ldro-pep'
+stepsize_type: "vector"
+vector_init: "fixed"
+
+training_loss_type_composition: "weighted"
+validation_loss_type_composition: "final"
+decay_rate: 0.9
+
+# --- Batches ---
+N: 5
+training_sample_N: 280
+out_of_sample_val_N: 40
+out_of_sample_test_N: 80
+out_of_dist_N: 80
+K_max: [5]
+sgd_seed: 500
+
+# --- DRO / SDP ---
+dro_obj: "expectation"
+sdp_backend: "diffcp"
+dro_canon_backend: "manual_jax"
+sdp_value_grad: "envelope"
+eps: 1.0
+alpha: 0.1
+precond_type: 'identity'
+
+# --- SGD ---
+optimizer_type: "adamw"
+sgd_iters: 250
+eta_t: 1e-2
+weight_decay: 0
+grad_clip_norm: 1.0
+
+output_dir: "learn_dro_outputs"
+data_source_dir: null
